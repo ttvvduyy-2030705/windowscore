@@ -1,6 +1,7 @@
 const keys = {
-  WEBCAM_TYPE: 'webcamType',
+  INDEX: 'Index',
 
+  WEBCAM_TYPE: 'webcamType',
   WEBCAM_IP_ADDRESS: 'WebcamIPAddress',
   WEBCAM_USERNAME: 'WebcamUsername',
   WEBCAM_PASSWORD: 'WebcamPassword',
@@ -8,6 +9,9 @@ const keys = {
   WEBCAM_SYNC_TIME: 'WebcamSyncTime',
   WEBCAM_TRANSLATE_X: 'WebcamTranslateX',
   WEBCAM_TRANSLATE_Y: 'WebcamTranslateY',
+  WEBCAM_BASE_FILE_NAME: 'WebcamBaseFileName',
+  WEBCAM_FOLDER_NAME: 'WebcamFolderName',
+  WEBCAM_RECORDING_INDEX: 'WebcamRecordingIndex',
 
   CAMERA_USERNAME: 'CameraUsername',
   CAMERA_RTMP_URL: 'CameraRTMPURL',
@@ -28,3 +32,4 @@ const keys = {
 };
 
 export {keys};
+export default keys;

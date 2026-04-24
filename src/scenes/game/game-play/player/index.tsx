@@ -1,4 +1,5 @@
-import React, {memo, useMemo} from 'react';
+﻿import React, {memo, useMemo} from 'react';
+import {normalizePlayerCountry} from 'platform/windows/flags';
 import {StyleSheet, TextInput, Text as RNText, Image as RNImage} from 'react-native';
 
 import View from 'components/View';
@@ -466,7 +467,7 @@ const GamePlayer = (
               textColorStyle,
               !isActiveCard && styles.editTextInactive,
             ]}>
-            ✎
+            âœŽ
           </RNText>
         </Button>
       </View>
@@ -500,7 +501,7 @@ const GamePlayer = (
             ]}
             allowFontScaling={false}
             maxFontSizeMultiplier={1}>
-            −
+            âˆ’
           </RNText>
         </Button>
 
@@ -664,7 +665,7 @@ const GamePlayer = (
                 ]}
                 allowFontScaling={false}
                 maxFontSizeMultiplier={1}>
-                ◷+
+                â—·+
               </RNText>
             </Button>
           ))}
@@ -733,7 +734,7 @@ const GamePlayer = (
             ]}
             allowFontScaling={false}
             maxFontSizeMultiplier={1}>
-            {tr('Đổi lượt đánh', 'Switch turn')}
+            {tr('Äá»•i lÆ°á»£t Ä‘Ã¡nh', 'Switch turn')}
           </RNText>
         </Button>
       ) : (
@@ -753,7 +754,7 @@ const GamePlayer = (
             ]}
             allowFontScaling={false}
             maxFontSizeMultiplier={1}>
-            {tr('Đổi lượt đánh', 'Switch turn')}
+            {tr('Äá»•i lÆ°á»£t Ä‘Ã¡nh', 'Switch turn')}
           </RNText>
         </View>
       )}
@@ -784,7 +785,7 @@ const GamePlayer = (
             ]}
             allowFontScaling={false}
             maxFontSizeMultiplier={1}>
-            ×
+            Ã—
           </RNText>
         </Button>
         <RNText
@@ -1598,3 +1599,4 @@ const createStyles = (adaptive: any, design: any, rules: any) => createGameplayS
 });
 
 export default memo(GamePlayer);
+

@@ -1,20 +1,20 @@
-export const enum OutputType {
+export enum OutputType {
   local = 'local',
   livestream = 'livestream',
 }
 
-export const enum Resolution {
+export enum Resolution {
   HD = '0.75',
   FullHD = '1',
   QHD = '1,33333333',
 }
 
-export const enum Fps {
+export enum Fps {
   F30 = '30',
   F60 = '60',
 }
 
-export const enum Bitrate {
+export enum Bitrate {
   B5000 = '5000k',
   B9000 = '9000k',
 }
@@ -47,8 +47,11 @@ export type LiveStreamCamera = {
 };
 
 export enum WebcamType {
+  INDEX = 'index',
   webcam = 'webcam',
   camera = 'camera',
+  phone = 'camera',
+  external = 'webcam',
 }
 
 export type YouTubeItem = {

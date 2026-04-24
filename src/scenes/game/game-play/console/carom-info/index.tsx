@@ -1,4 +1,5 @@
-import React, {memo, useCallback} from 'react';
+﻿import React, {memo, useCallback} from 'react';
+import {normalizePlayerCountry} from 'platform/windows/flags';
 import {Image as RNImage, TextStyle} from 'react-native';
 import View from 'components/View';
 import Text from 'components/Text';

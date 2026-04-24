@@ -5,7 +5,11 @@
   "scripts": {
     "android": "react-native run-android",
     "start": "react-native start",
-    "clean": "cd android && gradlew clean"
+    "windows": "react-native run-windows --arch x64",
+    "windows:debug": "react-native run-windows --arch x64 --no-packager",
+    "windows:release": "react-native run-windows --arch x64 --release",
+    "windows:autolink": "react-native autolink-windows",
+    "clean": "npx react-native clean-project-auto"
   },
   "dependencies": {
     "@openspacelabs/react-native-zoomable-view": "^2.4.2",
@@ -42,6 +46,7 @@
     "react-native-video-trim": "^6.1.0",
     "react-native-vision-camera": "4.7.3",
     "react-native-webrtc": "118.0.7",
+    "react-native-windows": "0.75.20",
     "react-native-worklets-core": "^1.6.3",
     "react-redux": "^9.2.0",
     "realm": "^12.14.2",
@@ -60,6 +65,8 @@
     "babel-plugin-module-resolver": "^5.0.2",
     "babel-plugin-transform-remove-console": "^6.9.4",
     "eslint": "8.57.0",
-    "metro-react-native-babel-preset": "0.77.0"
-  }
+    "metro-react-native-babel-preset": "0.77.0",
+    "metro-config": "^0.80.12"
+  },
+  "packageManager": "yarn@3.6.4+sha512.e70835d4d6d62c07be76b3c1529cb640c7443f0fe434ef4b6478a5a399218cbaf1511b396b3c56eb03bc86424cff2320f6167ad2fde273aa0df6e60b7754029f"
 }

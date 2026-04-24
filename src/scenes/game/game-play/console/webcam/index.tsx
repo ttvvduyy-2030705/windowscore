@@ -1,4 +1,4 @@
-import React, {
+﻿import React, {
   forwardRef,
   memo,
   useCallback,
@@ -9,6 +9,7 @@ import React, {
   useState,
 } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import {getFlagText, normalizePlayerCountry} from 'platform/windows/flags';
 import {findNodeHandle, NativeModules, PixelRatio, Platform} from 'react-native';
 import Slider from '@react-native-community/slider';
 import {
@@ -1129,7 +1130,7 @@ const handleZoomSliderComplete = useCallback(
       caromGoal: caromOverlayState.gameSettings?.players?.goal?.goal ?? caromOverlayState.playerSettings?.goal?.goal,
       players: players.map((player: any) => ({
         name: player?.name,
-        flag: player?.flag,
+        flag: getFlagText(normalizePlayerCountry(player)),
         totalPoint: player?.totalPoint,
         currentPoint: player?.proMode?.currentPoint,
         highestRate: player?.proMode?.highestRate,
@@ -1621,7 +1622,7 @@ const handleZoomSliderComplete = useCallback(
     return (
       <Pressable style={styles.fullscreenFab} onPress={openFullscreen}>
         <Text color={colors.white} fontSize={20}>
-          ⛶
+          â›¶
         </Text>
       </Pressable>
     );
@@ -1641,7 +1642,7 @@ const handleZoomSliderComplete = useCallback(
         ]}
         onPress={closeFullscreen}>
         <Text color={colors.white} fontSize={15}>
-          Đóng
+          ÄÃ³ng
         </Text>
       </Pressable>
     );
@@ -1693,7 +1694,7 @@ const handleZoomSliderComplete = useCallback(
         ) : (
           <RNView style={styles.zoomUnsupportedBadgeVertical}>
             <Text color={colors.white} fontSize={11}>
-              Không hỗ trợ zoom
+              KhÃ´ng há»— trá»£ zoom
             </Text>
           </RNView>
         )}
@@ -1866,7 +1867,7 @@ const handleZoomSliderComplete = useCallback(
               styles.actionButton,
               !allowRefresh && styles.actionButtonDisabled,
             ]}>
-            <Text color={colors.white} fontSize={14}>↻ Làm mới</Text>
+            <Text color={colors.white} fontSize={14}>â†» LÃ m má»›i</Text>
           </Pressable>
 
           <Pressable
@@ -1881,7 +1882,7 @@ const handleZoomSliderComplete = useCallback(
               styles.switchButton,
               !allowSwitchCamera && styles.actionButtonDisabled,
             ]}>
-            <Text color={colors.white} fontSize={14}>⇄ Chuyển camera</Text>
+            <Text color={colors.white} fontSize={14}>â‡„ Chuyá»ƒn camera</Text>
           </Pressable>
 
           <Pressable
@@ -1892,7 +1893,7 @@ const handleZoomSliderComplete = useCallback(
               !canRewatch && styles.actionButtonDisabled,
             ]}>
             <Text color={colors.white} fontSize={14}>
-              ▶ {i18n.t('reWatch')}
+              â–¶ {i18n.t('reWatch')}
             </Text>
           </Pressable>
         </RNView>
@@ -2416,3 +2417,5 @@ const createStyles = (adaptive: any, design: any, rules: any, safeInsets: any) =
 });
 
 export default memo(WebCam);
+
+

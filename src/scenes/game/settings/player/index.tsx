@@ -1,5 +1,6 @@
-import React, {memo, useCallback, useEffect, useMemo, useState} from 'react';
-import {FlatList, Image, Modal, Pressable, Text, TextInput, View} from 'react-native';
+﻿import React, {memo, useCallback, useEffect, useMemo, useState} from 'react';
+import {FlatList, Image, Pressable, Text, TextInput, View} from 'react-native';
+import Modal from 'components/WindowsModal';
 
 import i18n from 'i18n';
 import {isPool15OnlyGame, isPoolGame} from 'utils/game';
@@ -191,7 +192,7 @@ const PlayerSettingsComponent = ({
     [isEnglish],
   );
 
-  const title = isEnglish ? 'Players' : 'Người chơi';
+  const title = isEnglish ? 'Players' : 'NgÆ°á»i chÆ¡i';
 
   const playerNumberOptions = useMemo(() => {
     if (isPool15OnlyGame(category) || (isPool && gameMode === 'pro')) {
@@ -319,7 +320,7 @@ const PlayerSettingsComponent = ({
     }, {} as Record<string, number>);
 
     return renderSelectorRow(
-      isEnglish ? 'Target' : 'Mục tiêu',
+      isEnglish ? 'Target' : 'Má»¥c tiÃªu',
       goalMap,
       playerSettings.goal.goal,
       onSelectPlayerGoal,
@@ -421,7 +422,7 @@ const PlayerSettingsComponent = ({
                 onBlockedPress={showRenamePaywall}
                 placeholder={translate(
                   `player${index + 1}`,
-                  `Người chơi ${index + 1}`,
+                  `NgÆ°á»i chÆ¡i ${index + 1}`,
                   `Player ${index + 1}`,
                 )}
               />
@@ -480,7 +481,7 @@ const PlayerSettingsComponent = ({
 
       <View style={styles.topControls}>
         {renderSelectorRow(
-          isEnglish ? 'Players' : 'Số người',
+          isEnglish ? 'Players' : 'Sá»‘ ngÆ°á»i',
           playerNumberOptions,
           playerSettings.playerNumber,
           onSelectPlayerNumber,
@@ -529,7 +530,7 @@ const PlayerSettingsComponent = ({
               showsVerticalScrollIndicator={false}
               style={styles.countryList}
               renderItem={({item}) => {
-                const displayFlag = item.flag || '🏳️';
+                const displayFlag = item.flag || 'ðŸ³ï¸';
                 const displayFlagImage = getCountryFlagImageUri(item.code, 80);
 
                 return (
@@ -590,3 +591,5 @@ const PlayerSettingsComponent = ({
 };
 
 export default PlayerSettingsComponent;
+
+
