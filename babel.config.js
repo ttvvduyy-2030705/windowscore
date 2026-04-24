@@ -38,14 +38,6 @@ module.exports = {
           'react-native-tts': './src/platform/windows/react-native-tts',
           'react-native-sound-player':
             './src/platform/windows/react-native-sound-player',
-            'react-native-vector-icons/FontAwesome': './src/platform/windows/WindowsIcon',
-'react-native-vector-icons/FontAwesome5': './src/platform/windows/WindowsIcon',
-'react-native-vector-icons/MaterialIcons': './src/platform/windows/WindowsIcon',
-'react-native-vector-icons/MaterialCommunityIcons': './src/platform/windows/WindowsIcon',
-'react-native-vector-icons/Ionicons': './src/platform/windows/WindowsIcon',
-'react-native-vector-icons/Feather': './src/platform/windows/WindowsIcon',
-'react-native-vector-icons/AntDesign': './src/platform/windows/WindowsIcon',
-'react-native-vector-icons/Entypo': './src/platform/windows/WindowsIcon',
 
           'react-native-image-picker':
             './src/platform/windows/react-native-image-picker',
