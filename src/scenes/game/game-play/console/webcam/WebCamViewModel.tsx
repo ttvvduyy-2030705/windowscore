@@ -35,6 +35,7 @@ import {
 import {CAMERA_PLAYBACK_DURATION} from './constants';
 import {PlayBackWebcamViewModelProps} from 'scenes/playback/PlayBackViewModel';
 import {emitCycleCameraSource} from 'utils/cameraSourceSwitcher';
+import {GameSettings} from 'types/settings';
 
 export interface Props {
   innerControls?: boolean;
@@ -48,6 +49,7 @@ export interface Props {
   isCameraReady: boolean;
   setIsCameraReady: (isReady: boolean) => void;
   youtubeLivePreviewActive?: boolean;
+  gameSettings?: GameSettings;
 }
 
 type CameraSource = 'back' | 'front' | 'external';
@@ -156,7 +158,8 @@ const getCameraRecordingInfo = (cameraRef: any): RecordingInfo => {
 
 const WebCamViewModel = (props: Props) => {
   const videoRef = useRef(null);
-  const {gameSettings} = useSelector((state: RootState) => state.game);
+  const {gameSettings: reduxGameSettings} = useSelector((state: RootState) => state.game);
+  const gameSettings = reduxGameSettings ?? props.gameSettings;
 
   const [webcamType, setWebcamType] = useState(WebcamType.camera);
   const [webcam, setWebcam] = useState<Webcam | undefined>();

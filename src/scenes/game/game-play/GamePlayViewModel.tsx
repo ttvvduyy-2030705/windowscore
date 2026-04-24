@@ -23,6 +23,7 @@ import {
 import Sound from 'utils/sound';
 import RemoteControl from 'utils/remote';
 import {Player, PlayerSettings} from 'types/player';
+import {GameSettings} from 'types/settings';
 import {RemoteControlKeys} from 'types/bluetooth';
 import {BallType, PoolBallType} from 'types/ball';
 //import {MATCH_COUNTDOWN, WEBCAM_BASE_CAMERA_FOLDER} from 'constants/webcam';
@@ -79,6 +80,7 @@ type StorageShape = {
 };
 
 type GameplayLiveRouteParams = {
+  gameSettings?: GameSettings;
   livestreamPlatform?: 'facebook' | 'youtube' | 'tiktok' | 'device' | null;
   saveToDeviceWhileStreaming?: boolean;
   liveVisibility?: 'public' | 'private' | 'unlisted';
@@ -450,7 +452,12 @@ const GamePlayViewModel = () => {
   const realm = useRealm();
   const dispatch = useDispatch();
   const {updateGameSettings} = useSelector((state: RootState) => state.UI.game);
-  const {gameSettings} = useSelector((state: RootState) => state.game);
+  const {gameSettings: reduxGameSettings} = useSelector((state: RootState) => state.game);
+  const routeGameSettings = routeParams.gameSettings;
+  const gameSettings = useMemo(
+    () => reduxGameSettings ?? routeGameSettings,
+    [reduxGameSettings, routeGameSettings],
+  );
   const selectedLivestreamPlatform =
     (normalizeGameplayLivestreamPlatform(routeParams.livestreamPlatform) ||
       normalizeGameplayLivestreamPlatform((gameSettings as any)?.livestreamPlatform) ||

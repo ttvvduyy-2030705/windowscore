@@ -1,12 +1,17 @@
-import React, {forwardRef, useImperativeHandle} from 'react';
-import {StyleSheet, Text, View} from 'react-native';
+import React, {forwardRef, useEffect, useImperativeHandle} from 'react';
+import {Image, StyleSheet, View} from 'react-native';
+
+import images from 'assets';
 
 type Props = {
   style?: any;
   children?: React.ReactNode;
+  setIsCameraReady?: (isReady: boolean) => void;
 };
 
 const VideoWindows = forwardRef<any, Props>((props, ref) => {
+  const {setIsCameraReady} = props;
+
   useImperativeHandle(ref, () => ({
     startRecording: async () => null,
     stopRecording: async () => null,
@@ -22,15 +27,17 @@ const VideoWindows = forwardRef<any, Props>((props, ref) => {
     }),
   }));
 
+  useEffect(() => {
+    setIsCameraReady?.(false);
+  }, [setIsCameraReady]);
+
   return (
     <View style={[styles.container, props.style]}>
-      <Text style={styles.title}>APlus Score Windows</Text>
-      <Text style={styles.text}>
-        Camera, UVC recording và YouTube native live hiện là Android-only.
-      </Text>
-      <Text style={styles.text}>
-        Gameplay, scoreboard và luồng màn hình vẫn được giữ cho bản Windows.
-      </Text>
+      <Image
+        source={images.logoSmall || images.logoFilled || images.logo}
+        resizeMode="contain"
+        style={styles.logo}
+      />
       {props.children}
     </View>
   );
@@ -39,23 +46,21 @@ const VideoWindows = forwardRef<any, Props>((props, ref) => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    width: '100%',
+    height: '100%',
     minHeight: 180,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#050505',
-    padding: 16,
+    backgroundColor: '#000000',
+    overflow: 'hidden',
   },
-  title: {
-    color: '#ffffff',
-    fontWeight: '700',
-    fontSize: 18,
-    marginBottom: 8,
-  },
-  text: {
-    color: '#cccccc',
-    textAlign: 'center',
-    fontSize: 13,
-    marginTop: 4,
+  logo: {
+    width: '34%',
+    height: '34%',
+    minWidth: 96,
+    minHeight: 54,
+    maxWidth: 240,
+    maxHeight: 136,
   },
 });
 

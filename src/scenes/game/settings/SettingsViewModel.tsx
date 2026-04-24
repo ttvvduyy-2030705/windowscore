@@ -378,6 +378,7 @@ const GameSettingsViewModel = (props: Props) => {
     // and can arrive after the gameplay screen mounts; route params are available
     // immediately and prevent the YouTube flow from falling back to local recording.
     props.navigate(screens.gamePlay, {
+      gameSettings: nextGameSettings,
       livestreamPlatform,
       saveToDeviceWhileStreaming,
       liveVisibility,

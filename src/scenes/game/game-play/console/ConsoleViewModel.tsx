@@ -75,14 +75,16 @@ export interface ConsoleViewModelProps {
 }
 
 const ConsoleViewModel = (props: ConsoleViewModelProps) => {
-  const {gameSettings} = useSelector((state: RootState) => state.game);
+  const {gameSettings: reduxGameSettings} = useSelector((state: RootState) => state.game);
+  const gameSettings = reduxGameSettings ?? props.gameSettings;
 
   const [remoteEnabled, setRemoteEnabled] = useState(false);
   const [tableNumber, setTableNumber] = useState('');
 
   //Pool 15-only
   const [balls, setBalls] = useState(
-    isPool15FreeGame(gameSettings?.category)
+    isPool15FreeGame(gameSettings?.category) ||
+    isPool15OnlyGame(gameSettings?.category)
       ? BALLS_15
       : isPool10Game(gameSettings?.category)
       ? BALLS_10
@@ -234,7 +236,8 @@ const ConsoleViewModel = (props: ConsoleViewModelProps) => {
     setPool15OnlyPointLeft(0);
     setPool15OnlyPointRight(0);
     setBalls(
-      isPool15FreeGame(gameSettings?.category)
+      isPool15FreeGame(gameSettings?.category) ||
+      isPool15OnlyGame(gameSettings?.category)
         ? BALLS_15
         : isPool10Game(gameSettings?.category)
         ? BALLS_10

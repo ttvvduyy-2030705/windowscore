@@ -1,4 +1,4 @@
-﻿import React, {memo, useMemo} from 'react';
+import React, {memo, useMemo} from 'react';
 import {StyleSheet, TextInput, Text as RNText, Image as RNImage} from 'react-native';
 
 import View from 'components/View';
@@ -733,7 +733,7 @@ const GamePlayer = (
             ]}
             allowFontScaling={false}
             maxFontSizeMultiplier={1}>
-            {tr('Äá»•i lÆ°á»£t Ä‘¡nh', 'Switch turn')}
+            {tr('Đổi lượt đánh', 'Switch turn')}
           </RNText>
         </Button>
       ) : (
@@ -753,7 +753,7 @@ const GamePlayer = (
             ]}
             allowFontScaling={false}
             maxFontSizeMultiplier={1}>
-            {tr('Äá»•i lÆ°á»£t Ä‘¡nh', 'Switch turn')}
+            {tr('Đổi lượt đánh', 'Switch turn')}
           </RNText>
         </View>
       )}

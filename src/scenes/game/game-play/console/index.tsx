@@ -1716,6 +1716,7 @@ const GameConsole = (props: ConsoleViewModelProps) => {
           isPaused={props.isPaused}
           isStarted={props.isStarted}
           youtubeLivePreviewActive={props.youtubeLivePreviewActive}
+          gameSettings={props.gameSettings}
           forceFullscreen={isCameraFullscreen}
         />
       </View>

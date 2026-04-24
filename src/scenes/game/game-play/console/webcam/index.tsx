@@ -1,4 +1,4 @@
-﻿import React, {
+import React, {
   forwardRef,
   memo,
   useCallback,
@@ -1622,7 +1622,7 @@ const handleZoomSliderComplete = useCallback(
     return (
       <Pressable style={styles.fullscreenFab} onPress={openFullscreen}>
         <Text color={colors.white} fontSize={20}>
-          â›¶
+          ⛶
         </Text>
       </Pressable>
     );
@@ -1642,7 +1642,7 @@ const handleZoomSliderComplete = useCallback(
         ]}
         onPress={closeFullscreen}>
         <Text color={colors.white} fontSize={15}>
-          ÄÃ³ng
+          Đóng
         </Text>
       </Pressable>
     );
@@ -1694,7 +1694,7 @@ const handleZoomSliderComplete = useCallback(
         ) : (
           <RNView style={styles.zoomUnsupportedBadgeVertical}>
             <Text color={colors.white} fontSize={11}>
-              KhÃ´ng há»— trá»£ zoom
+              Không hỗ trợ zoom
             </Text>
           </RNView>
         )}
@@ -1867,7 +1867,7 @@ const handleZoomSliderComplete = useCallback(
               styles.actionButton,
               !allowRefresh && styles.actionButtonDisabled,
             ]}>
-            <Text color={colors.white} fontSize={14}>â†» LÃ m má»›i</Text>
+            <Text color={colors.white} fontSize={14}>↻ Làm mới</Text>
           </Pressable>
 
           <Pressable
@@ -1882,7 +1882,7 @@ const handleZoomSliderComplete = useCallback(
               styles.switchButton,
               !allowSwitchCamera && styles.actionButtonDisabled,
             ]}>
-            <Text color={colors.white} fontSize={14}>â‡„ Chuyá»ƒn camera</Text>
+            <Text color={colors.white} fontSize={14}>⇄ Chuyển camera</Text>
           </Pressable>
 
           <Pressable
@@ -1893,7 +1893,7 @@ const handleZoomSliderComplete = useCallback(
               !canRewatch && styles.actionButtonDisabled,
             ]}>
             <Text color={colors.white} fontSize={14}>
-              â–¶ {i18n.t('reWatch')}
+              ▶ {i18n.t('reWatch')}
             </Text>
           </Pressable>
         </RNView>
