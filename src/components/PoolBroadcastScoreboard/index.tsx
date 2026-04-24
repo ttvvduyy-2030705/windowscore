@@ -10,6 +10,11 @@ import {
 import LinearGradient from 'react-native-linear-gradient';
 
 import images from 'assets';
+import {
+  getFlagImageSource as getWindowsFlagImageSource,
+  getFlagText as getWindowsFlagText,
+  normalizePlayerCountry,
+} from 'platform/windows/flags';
 import {PlayerSettings} from 'types/player';
 import {GameSettings} from 'types/settings';
 import {isPool10Game, isPool15Game, isPool9Game} from 'utils/game';
@@ -42,39 +47,11 @@ const safeNumber = (value: any, fallback = 0) => {
   return Number.isFinite(numeric) ? numeric : fallback;
 };
 
-const normalize = (value?: string) =>
-  String(value || '')
-    .trim()
-    .toLowerCase();
+const getFlagSource = (player: any) =>
+  getWindowsFlagImageSource(normalizePlayerCountry(player));
 
-const isVietnamFlag = (player: any) => {
-  const flag = normalize(player?.flag);
-  const code = normalize(player?.countryCode);
-  const name = normalize(player?.countryName);
-
-  return (
-    code === 'vn' ||
-    code === 'vnm' ||
-    code === 'vi' ||
-    flag === 'vn' ||
-    flag === 'vnm' ||
-    flag === '🇻🇳' ||
-    flag.includes('vietnam') ||
-    flag.includes('viet nam') ||
-    flag.includes('việt nam') ||
-    name.includes('vietnam') ||
-    name.includes('viet nam') ||
-    name.includes('việt nam')
-  );
-};
-
-const getFlagText = (player: any) => {
-  if (isVietnamFlag(player)) {
-    return '';
-  }
-
-  return String(player?.flag || player?.countryCode || '').trim();
-};
+const getFlagText = (player: any) =>
+  getWindowsFlagText(normalizePlayerCountry(player));
 
 const getTimerColor = (countdownTime: number) => {
   if (countdownTime <= 5) {
@@ -233,6 +210,7 @@ const FlagBadge = ({
   active: boolean;
   side: 'left' | 'right';
 }) => {
+  const flagSource = getFlagSource(player);
   const flagText = getFlagText(player);
 
   return (
@@ -247,8 +225,8 @@ const FlagBadge = ({
           width,
         },
       ]}>
-      {isVietnamFlag(player) ? (
-        <Image source={images.vietnam} resizeMode="cover" style={styles.flagImage} />
+      {flagSource ? (
+        <Image source={flagSource} resizeMode="cover" style={styles.flagImage} />
       ) : (
         <Text
           style={[styles.flagText, !active && styles.flagTextInactive]}

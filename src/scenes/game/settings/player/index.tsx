@@ -530,7 +530,7 @@ const PlayerSettingsComponent = ({
               showsVerticalScrollIndicator={false}
               style={styles.countryList}
               renderItem={({item}) => {
-                const displayFlag = item.flag || '🏳️';
+                const displayFlag = item.flag || item.code || '--';
                 const displayFlagImage = getCountryFlagImageUri(item.code, 80);
 
                 return (

@@ -1,12 +1,16 @@
-import {BufferConfig, SelectedVideoTrackType} from 'react-native-video';
+import type {BufferConfig} from 'react-native-video';
+import {SelectedVideoTrackType} from 'react-native-video';
 
 const WEBCAM_HOST = 'rtsp://';
 const WEBCAM_PORT = '554';
 // const WEBCAM_PATH = '/cam/realmonitor?channel=1&subtype=1';
 const WEBCAM_PATH = '/cam/realmonitor?channel=1&subtype=0';
 
+const SELECTED_VIDEO_TRACK_INDEX =
+  (SelectedVideoTrackType as any)?.INDEX ?? 'index';
+
 const WEBCAM_SELECTED_VIDEO_TRACK = {
-  type: SelectedVideoTrackType.INDEX,
+  type: SELECTED_VIDEO_TRACK_INDEX,
   value: 0,
 };
 

@@ -1,4 +1,4 @@
-﻿import images from 'assets';
+import images from 'assets';
 
 export type FlagPlayerLike = {
   flag?: string;
@@ -17,29 +17,83 @@ const normalize = (value?: string | null) =>
     .trim()
     .toLowerCase();
 
+const isRemoteUri = (value?: string | null) =>
+  /^https?:\/\//i.test(String(value || '').trim()) ||
+  /^file:\/\//i.test(String(value || '').trim());
+
+export const getCountryCodeFromFlagEmoji = (value?: string | null) => {
+  const chars = Array.from(String(value || '').trim());
+  if (chars.length !== 2) {
+    return '';
+  }
+
+  const code = chars
+    .map(char => {
+      const point = char.codePointAt(0) || 0;
+      if (point < 0x1f1e6 || point > 0x1f1ff) {
+        return '';
+      }
+      return String.fromCharCode(point - 0x1f1e6 + 65);
+    })
+    .join('');
+
+  return /^[A-Z]{2}$/.test(code) ? code : '';
+};
+
+export const getCountryCodeFromPlayer = (player?: FlagPlayerLike | null) => {
+  const target = player || {};
+  const directCode = String(target.countryCode || '')
+    .trim()
+    .toUpperCase();
+  if (/^[A-Z]{2}$/.test(directCode)) {
+    return directCode;
+  }
+
+  const rawFlag = String(target.flag || '').trim();
+  const flagAsCode = rawFlag.toUpperCase();
+  if (/^[A-Z]{2}$/.test(flagAsCode)) {
+    return flagAsCode;
+  }
+
+  const emojiCode = getCountryCodeFromFlagEmoji(rawFlag);
+  if (emojiCode) {
+    return emojiCode;
+  }
+
+  const name = normalize(target.countryName);
+  if (
+    name.includes('vietnam') ||
+    name.includes('viet nam') ||
+    name.includes('việt nam')
+  ) {
+    return 'VN';
+  }
+
+  return '';
+};
+
 export const normalizePlayerCountry = <T extends FlagPlayerLike>(
   player?: T | null,
 ): T & Required<Pick<FlagPlayerLike, 'countryCode' | 'countryName' | 'flag'>> => {
   const target = (player || {}) as T;
+  const code = getCountryCodeFromPlayer(target) || DEFAULT_COUNTRY_CODE;
 
   return {
     ...target,
-    countryCode: target.countryCode || DEFAULT_COUNTRY_CODE,
-    countryName: target.countryName || DEFAULT_COUNTRY_NAME,
-    flag: target.flag || target.countryCode || DEFAULT_COUNTRY_CODE,
+    countryCode: target.countryCode || code,
+    countryName: target.countryName || (code === 'VN' ? DEFAULT_COUNTRY_NAME : ''),
+    flag: target.flag || code,
   };
 };
 
 export const isVietnamPlayer = (player?: FlagPlayerLike | null) => {
   const target = normalizePlayerCountry(player);
+  const code = getCountryCodeFromPlayer(target);
   const flag = normalize(target.flag);
-  const code = normalize(target.countryCode);
   const name = normalize(target.countryName);
 
   return (
-    code === 'vn' ||
-    code === 'vnm' ||
-    code === 'vi' ||
+    code === 'VN' ||
     flag === 'vn' ||
     flag === 'vnm' ||
     flag === '🇻🇳' ||
@@ -56,7 +110,7 @@ export const getFlagImageSource = (player?: FlagPlayerLike | null): any | null =
   const target = normalizePlayerCountry(player);
   const directImage = target.flagImage || target.image;
 
-  if (directImage && /^https?:\/\//i.test(String(directImage))) {
+  if (directImage && isRemoteUri(directImage)) {
     return {uri: String(directImage)};
   }
 
@@ -64,12 +118,9 @@ export const getFlagImageSource = (player?: FlagPlayerLike | null): any | null =
     return images.vietnam;
   }
 
-  const code = String(target.countryCode || target.flag || '')
-    .trim()
-    .toLowerCase();
-
+  const code = getCountryCodeFromPlayer(target).toLowerCase();
   if (/^[a-z]{2}$/.test(code)) {
-    return {uri: `https://flagcdn.com/w80/${code}.png`};
+    return {uri: `https://flagcdn.com/w160/${code}.png`};
   }
 
   return null;

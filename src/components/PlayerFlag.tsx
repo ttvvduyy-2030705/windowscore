@@ -10,7 +10,11 @@ import {
   ViewStyle,
 } from 'react-native';
 
-import images from 'assets';
+import {
+  getFlagImageSource,
+  getFlagText,
+  normalizePlayerCountry,
+} from 'platform/windows/flags';
 
 type PlayerLike = {
   countryCode?: string;
@@ -30,49 +34,12 @@ type Props = {
   textStyle?: StyleProp<TextStyle>;
 };
 
-const normalize = (value?: string) =>
-  String(value || '')
-    .trim()
-    .toLowerCase();
-
 export const getLocalFlagSource = (
   input?: PlayerLike,
-): ImageSourcePropType | null => {
-  const code = normalize(input?.countryCode || input?.flag);
-  const name = normalize(input?.countryName);
+): ImageSourcePropType | null => getFlagImageSource(normalizePlayerCountry(input as any));
 
-  if (
-    code === 'vn' ||
-    code === 'vnm' ||
-    code === 'vi' ||
-    code === 'vietnam' ||
-    code === 'viet nam' ||
-    code === 'việt nam' ||
-    name.includes('vietnam') ||
-    name.includes('viet nam') ||
-    name.includes('việt nam')
-  ) {
-    return images.vietnam;
-  }
-
-  return null;
-};
-
-export const getSafeFlagText = (input?: PlayerLike) => {
-  const code = String(input?.countryCode || '').trim().toUpperCase();
-  const flag = String(input?.flag || '').trim();
-
-  if (
-    code === 'VN' ||
-    flag === 'VN' ||
-    flag === '🇻🇳' ||
-    normalize(flag).includes('vietnam')
-  ) {
-    return '';
-  }
-
-  return flag || code || '';
-};
+export const getSafeFlagText = (input?: PlayerLike) =>
+  getFlagText(normalizePlayerCountry(input as any));
 
 const PlayerFlag = ({
   player,
@@ -85,14 +52,14 @@ const PlayerFlag = ({
   style,
   textStyle,
 }: Props) => {
-  const target = {
+  const target = normalizePlayerCountry({
     countryCode: countryCode ?? player?.countryCode,
     countryName: countryName ?? player?.countryName,
     flag: flag ?? player?.flag,
-  };
+  });
 
-  const source = getLocalFlagSource(target);
-  const safeText = getSafeFlagText(target);
+  const source = getFlagImageSource(target);
+  const safeText = getFlagText(target);
 
   if (source) {
     return (

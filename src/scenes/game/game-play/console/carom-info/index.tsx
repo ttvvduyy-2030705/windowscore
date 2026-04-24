@@ -1,5 +1,5 @@
-﻿import React, {memo, useCallback} from 'react';
-import {normalizePlayerCountry} from 'platform/windows/flags';
+import React, {memo, useCallback} from 'react';
+import {getFlagImageSource, getFlagText, normalizePlayerCountry} from 'platform/windows/flags';
 import {Image as RNImage, TextStyle} from 'react-native';
 import View from 'components/View';
 import Text from 'components/Text';
@@ -15,22 +15,11 @@ import styles from './styles';
 import {getCountryFlagImageUri} from '../../../settings/player/countries';
 
 
-const isRemoteUri = (value?: string) => /^https?:\/\//i.test(String(value || '').trim());
+const getPlayerFlagImageSource = (player?: {countryCode?: string; flag?: string}) =>
+  getFlagImageSource(normalizePlayerCountry(player as any));
 
-const getPlayerFlagImageUri = (player?: {countryCode?: string; flag?: string}) => {
-  const fromCode = getCountryFlagImageUri(player?.countryCode, 80);
-  if (fromCode) {
-    return fromCode;
-  }
-
-  const rawFlag = String(player?.flag || '').trim();
-  return isRemoteUri(rawFlag) ? rawFlag : '';
-};
-
-const getPlayerFlagText = (player?: {flag?: string}) => {
-  const rawFlag = String(player?.flag || '').trim();
-  return isRemoteUri(rawFlag) ? '' : rawFlag;
-};
+const getPlayerFlagText = (player?: {flag?: string}) =>
+  getFlagText(normalizePlayerCountry(player as any));
 
 const CaromInfo = (props: Props) => {
   const viewModel = CaromInfoViewModel(props);
@@ -82,7 +71,7 @@ const CaromInfo = (props: Props) => {
       const totalPointFont = getTotalPointFont(totalPointValue);
 
       const playerFlag = getPlayerFlagText(player as any);
-      const playerFlagImage = getPlayerFlagImageUri(player as any);
+      const playerFlagImage = getPlayerFlagImageSource(player as any);
 
       return (
         <View
@@ -101,7 +90,7 @@ const CaromInfo = (props: Props) => {
               <View style={[styles.flagBadge, props.compact ? styles.flagBadgeCompact : undefined]}>
                 {playerFlagImage ? (
                   <RNImage
-                    source={{uri: playerFlagImage}}
+                    source={playerFlagImage}
                     resizeMode="cover"
                     fadeDuration={0}
                     style={{width: '100%', height: '100%', backgroundColor: '#FFFFFF'}}
@@ -114,7 +103,7 @@ const CaromInfo = (props: Props) => {
 
             <View
               flex={'1'}
-              style={[playerFlag ? styles.nameWithFlag : undefined, props.compact ? styles.nameWithFlagCompact : undefined]}>
+              style={[(playerFlagImage || playerFlag) ? styles.nameWithFlag : undefined, props.compact ? styles.nameWithFlagCompact : undefined]}>
               <Text
                 fontSize={props.compact ? 16 : 22}
                 lineHeight={props.compact ? 20 : 26}

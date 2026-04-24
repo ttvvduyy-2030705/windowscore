@@ -144,13 +144,13 @@ const DEFAULT_COUNTRY: CountryItem =
     code: 'VN',
     name: 'Viet Nam',
     normalizedName: 'viet nam',
-    flag: '🇻🇳',
+    flag: 'VN',
   };
 
 const createDefaultPlayerCountry = () => ({
   countryCode: DEFAULT_COUNTRY.code,
   countryName: DEFAULT_COUNTRY.name,
-  flag: DEFAULT_COUNTRY.flag,
+  flag: DEFAULT_COUNTRY.code,
 });
 
 const clampPlayerNumber = (value?: number): PlayerNumber => {
@@ -194,15 +194,15 @@ const sanitizePlayerSettings = (
     const fallbackCountry =
       findCountryByCode((player as any)?.countryCode) ?? DEFAULT_COUNTRY;
     const rawFlag = String((player as any)?.flag || '').trim();
-    const safeFlag = isRemoteUri(rawFlag)
-      ? fallbackCountry.flag || ''
-      : rawFlag || fallbackCountry.flag || '';
+    const rawCode = String((player as any)?.countryCode || '').trim().toUpperCase();
+    const safeCode = /^[A-Z]{2}$/.test(rawCode)
+      ? rawCode
+      : fallbackCountry.code;
+    const safeFlag = isRemoteUri(rawFlag) ? rawFlag : safeCode;
 
     return {
       ...player,
-      countryCode: String(
-        (player as any)?.countryCode || fallbackCountry.code || '',
-      ),
+      countryCode: String(safeCode || ''),
       countryName: String(
         (player as any)?.countryName || fallbackCountry.name || '',
       ),
@@ -605,7 +605,7 @@ const onSelectGameMode = useCallback(
                 ...player,
                 countryCode: country.code,
                 countryName: country.name,
-                flag: country.flag,
+                flag: country.code,
               };
             }
 

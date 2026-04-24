@@ -3,6 +3,7 @@ import {StyleSheet, TextInput, Text as RNText, Image as RNImage} from 'react-nat
 
 import View from 'components/View';
 import Button from 'components/Button';
+import images from 'assets';
 import i18n from 'i18n';
 import {BALLS_15} from 'constants/balls';
 import {BallType} from 'types/ball';
@@ -500,7 +501,7 @@ const GamePlayer = (
             ]}
             allowFontScaling={false}
             maxFontSizeMultiplier={1}>
-            ˆ’
+            -
           </RNText>
         </Button>
 
@@ -654,18 +655,16 @@ const GamePlayer = (
                 addTimeButtonDynamicStyle,
                 !isActiveCard && styles.addTimeButtonInactive,
               ]}>
-              <RNText
+              <RNImage
+                source={images.game.addTime}
+                resizeMode="contain"
                 style={[
-                  styles.addTimeText,
-                  isMediumResponsiveLayout ? styles.addTimeTextMedium : undefined,
-                  isCompactLayout && styles.addTimeTextCompact,
-                  addTimeTextDynamicStyle,
+                  styles.addTimeIcon,
+                  isMediumResponsiveLayout ? styles.addTimeIconMedium : undefined,
+                  isCompactLayout && styles.addTimeIconCompact,
                   !isActiveCard && styles.addTimeTextInactive,
                 ]}
-                allowFontScaling={false}
-                maxFontSizeMultiplier={1}>
-                —·+
-              </RNText>
+              />
             </Button>
           ))}
         </View>
@@ -784,7 +783,7 @@ const GamePlayer = (
             ]}
             allowFontScaling={false}
             maxFontSizeMultiplier={1}>
-            —
+            ×
           </RNText>
         </Button>
         <RNText
@@ -1292,6 +1291,19 @@ const createStyles = (adaptive: any, design: any, rules: any) => createGameplayS
   },
   addTimeButtonInactive: {
     opacity: 0.65,
+  },
+  addTimeIcon: {
+    width: 24,
+    height: 24,
+    tintColor: '#FFFFFF',
+  },
+  addTimeIconMedium: {
+    width: 22,
+    height: 22,
+  },
+  addTimeIconCompact: {
+    width: 20,
+    height: 20,
   },
   addTimeText: {
     color: '#FFFFFF',

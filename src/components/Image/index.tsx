@@ -22,16 +22,14 @@ const CustomImage = (props: Props) => {
 
   const [internalSource, setInternalSource] = useState<
     ImageSourcePropType | number
-  >(images.default);
+  >(source || images.default);
 
   useEffect(() => {
-    if (source) {
-      setInternalSource(source);
-    }
+    setInternalSource(source || images.default);
   }, [source]);
 
   const onError = useCallback((e: any) => {
-    console.log('Image error', e);
+    console.log('Image error', e?.nativeEvent || e);
     setInternalSource(images.default);
   }, []);
 
@@ -49,6 +47,7 @@ const CustomImage = (props: Props) => {
       style={internalStyle}
       resizeMode={resizeMode}
       blurRadius={blurRadius}
+      fadeDuration={0}
       onError={onError}
     />
   );
