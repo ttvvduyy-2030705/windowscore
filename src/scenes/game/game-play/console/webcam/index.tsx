@@ -433,7 +433,7 @@ const CaromScoreboardOverlay = memo(({
       gameSettings={state.gameSettings}
       playerSettings={state.playerSettings}
       variant={liveOutput ? 'live' : fullscreenMode ? 'fullscreen' : 'camera'}
-      bottomOffset={bottomOffset ?? (liveOutput ? LIVE_OVERLAY_CAROM_BOTTOM : fullscreenMode ? 18 : 12)}
+      bottomOffset={bottomOffset ?? (liveOutput ? LIVE_OVERLAY_CAROM_BOTTOM : fullscreenMode ? 6 : 30)}
       liveVideoWidth={liveVideoWidth}
       liveVideoHeight={liveVideoHeight}
     />

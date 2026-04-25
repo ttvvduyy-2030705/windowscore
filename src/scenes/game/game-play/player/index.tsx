@@ -459,16 +459,17 @@ const GamePlayer = (
             !isActiveCard && styles.editButtonInactive,
             dynamicEditButtonStyle,
           ]}>
-          <RNText
+          <RNImage
+            source={images.game.edit}
+            resizeMode="contain"
+            fadeDuration={0}
             style={[
-              styles.editText,
-              isMediumResponsiveLayout ? styles.editTextMedium : undefined,
-              isCompactLayout && styles.editTextCompact,
-              textColorStyle,
-              !isActiveCard && styles.editTextInactive,
-            ]}>
-            
-          </RNText>
+              styles.editIcon,
+              isMediumResponsiveLayout ? styles.editIconMedium : undefined,
+              isCompactLayout && styles.editIconCompact,
+              !isActiveCard && styles.editIconInactive,
+            ]}
+          />
         </Button>
       </View>
 
@@ -963,6 +964,22 @@ const createStyles = (adaptive: any, design: any, rules: any) => createGameplayS
   },
   editTextInactive: {
     opacity: 0.9,
+  },
+  editIcon: {
+    width: 20,
+    height: 20,
+    tintColor: '#FFFFFF',
+  },
+  editIconMedium: {
+    width: 18,
+    height: 18,
+  },
+  editIconCompact: {
+    width: 16,
+    height: 16,
+  },
+  editIconInactive: {
+    opacity: 0.92,
   },
   plusMinusRow: {
     marginTop: 18,

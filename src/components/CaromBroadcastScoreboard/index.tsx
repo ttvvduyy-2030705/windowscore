@@ -1,5 +1,5 @@
 import React, {memo} from 'react';
-import {StyleProp, StyleSheet, View, ViewStyle} from 'react-native';
+import {Platform, StyleProp, StyleSheet, View, ViewStyle} from 'react-native';
 
 import CaromInfo from 'scenes/game/game-play/console/carom-info';
 import {isCaromGame} from 'utils/game';
@@ -73,14 +73,14 @@ const getMetrics = (
     case 'fullscreen':
       return compact
         ? {
-            left: s(10),
-            bottom: s(8),
+            left: s(4),
+            bottom: s(4),
             width: s(280),
             scale: 0.46,
           }
         : {
-            left: s(14),
-            bottom: s(14),
+            left: s(6),
+            bottom: s(6),
             width: s(360),
             scale: 0.56,
           };
@@ -102,16 +102,16 @@ const getMetrics = (
     default:
       return compact
         ? {
-            // Camera overlay: move the Carom scoreboard a little higher and
-            // closer to the left camera edge without distorting the UI.
+            // Camera overlay: anchor closer to the left camera edge and lift it
+            // above the bottom border without distorting the UI.
             left: s(2),
-            bottom: s(12),
+            bottom: s(28),
             width: s(186),
             scale: 0.34,
           }
         : {
             left: s(4),
-            bottom: s(18),
+            bottom: s(34),
             width: s(236),
             scale: 0.42,
           };
@@ -141,6 +141,14 @@ const CaromBroadcastScoreboard = ({
     liveVideoWidth,
     liveVideoHeight,
   );
+  const scaleRootWidth = metrics.width / metrics.scale;
+  // React Native Windows ignores transformOrigin here, so a scaled scoreboard
+  // visually drifts toward the center. Pull the scaled root back to keep the
+  // camera overlay truly left-aligned. Other platforms keep the previous path.
+  const windowsScaleOriginFixX =
+    Platform.OS === 'windows'
+      ? -Math.round((scaleRootWidth - metrics.width) / 2)
+      : 0;
 
   if (
     !isCaromGame(category) ||
@@ -166,7 +174,8 @@ const CaromBroadcastScoreboard = ({
         style={[
           styles.scaleRoot,
           {
-            width: metrics.width / metrics.scale,
+            width: scaleRootWidth,
+            marginLeft: windowsScaleOriginFixX,
             transform: [{scale: metrics.scale}],
           },
         ]}>
