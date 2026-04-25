@@ -116,6 +116,56 @@ const buttonToneStyle = (tone: ActionButtonTone) => {
   }
 };
 
+const ActionButtonContent = ({
+  label,
+  icon,
+  textStyle,
+  iconStyle,
+  adjustsFontSizeToFit,
+}: {
+  label: string;
+  icon?: number;
+  textStyle: any;
+  iconStyle: any;
+  adjustsFontSizeToFit?: boolean;
+}) => {
+  if (!icon) {
+    return (
+      <RNText
+        allowFontScaling={false}
+        maxFontSizeMultiplier={1}
+        style={textStyle}
+        numberOfLines={1}
+        adjustsFontSizeToFit={!!adjustsFontSizeToFit}
+        minimumFontScale={0.78}
+        ellipsizeMode="tail">
+        {label}
+      </RNText>
+    );
+  }
+
+  return (
+    <View direction={"row"} style={styles.actionButtonLabelRow}>
+      <RNImage
+        source={icon}
+        resizeMode="contain"
+        fadeDuration={0}
+        style={iconStyle}
+      />
+      <RNText
+        allowFontScaling={false}
+        maxFontSizeMultiplier={1}
+        style={textStyle}
+        numberOfLines={1}
+        adjustsFontSizeToFit={!!adjustsFontSizeToFit}
+        minimumFontScale={0.78}
+        ellipsizeMode="tail">
+        {label}
+      </RNText>
+    </View>
+  );
+};
+
 const SmallActionButton = ({
   label,
   onPress,
@@ -127,6 +177,7 @@ const SmallActionButton = ({
   tight,
 }: {
   label: string;
+  icon?: number;
   onPress?: () => void;
   tone?: ActionButtonTone;
   disabled?: boolean;
@@ -169,6 +220,7 @@ const SmallActionButton = ({
 
 const WideActionButton = ({
   label,
+  icon,
   onPress,
   tone = 'amber',
   compact,
@@ -177,6 +229,7 @@ const WideActionButton = ({
   tight,
 }: {
   label: string;
+  icon?: number;
   onPress?: () => void;
   tone?: ActionButtonTone;
   compact?: boolean;
@@ -195,22 +248,25 @@ const WideActionButton = ({
         tight ? styles.tightWideButton : undefined,
         buttonToneStyle(tone),
       ]}>
-      <RNText
-  allowFontScaling={false}
-  maxFontSizeMultiplier={1}
-  style={[
-    styles.wideButtonText,
-    poolCompact ? styles.poolWideButtonText : undefined,
-    compact ? styles.compactWideButtonText : undefined,
-    extraCompact ? styles.extraCompactWideButtonText : undefined,
-    tight ? styles.tightWideButtonText : undefined,
-  ]}
-  numberOfLines={1}
-  adjustsFontSizeToFit={!!tight || !!compact || !!extraCompact}
-  minimumFontScale={0.78}
-  ellipsizeMode="tail">
-  {label}
-</RNText>
+      <ActionButtonContent
+        label={label}
+        icon={icon}
+        textStyle={[
+          styles.wideButtonText,
+          poolCompact ? styles.poolWideButtonText : undefined,
+          compact ? styles.compactWideButtonText : undefined,
+          extraCompact ? styles.extraCompactWideButtonText : undefined,
+          tight ? styles.tightWideButtonText : undefined,
+        ]}
+        iconStyle={[
+          styles.actionButtonIcon,
+          poolCompact ? styles.poolActionButtonIcon : undefined,
+          compact ? styles.compactActionButtonIcon : undefined,
+          extraCompact ? styles.extraCompactActionButtonIcon : undefined,
+          tight ? styles.tightActionButtonIcon : undefined,
+        ]}
+        adjustsFontSizeToFit={!!tight || !!compact || !!extraCompact}
+      />
     </Button>
   );
 };
@@ -222,6 +278,7 @@ const DualButton = ({
   onRightPress,
   leftTone = 'green',
   rightTone = 'red',
+  leftIcon,
   rightIcon,
   compact,
   extraCompact,
@@ -234,6 +291,7 @@ const DualButton = ({
   onRightPress?: () => void;
   leftTone?: ActionButtonTone;
   rightTone?: ActionButtonTone;
+  leftIcon?: number;
   rightIcon?: number;
   compact?: boolean;
   extraCompact?: boolean;
@@ -257,22 +315,25 @@ const DualButton = ({
           tight ? styles.tightDualButton : undefined,
           buttonToneStyle(leftTone),
         ]}>
-        <RNText
-  allowFontScaling={false}
-  maxFontSizeMultiplier={1}
-  style={[
-    styles.dualButtonText,
-    poolCompact ? styles.poolDualButtonText : undefined,
-    compact ? styles.compactDualButtonText : undefined,
-    extraCompact ? styles.extraCompactDualButtonText : undefined,
-    tight ? styles.tightDualButtonText : undefined,
-  ]}
-  numberOfLines={1}
-  adjustsFontSizeToFit={!!tight || !!compact || !!extraCompact}
-  minimumFontScale={0.78}
-  ellipsizeMode="tail">
-  {leftLabel}
-</RNText>
+        <ActionButtonContent
+          label={leftLabel}
+          icon={leftIcon}
+          textStyle={[
+            styles.dualButtonText,
+            poolCompact ? styles.poolDualButtonText : undefined,
+            compact ? styles.compactDualButtonText : undefined,
+            extraCompact ? styles.extraCompactDualButtonText : undefined,
+            tight ? styles.tightDualButtonText : undefined,
+          ]}
+          iconStyle={[
+            styles.dualButtonIcon,
+            poolCompact ? styles.poolDualButtonIcon : undefined,
+            compact ? styles.compactDualButtonIcon : undefined,
+            extraCompact ? styles.extraCompactDualButtonIcon : undefined,
+            tight ? styles.tightDualButtonIcon : undefined,
+          ]}
+          adjustsFontSizeToFit={!!tight || !!compact || !!extraCompact}
+        />
       </Button>
 
       <Button
@@ -343,6 +404,9 @@ const TripleButton = ({
   leftLabel,
   centerLabel,
   rightLabel,
+  leftIcon,
+  centerIcon,
+  rightIcon,
   onLeftPress,
   onCenterPress,
   onRightPress,
@@ -357,6 +421,9 @@ const TripleButton = ({
   leftLabel: string;
   centerLabel: string;
   rightLabel: string;
+  leftIcon?: number;
+  centerIcon?: number;
+  rightIcon?: number;
   onLeftPress?: () => void;
   onCenterPress?: () => void;
   onRightPress?: () => void;
@@ -368,6 +435,22 @@ const TripleButton = ({
   poolCompact?: boolean;
   tight?: boolean;
 }) => {
+  const textStyle = [
+    styles.tripleButtonText,
+    poolCompact ? styles.poolTripleButtonText : undefined,
+    compact ? styles.compactTripleButtonText : undefined,
+    extraCompact ? styles.extraCompactTripleButtonText : undefined,
+    tight ? styles.tightTripleButtonText : undefined,
+  ];
+  const iconStyle = [
+    styles.actionButtonIcon,
+    poolCompact ? styles.poolActionButtonIcon : undefined,
+    compact ? styles.compactActionButtonIcon : undefined,
+    extraCompact ? styles.extraCompactActionButtonIcon : undefined,
+    tight ? styles.tightActionButtonIcon : undefined,
+  ];
+  const fitText = !!tight || !!compact || !!extraCompact;
+
   return (
     <View
       direction={'row'}
@@ -385,22 +468,13 @@ const TripleButton = ({
           tight ? styles.tightTripleButton : undefined,
           buttonToneStyle(leftTone),
         ]}>
-        <RNText
-  allowFontScaling={false}
-  maxFontSizeMultiplier={1}
-  style={[
-    styles.tripleButtonText,
-    poolCompact ? styles.poolTripleButtonText : undefined,
-    compact ? styles.compactTripleButtonText : undefined,
-    extraCompact ? styles.extraCompactTripleButtonText : undefined,
-    tight ? styles.tightTripleButtonText : undefined,
-  ]}
-  numberOfLines={1}
-  adjustsFontSizeToFit={!!tight || !!compact || !!extraCompact}
-  minimumFontScale={0.78}
-  ellipsizeMode="tail">
-  {leftLabel}
-</RNText>
+        <ActionButtonContent
+          label={leftLabel}
+          icon={leftIcon}
+          textStyle={textStyle}
+          iconStyle={iconStyle}
+          adjustsFontSizeToFit={fitText}
+        />
       </Button>
 
       <Button
@@ -413,22 +487,13 @@ const TripleButton = ({
           tight ? styles.tightTripleButton : undefined,
           buttonToneStyle(centerTone),
         ]}>
-        <RNText
-  allowFontScaling={false}
-  maxFontSizeMultiplier={1}
-  style={[
-    styles.tripleButtonText,
-    poolCompact ? styles.poolTripleButtonText : undefined,
-    compact ? styles.compactTripleButtonText : undefined,
-    extraCompact ? styles.extraCompactTripleButtonText : undefined,
-    tight ? styles.tightTripleButtonText : undefined,
-  ]}
-  numberOfLines={1}
-  adjustsFontSizeToFit={!!tight || !!compact || !!extraCompact}
-  minimumFontScale={0.78}
-  ellipsizeMode="tail">
-  {centerLabel}
-</RNText>
+        <ActionButtonContent
+          label={centerLabel}
+          icon={centerIcon}
+          textStyle={textStyle}
+          iconStyle={iconStyle}
+          adjustsFontSizeToFit={fitText}
+        />
       </Button>
 
       <Button
@@ -441,22 +506,13 @@ const TripleButton = ({
           tight ? styles.tightTripleButton : undefined,
           buttonToneStyle(rightTone),
         ]}>
-        <RNText
-  allowFontScaling={false}
-  maxFontSizeMultiplier={1}
-  style={[
-    styles.tripleButtonText,
-    poolCompact ? styles.poolTripleButtonText : undefined,
-    compact ? styles.compactTripleButtonText : undefined,
-    extraCompact ? styles.extraCompactTripleButtonText : undefined,
-    tight ? styles.tightTripleButtonText : undefined,
-  ]}
-  numberOfLines={1}
-  adjustsFontSizeToFit={!!tight || !!compact || !!extraCompact}
-  minimumFontScale={0.78}
-  ellipsizeMode="tail">
-  {rightLabel}
-</RNText>
+        <ActionButtonContent
+          label={rightLabel}
+          icon={rightIcon}
+          textStyle={textStyle}
+          iconStyle={iconStyle}
+          adjustsFontSizeToFit={fitText}
+        />
       </Button>
     </View>
   );
@@ -811,20 +867,20 @@ const GameConsole = (props: ConsoleViewModelProps) => {
   const startLabel = useMemo(() => {
     if (!props.isStarted) {
       if (!isFastMode && (props.warmUpCount ?? 0) > 0) {
-        return `▷ ${tr(
+        return tr(
           `Khởi động (${props.warmUpCount})`,
           `Warm-up (${props.warmUpCount})`,
-        )}`;
+        );
       }
-      return `▷ ${tr('Bắt đầu', 'Start')}`;
+      return tr('Bắt đầu', 'Start');
     }
 
     return props.isPaused
-      ? `▷ ${tr(
+      ? tr(
           isCarom || isFastMode ? 'Bắt đầu' : 'Tiếp tục',
           isCarom || isFastMode ? 'Start' : 'Resume',
-        )}`
-      : `⏸ ${tr('Tạm dừng', 'Pause')}`;
+        )
+      : tr('Tạm dừng', 'Pause');
   }, [props.isStarted, props.isPaused, props.warmUpCount, isCarom, isFastMode]);
 
   const handleBottomLeft = () => {
@@ -849,7 +905,8 @@ const GameConsole = (props: ConsoleViewModelProps) => {
       if (!props.isStarted) {
         return (
           <WideActionButton
-            label={`↗ ${tr('Đổi người', 'Switch player')}`}
+            label={tr('Đổi người', 'Switch player')}
+            icon={images.game.change}
             tone={'amber'}
             onPress={viewModel.onSwapPlayers}
             compact={useCaromCompactButtons}
@@ -911,7 +968,8 @@ const GameConsole = (props: ConsoleViewModelProps) => {
 
     return (
       <WideActionButton
-        label={`↗ ${tr('Đổi người', 'Switch players')}`}
+        label={tr('Đổi người', 'Switch players')}
+        icon={images.game.change}
         tone={'amber'}
         onPress={viewModel.onSwapPlayers}
         compact={useResponsiveCompact}
@@ -945,9 +1003,12 @@ const GameConsole = (props: ConsoleViewModelProps) => {
 
   const cameraUtilityRows = (
     <TripleButton
-      leftLabel={`↺ ${tr('Làm mới', 'Refresh')}`}
-      centerLabel={`◔ ${tr('Giải lao', 'Break')}`}
-      rightLabel={`⌁ ${tr('Đổi cam', 'Switch cam')}`}
+      leftLabel={tr('Làm mới', 'Refresh')}
+      centerLabel={tr('Giải lao', 'Break')}
+      rightLabel={tr('Đổi cam', 'Switch cam')}
+      leftIcon={images.game.refresh}
+      centerIcon={images.game.clock}
+      rightIcon={images.game.camera}
       onLeftPress={() => webcamRef.current?.refresh()}
       onCenterPress={props.onGameBreak}
       onRightPress={() => webcamRef.current?.switchCamera()}
@@ -970,6 +1031,7 @@ const GameConsole = (props: ConsoleViewModelProps) => {
       return (
         <DualButton
           leftLabel={startLabel}
+          leftIcon={props.isStarted && !props.isPaused ? undefined : images.game.start}
           rightLabel={tr('Kết thúc', 'End')}
           rightIcon={images.game.endMatch}
           onLeftPress={handleBottomLeft}
@@ -986,6 +1048,7 @@ const GameConsole = (props: ConsoleViewModelProps) => {
     return (
       <DualButton
         leftLabel={startLabel}
+        leftIcon={props.isStarted && !props.isPaused ? undefined : images.game.start}
         rightLabel={tr('Kết thúc', 'End')}
           rightIcon={images.game.endMatch}
         onLeftPress={handleBottomLeft}
@@ -1002,6 +1065,8 @@ const GameConsole = (props: ConsoleViewModelProps) => {
     hideCaromCamera,
     isCarom,
     isPool15,
+    props.isPaused,
+    props.isStarted,
     props.onGameBreak,
     startLabel,
     useExtraCompact,
@@ -1563,6 +1628,7 @@ const GameConsole = (props: ConsoleViewModelProps) => {
         <View style={[styles.topButtonRowWrap, isCameraFullscreen ? styles.hiddenWhenFullscreen : undefined]}>
           <DualButton
             leftLabel={startLabel}
+            leftIcon={props.isStarted && !props.isPaused ? undefined : images.game.start}
             rightLabel={tr('Kết thúc', 'End')}
           rightIcon={images.game.endMatch}
             onLeftPress={handleBottomLeft}
@@ -2307,6 +2373,34 @@ const createStyles = (adaptive: any, design: any, rules: any) => createGameplayS
     minHeight: 84,
     borderRadius: 14,
     paddingHorizontal: 14,
+  },
+  actionButtonLabelRow: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    maxWidth: '100%',
+  },
+  actionButtonIcon: {
+    width: 18,
+    height: 18,
+    flexShrink: 0,
+    backgroundColor: 'transparent',
+  },
+  compactActionButtonIcon: {
+    width: 15,
+    height: 15,
+  },
+  extraCompactActionButtonIcon: {
+    width: 13,
+    height: 13,
+  },
+  tightActionButtonIcon: {
+    width: 12,
+    height: 12,
+  },
+  poolActionButtonIcon: {
+    width: 26,
+    height: 26,
   },
   dualButtonLabelRow: {
     alignItems: 'center',

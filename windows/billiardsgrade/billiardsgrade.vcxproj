@@ -98,6 +98,7 @@
     </ClInclude>
     <ClInclude Include="ReactPackageProvider.h" />
     <ClInclude Include="WindowsCameraViewManager.h" />
+    <ClInclude Include="WindowsCameraRecordingModule.h" />
     <ClInclude Include="AutolinkedNativeModules.g.h" />
     <ClInclude Include="pch.h" />
     <ClInclude Include="App.h">
@@ -130,6 +131,7 @@
     </ClCompile>
     <ClCompile Include="ReactPackageProvider.cpp" />
     <ClCompile Include="WindowsCameraViewManager.cpp" />
+    <ClCompile Include="WindowsCameraRecordingModule.cpp" />
     <ClCompile Include="AutolinkedNativeModules.g.cpp" />
     <ClCompile Include="pch.cpp">
       <PrecompiledHeader>Create</PrecompiledHeader>

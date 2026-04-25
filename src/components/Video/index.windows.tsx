@@ -1,7 +1,9 @@
-import React, {forwardRef, useEffect, useImperativeHandle, useRef} from 'react';
-import {Image, Platform, StyleSheet, View} from 'react-native';
+import React, {forwardRef, useCallback, useEffect, useImperativeHandle, useRef} from 'react';
+import {Image, NativeModules, Platform, StyleSheet, View} from 'react-native';
+import RNFS from 'react-native-fs';
 
 import images from 'assets';
+import {REPLAY_ROOT} from 'services/replay/localReplay';
 import WindowsNativeCameraView from './WindowsNativeCameraView';
 
 type Props = {
@@ -12,6 +14,14 @@ type Props = {
   cameraScaleMode?: 'contain' | 'cover';
 };
 
+type RecordingCallbacks = {
+  onRecordingFinished?: (video: {path?: string}) => void;
+  onRecordingError?: (error: any) => void;
+  webcamFolderName?: string;
+  segmentIndex?: number;
+  path?: string;
+};
+
 const DEBUG_WINDOWS_CAMERA = true;
 
 const debugWindowsCamera = (...args: any[]) => {
@@ -20,24 +30,130 @@ const debugWindowsCamera = (...args: any[]) => {
   }
 };
 
+const sanitizeFolderName = (value?: string) => {
+  const raw = String(value || '').trim();
+  return raw.replace(/[<>:"/\\|?*]+/g, '_') || `windows_match_${Date.now()}`;
+};
+
+const getWindowsCameraRecordingModule = () => {
+  const modules = NativeModules as any;
+  return modules?.WindowsCameraRecordingModule || modules?.WindowsCameraRecording || null;
+};
+
 const VideoWindows = forwardRef<any, Props>((props, ref) => {
   const {setIsCameraReady} = props;
   const lastRecordingPathRef = useRef<string>('');
+  const recordingCallbacksRef = useRef<RecordingCallbacks | null>(null);
+  const recordingStateRef = useRef<'idle' | 'starting' | 'recording' | 'stopping'>('idle');
+
+  const buildRecordingPath = useCallback(async (options?: RecordingCallbacks) => {
+    if (options?.path) {
+      const parent = String(options.path).replace(/[\\/][^\\/]+$/, '');
+      if (parent && parent !== options.path) {
+        await RNFS.mkdir(parent).catch(() => undefined);
+      }
+      return String(options.path);
+    }
+
+    const folderName = sanitizeFolderName(options?.webcamFolderName);
+    const folderPath = `${REPLAY_ROOT}/${folderName}`;
+    await RNFS.mkdir(folderPath).catch(() => undefined);
+
+    const segmentIndex = Number.isFinite(Number(options?.segmentIndex))
+      ? Number(options?.segmentIndex)
+      : Date.now();
+    const indexLabel = segmentIndex < 10 ? `0${segmentIndex}` : String(segmentIndex);
+
+    return `${folderPath}/webcam_${indexLabel}_${Date.now()}.mp4`;
+  }, []);
 
   useImperativeHandle(ref, () => ({
-    startRecording: async (options?: any) => {
-      lastRecordingPathRef.current =
-        String(options?.path || '') || `C:/AplusScoreWindows/recording-${Date.now()}.mov`;
+    startRecording: async (options?: RecordingCallbacks) => {
+      const nativeRecorder = getWindowsCameraRecordingModule();
 
-      // Windows preview is native MediaCapture. Recording is intentionally mocked here
-      // so gameplay/replay flow does not block while the Windows recorder is added later.
-      setTimeout(() => {
-        options?.onRecordingFinished?.({path: undefined});
-      }, 80);
+      if (!nativeRecorder?.startRecording) {
+        const error = new Error('WindowsCameraRecordingModule.startRecording is not available');
+        console.log('[Recording] error', error.message);
+        options?.onRecordingError?.(error);
+        return undefined;
+      }
 
-      return lastRecordingPathRef.current;
+      try {
+        recordingStateRef.current = 'starting';
+        recordingCallbacksRef.current = options || null;
+
+        const outputPath = await buildRecordingPath(options);
+        lastRecordingPathRef.current = outputPath;
+
+        console.log('[Recording] platform=windows');
+        console.log('[Recording] start requested');
+        console.log('[Recording] selected camera/input source', 'WindowsNativeCameraView');
+        console.log('[Recording] output path', outputPath);
+
+        const actualPath = await nativeRecorder.startRecording(outputPath);
+        const finalPath = String(actualPath || outputPath);
+
+        lastRecordingPathRef.current = finalPath;
+        recordingStateRef.current = 'recording';
+        console.log('[Recording] file created', finalPath);
+
+        return finalPath;
+      } catch (error) {
+        recordingStateRef.current = 'idle';
+        console.log('[Recording] error', error);
+        options?.onRecordingError?.(error);
+        return undefined;
+      }
     },
-    stopRecording: async () => lastRecordingPathRef.current || undefined,
+    stopRecording: async () => {
+      const nativeRecorder = getWindowsCameraRecordingModule();
+      const callbacks = recordingCallbacksRef.current;
+
+      console.log('[Recording] platform=windows');
+      console.log('[Recording] stop requested');
+
+      if (!nativeRecorder?.stopRecording) {
+        const error = new Error('WindowsCameraRecordingModule.stopRecording is not available');
+        console.log('[Recording] error', error.message);
+        callbacks?.onRecordingError?.(error);
+        recordingStateRef.current = 'idle';
+        return lastRecordingPathRef.current || undefined;
+      }
+
+      try {
+        recordingStateRef.current = 'stopping';
+        const actualPath = await nativeRecorder.stopRecording();
+        const finalPath = String(actualPath || lastRecordingPathRef.current || '');
+
+        if (finalPath) {
+          lastRecordingPathRef.current = finalPath;
+          console.log('[Recording] finalized path', finalPath);
+          callbacks?.onRecordingFinished?.({path: finalPath});
+          console.log('[Replay] video discovered', finalPath);
+        } else {
+          const error = new Error('Windows recording stopped without a finalized path');
+          console.log('[Recording] error', error.message);
+          callbacks?.onRecordingError?.(error);
+        }
+
+        recordingCallbacksRef.current = null;
+        recordingStateRef.current = 'idle';
+        return finalPath || undefined;
+      } catch (error) {
+        console.log('[Recording] error', error);
+        callbacks?.onRecordingError?.(error);
+        recordingCallbacksRef.current = null;
+        recordingStateRef.current = 'idle';
+        return lastRecordingPathRef.current || undefined;
+      }
+    },
+    getRecordingInfo: () => ({
+      state: recordingStateRef.current,
+      activeBackend: 'windows-native',
+      source: 'external',
+      isRecording: recordingStateRef.current === 'recording' || recordingStateRef.current === 'starting',
+      path: lastRecordingPathRef.current || undefined,
+    }),
     startLive: async () => false,
     stopLive: async () => false,
     setZoom: async () => 1,
@@ -48,7 +164,7 @@ const VideoWindows = forwardRef<any, Props>((props, ref) => {
       zoom: 1,
       source: 'windows',
     }),
-  }));
+  }), [buildRecordingPath]);
 
   useEffect(() => {
     debugWindowsCamera('[WebCam] platform=windows', {
@@ -57,6 +173,7 @@ const VideoWindows = forwardRef<any, Props>((props, ref) => {
     });
     debugWindowsCamera('[WebCam] using Windows camera branch', {
       implementation: 'UWP MediaCapture + CaptureElement',
+      recording: 'WindowsCameraRecordingModule + MediaCapture.StartRecordToStorageFileAsync',
       selection: 'prefer external/usb camera, fallback to first available video device',
     });
     debugWindowsCamera('[WebCam] enumerate devices start');
@@ -65,8 +182,6 @@ const VideoWindows = forwardRef<any, Props>((props, ref) => {
       fallback: 'black background + logo behind native preview if no camera is available',
     });
 
-    // Native WindowsCameraView opens the real PC/USB webcam. Mark ready here so
-    // game start is not blocked by Android/iOS VisionCamera state.
     setIsCameraReady?.(true);
   }, [setIsCameraReady]);
 

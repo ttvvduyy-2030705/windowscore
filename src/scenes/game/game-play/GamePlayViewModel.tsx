@@ -2999,6 +2999,8 @@ const GamePlayViewModel = () => {
 
       console.log('Starting recording...');
       cameraRef.current.startRecording({
+        webcamFolderName,
+        segmentIndex: currentReplaySegmentIndexRef.current,
         fileType: 'mp4',
         videoCodec: 'h264',
         onRecordingFinished: async video => {

@@ -2,6 +2,7 @@
 #include "ReactPackageProvider.h"
 #include "NativeModules.h"
 #include "WindowsCameraViewManager.h"
+#include "WindowsCameraRecordingModule.h"
 
 using namespace winrt::Microsoft::ReactNative;
 

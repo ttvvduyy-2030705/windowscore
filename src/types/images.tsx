@@ -24,6 +24,11 @@ export type Images = {
     edit: number;
     editPencil: number;
     endMatch: number;
+    refresh: number;
+    clock: number;
+    camera: number;
+    change: number;
+    start: number;
     soundOn: number;
     soundOff: number;
     addTime: number;

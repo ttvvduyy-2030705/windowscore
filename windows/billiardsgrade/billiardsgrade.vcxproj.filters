@@ -12,6 +12,7 @@
     <ClCompile Include="$(GeneratedFilesDir)module.g.cpp" />
     <ClCompile Include="ReactPackageProvider.cpp" />
     <ClCompile Include="WindowsCameraViewManager.cpp" />
+    <ClCompile Include="WindowsCameraRecordingModule.cpp" />
     <ClCompile Include="AutolinkedNativeModules.g.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -19,6 +20,7 @@
     <ClInclude Include="App.h" />
     <ClInclude Include="ReactPackageProvider.h" />
     <ClInclude Include="WindowsCameraViewManager.h" />
+    <ClInclude Include="WindowsCameraRecordingModule.h" />
     <ClInclude Include="AutolinkedNativeModules.g.h" />
   </ItemGroup>
   <ItemGroup>
