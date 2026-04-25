@@ -1,12 +1,22 @@
 import React, {forwardRef, useEffect, useImperativeHandle, useRef} from 'react';
-import {Image, StyleSheet, View} from 'react-native';
+import {Image, Platform, StyleSheet, View} from 'react-native';
 
 import images from 'assets';
 
 type Props = {
   style?: any;
   children?: React.ReactNode;
+  overlayContent?: React.ReactNode;
   setIsCameraReady?: (isReady: boolean) => void;
+  cameraScaleMode?: 'contain' | 'cover';
+};
+
+const DEBUG_WINDOWS_CAMERA = true;
+
+const debugWindowsCamera = (...args: any[]) => {
+  if (DEBUG_WINDOWS_CAMERA) {
+    console.log(...args);
+  }
 };
 
 const VideoWindows = forwardRef<any, Props>((props, ref) => {
@@ -17,9 +27,13 @@ const VideoWindows = forwardRef<any, Props>((props, ref) => {
     startRecording: async (options?: any) => {
       lastRecordingPathRef.current =
         String(options?.path || '') || `C:/AplusScoreWindows/recording-${Date.now()}.mov`;
+
+      // Windows native recording is not implemented in this JS-only branch.
+      // Keep the gameplay/replay flow non-blocking and return a stable value.
       setTimeout(() => {
         options?.onRecordingFinished?.({path: undefined});
       }, 80);
+
       return lastRecordingPathRef.current;
     },
     stopRecording: async () => lastRecordingPathRef.current || undefined,
@@ -36,10 +50,29 @@ const VideoWindows = forwardRef<any, Props>((props, ref) => {
   }));
 
   useEffect(() => {
-    // Keep Windows gameplay unblocked. The current repo has no native RNW
-    // camera view yet, so the visual layer remains the black logo fallback.
+    debugWindowsCamera('[WebCam] platform', {
+      platform: Platform.OS,
+      branch: 'windows-js-fallback',
+    });
+    debugWindowsCamera('[WebCam] windows camera branch', {
+      implementation: 'js-fallback-no-webview',
+      nativePreviewAvailable: false,
+    });
+    debugWindowsCamera('[WebCam] camera device not found', {
+      reason: 'No RNW native camera preview module is registered in this repo',
+    });
+    debugWindowsCamera('[Video] finalVisibleLayer', {
+      layer: 'Video.fallback',
+      reason: 'No external camera dependency is imported',
+    });
+
+    // Do not block gameplay on Windows while native camera preview is absent.
     setIsCameraReady?.(true);
   }, [setIsCameraReady]);
+
+  useEffect(() => {
+    debugWindowsCamera('[Video] fallback logo rendered');
+  }, []);
 
   return (
     <View style={[styles.container, props.style]}>
@@ -49,6 +82,7 @@ const VideoWindows = forwardRef<any, Props>((props, ref) => {
         style={styles.logo}
       />
       {props.children}
+      {props.overlayContent}
     </View>
   );
 });

@@ -102,14 +102,16 @@ const getMetrics = (
     default:
       return compact
         ? {
-            left: s(6),
-            bottom: s(4),
+            // Camera overlay: move the Carom scoreboard a little higher and
+            // closer to the left camera edge without distorting the UI.
+            left: s(2),
+            bottom: s(12),
             width: s(186),
             scale: 0.34,
           }
         : {
-            left: s(8),
-            bottom: s(10),
+            left: s(4),
+            bottom: s(18),
             width: s(236),
             scale: 0.42,
           };

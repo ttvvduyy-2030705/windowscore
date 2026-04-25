@@ -700,7 +700,7 @@ const WebCam = forwardRef<WebCamHandle, WebCamComponentProps>((props, ref) => {
   ]);
 
   const effectiveCameraReady =
-    effectiveSourceType === 'phone'
+    effectiveSourceType === 'phone' && Platform.OS !== 'windows'
       ? props.isCameraReady && cameraVisualReady
       : props.isCameraReady || cameraVisualReady;
   const shouldShowPhonePlaceholder =
