@@ -2,6 +2,7 @@ import React, {forwardRef, useEffect, useImperativeHandle, useRef} from 'react';
 import {Image, Platform, StyleSheet, View} from 'react-native';
 
 import images from 'assets';
+import WindowsNativeCameraView from './WindowsNativeCameraView';
 
 type Props = {
   style?: any;
@@ -28,8 +29,8 @@ const VideoWindows = forwardRef<any, Props>((props, ref) => {
       lastRecordingPathRef.current =
         String(options?.path || '') || `C:/AplusScoreWindows/recording-${Date.now()}.mov`;
 
-      // Windows native recording is not implemented in this JS-only branch.
-      // Keep the gameplay/replay flow non-blocking and return a stable value.
+      // Windows preview is native MediaCapture. Recording is intentionally mocked here
+      // so gameplay/replay flow does not block while the Windows recorder is added later.
       setTimeout(() => {
         options?.onRecordingFinished?.({path: undefined});
       }, 80);
@@ -50,37 +51,33 @@ const VideoWindows = forwardRef<any, Props>((props, ref) => {
   }));
 
   useEffect(() => {
-    debugWindowsCamera('[WebCam] platform', {
+    debugWindowsCamera('[WebCam] platform=windows', {
       platform: Platform.OS,
-      branch: 'windows-js-fallback',
+      branch: 'windows-native-mediacapture',
     });
-    debugWindowsCamera('[WebCam] windows camera branch', {
-      implementation: 'js-fallback-no-webview',
-      nativePreviewAvailable: false,
+    debugWindowsCamera('[WebCam] using Windows camera branch', {
+      implementation: 'UWP MediaCapture + CaptureElement',
+      selection: 'prefer external/usb camera, fallback to first available video device',
     });
-    debugWindowsCamera('[WebCam] camera device not found', {
-      reason: 'No RNW native camera preview module is registered in this repo',
-    });
-    debugWindowsCamera('[Video] finalVisibleLayer', {
-      layer: 'Video.fallback',
-      reason: 'No external camera dependency is imported',
+    debugWindowsCamera('[WebCam] enumerate devices start');
+    debugWindowsCamera('[Video] finalVisibleLayer=camera', {
+      owner: 'Video.index.windows',
+      fallback: 'black background + logo behind native preview if no camera is available',
     });
 
-    // Do not block gameplay on Windows while native camera preview is absent.
+    // Native WindowsCameraView opens the real PC/USB webcam. Mark ready here so
+    // game start is not blocked by Android/iOS VisionCamera state.
     setIsCameraReady?.(true);
   }, [setIsCameraReady]);
-
-  useEffect(() => {
-    debugWindowsCamera('[Video] fallback logo rendered');
-  }, []);
 
   return (
     <View style={[styles.container, props.style]}>
       <Image
         source={images.logoSmall || images.logoFilled || images.logo}
         resizeMode="contain"
-        style={styles.logo}
+        style={styles.fallbackLogo}
       />
+      <WindowsNativeCameraView style={styles.nativeCamera} />
       {props.children}
       {props.overlayContent}
     </View>
@@ -98,7 +95,12 @@ const styles = StyleSheet.create({
     backgroundColor: '#000000',
     overflow: 'hidden',
   },
-  logo: {
+  nativeCamera: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'transparent',
+  },
+  fallbackLogo: {
+    position: 'absolute',
     width: '34%',
     height: '34%',
     minWidth: 96,
