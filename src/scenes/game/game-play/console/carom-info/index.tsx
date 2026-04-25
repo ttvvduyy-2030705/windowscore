@@ -91,7 +91,7 @@ const CaromInfo = (props: Props) => {
                 {playerFlagImage ? (
                   <RNImage
                     source={playerFlagImage}
-                    resizeMode="cover"
+                    resizeMode="contain"
                     fadeDuration={0}
                     style={{width: '100%', height: '100%', backgroundColor: '#FFFFFF'}}
                   />

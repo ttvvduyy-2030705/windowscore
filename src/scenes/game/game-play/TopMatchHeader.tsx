@@ -69,7 +69,7 @@ const TopMatchHeader = ({
 
   const useBalancedHeader = compactTitleLeft || !!centerTimeText;
   const showProModeToggle = !isAnyPoolMode && totalPlayers <= 2;
-  const useSingleLineSwitchRow = isHandheldLandscape && showProModeToggle;
+  const useSingleLineSwitchRow = showProModeToggle;
 
   const dynamicStyles = useMemo(() => {
     const headerHeight = layoutRules.headerHeight;
@@ -78,10 +78,16 @@ const TopMatchHeader = ({
     const logoHeight = isHandheldLandscape ? adaptive.s(24) : adaptive.s(40);
     const soundButtonSize = isHandheldLandscape ? adaptive.s(28) : adaptive.s(36);
     const soundButtonGap = isHandheldLandscape ? adaptive.s(8) : adaptive.s(12);
-    const sideSlotWidth = isHandheldLandscape
-      ? adaptive.s(isAnyPoolMode ? 170 : useSingleLineSwitchRow ? 212 : 196)
-      : adaptive.s(isAnyPoolMode ? 300 : 344);
-    const switchGroupWidth = sideSlotWidth - soundButtonSize - soundButtonGap;
+    const leftSlotWidth = isHandheldLandscape
+      ? adaptive.s(170)
+      : adaptive.s(300);
+    const rightSlotWidth = isHandheldLandscape
+      ? adaptive.s(isAnyPoolMode ? 230 : 300)
+      : adaptive.s(isAnyPoolMode ? 330 : 420);
+    const switchGroupWidth = Math.max(
+      adaptive.s(isAnyPoolMode ? 170 : 320),
+      rightSlotWidth - soundButtonSize - soundButtonGap,
+    );
 
     return {
       header: {
@@ -97,7 +103,7 @@ const TopMatchHeader = ({
             : design.spacing.sm,
       },
       balancedLeftSlot: {
-        width: sideSlotWidth,
+        width: leftSlotWidth,
       },
       balancedLogoWrap: {
         width: logoWidth,
@@ -138,10 +144,10 @@ const TopMatchHeader = ({
           : adaptive.fs(40, 0.82, 1.02),
       },
       logoSlot: {
-        width: sideSlotWidth,
+        width: leftSlotWidth,
       },
       rightSlot: {
-        width: sideSlotWidth,
+        width: rightSlotWidth,
       },
       switchGroup: {
         width: switchGroupWidth,

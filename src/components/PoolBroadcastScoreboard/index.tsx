@@ -226,7 +226,7 @@ const FlagBadge = ({
         },
       ]}>
       {flagSource ? (
-        <Image source={flagSource} resizeMode="cover" style={styles.flagImage} />
+        <Image source={flagSource} resizeMode="contain" style={styles.flagImage} />
       ) : (
         <Text
           style={[styles.flagText, !active && styles.flagTextInactive]}

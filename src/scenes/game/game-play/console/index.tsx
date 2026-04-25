@@ -524,12 +524,20 @@ const GameConsole = (props: ConsoleViewModelProps) => {
   const isShortLandscape = adaptive.isShortLandscape;
   const isVeryShortLandscape = adaptive.isVeryShortLandscape;
   const useResponsiveCompact =
-    adaptive.isConstrainedLandscape ||
-    isCompactLandscape || shortestSide <= 520 || (isHandheldLandscape && height <= 900) || height <= 760;
+    !isLargeDisplay &&
+    (adaptive.isConstrainedLandscape ||
+      isCompactLandscape ||
+      shortestSide <= 520 ||
+      (isHandheldLandscape && height <= 900) ||
+      height <= 760);
   const useTightLandscapeLayout = isMediumLandscape || useResponsiveCompact;
   const useExtraCompact =
-    adaptive.isVeryShortLandscape ||
-    shortestSide <= 460 || height <= 680 || (isHandheldLandscape && height <= 620) || adaptive.aspectRatio >= 1.9;
+    !isLargeDisplay &&
+    (adaptive.isVeryShortLandscape ||
+      shortestSide <= 460 ||
+      height <= 680 ||
+      (isHandheldLandscape && height <= 620) ||
+      adaptive.aspectRatio >= 1.9);
   const useCompactMiddleHoleCounter = useExtraCompact || useResponsiveCompact;
 
   const uiScale = useMemo(() => {
@@ -590,6 +598,7 @@ const GameConsole = (props: ConsoleViewModelProps) => {
     : hideCaromCamera || useExtraCompact;
   const useCaromTightLayout =
     isCarom &&
+    !isLargeDisplay &&
     !hideCaromCamera &&
     !useLargeCaromConsole &&
     (useResponsiveCompact || adaptive.isConstrainedLandscape || isHandheldLandscape || height <= 760);
@@ -1800,10 +1809,10 @@ const createStyles = (adaptive: any, design: any, rules: any) => createGameplayS
   caromWrapper: {
     backgroundColor: '#111216',
     minHeight: 0,
-    paddingHorizontal: 6,
-    paddingTop: 4,
-    paddingBottom: 4,
-    gap: 3,
+    paddingHorizontal: 8,
+    paddingTop: 8,
+    paddingBottom: 8,
+    gap: 8,
   },
   caromWrapperNoCamera: {
     justifyContent: 'space-between',
@@ -2057,7 +2066,7 @@ const createStyles = (adaptive: any, design: any, rules: any) => createGameplayS
     maxHeight: 168,
   },
   caromCameraCardExpanded: {
-    flex: 1.2,
+    flex: 1.7,
     maxHeight: undefined,
   },
   caromCameraCardLarge: {
@@ -2099,8 +2108,9 @@ const createStyles = (adaptive: any, design: any, rules: any) => createGameplayS
     paddingTop: 6,
   },
   caromActionStack: {
-    gap: 4,
+    gap: 8,
     flexShrink: 0,
+    paddingTop: 4,
   },
   caromActionStackCompact: {
     gap: 3,
@@ -2121,7 +2131,7 @@ const createStyles = (adaptive: any, design: any, rules: any) => createGameplayS
   },
   smallActionButton: {
     flex: 1,
-    minHeight: 48,
+    minHeight: 54,
     borderRadius: 12,
     borderWidth: 1,
     alignItems: 'center',
@@ -2171,7 +2181,7 @@ const createStyles = (adaptive: any, design: any, rules: any) => createGameplayS
   },
   wideButton: {
     width: '100%',
-    minHeight: 58,
+    minHeight: 64,
     borderRadius: 12,
     borderWidth: 1,
     alignItems: 'center',
@@ -2229,7 +2239,7 @@ const createStyles = (adaptive: any, design: any, rules: any) => createGameplayS
   },
   dualButton: {
     flex: 1,
-    minHeight: 58,
+    minHeight: 64,
     borderRadius: 12,
     borderWidth: 1,
     alignItems: 'center',
@@ -2289,7 +2299,7 @@ const createStyles = (adaptive: any, design: any, rules: any) => createGameplayS
   },
   tripleButton: {
     flex: 1,
-    minHeight: 58,
+    minHeight: 64,
     borderRadius: 12,
     borderWidth: 1,
     alignItems: 'center',

@@ -388,7 +388,7 @@ const GamePlayer = (
             {playerFlagImage ? (
               <RNImage
                 source={{uri: playerFlagImage}}
-                resizeMode="cover"
+                resizeMode="contain"
                 fadeDuration={0}
                 style={styles.flagImage}
               />

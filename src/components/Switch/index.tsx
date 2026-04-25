@@ -6,7 +6,13 @@ const Switch = (props: Props) => {
   const viewModel = SwitchViewModel(props);
 
   return (
-    <RNSwitch value={viewModel.value} onValueChange={viewModel.onToggle} />
+    <RNSwitch
+      value={viewModel.value}
+      onValueChange={viewModel.onToggle}
+      trackColor={{false: '#535760', true: '#0A84FF'}}
+      thumbColor={viewModel.value ? '#FFFFFF' : '#F2F2F2'}
+      ios_backgroundColor={'#535760'}
+    />
   );
 };
 

@@ -31,7 +31,7 @@ const styles = StyleSheet.create({
 
   flagBadge: {
     width: responsiveScale(34),
-    height: responsiveScale(24),
+    height: responsiveScale(22),
     borderRadius: responsiveScale(4),
     backgroundColor: colors.white,
     alignItems: 'center',
@@ -42,13 +42,13 @@ const styles = StyleSheet.create({
 
   flagBadgeCompact: {
     width: responsiveScale(24),
-    height: responsiveScale(18),
+    height: responsiveScale(16),
     marginRight: responsiveScale(4),
   },
 
   flagText: {
-    fontSize: responsiveScale(16),
-    lineHeight: responsiveScale(18),
+    fontSize: responsiveScale(11),
+    lineHeight: responsiveScale(13),
     textAlign: 'center',
     includeFontPadding: false,
   },

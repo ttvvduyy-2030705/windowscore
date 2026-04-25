@@ -73,7 +73,7 @@ const PlayerFlag = ({
           },
           style,
         ]}>
-        <Image source={source} resizeMode="cover" style={styles.image} />
+        <Image source={source} resizeMode="contain" style={styles.image} />
       </View>
     );
   }

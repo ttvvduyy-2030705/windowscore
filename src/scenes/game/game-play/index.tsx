@@ -281,11 +281,8 @@ const GamePlay = () => {
   }, [category, totalPlayers]);
 
   const useDarkPoolBackground = useMemo(() => {
-    return (
-      isPoolArenaLayout ||
-      isPool15FreeGame(category)
-    );
-  }, [category, isPoolArenaLayout]);
+    return isPoolGame(category);
+  }, [category]);
 
   const isCaromMode = useMemo(() => isCaromGame(category), [category]);
   const useThreePlayerLayout = totalPlayers === 3;
