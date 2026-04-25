@@ -1,7 +1,7 @@
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {useFocusEffect, useNavigation, useRoute} from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import {Alert} from 'react-native';
+import {Alert, Platform} from 'react-native';
 import {useSelector, useDispatch} from 'react-redux';
 import RNFS from 'react-native-fs';
 // import {captureRef} from 'react-native-view-shot';
@@ -455,7 +455,7 @@ const GamePlayViewModel = () => {
   const {gameSettings: reduxGameSettings} = useSelector((state: RootState) => state.game);
   const routeGameSettings = routeParams.gameSettings;
   const gameSettings = useMemo(
-    () => reduxGameSettings ?? routeGameSettings,
+    () => routeGameSettings ?? reduxGameSettings,
     [reduxGameSettings, routeGameSettings],
   );
   const selectedLivestreamPlatform =
@@ -2362,10 +2362,13 @@ const GamePlayViewModel = () => {
       return;
     }
 
-    const freeDisk =
-      (await DeviceInfo.getFreeDiskStorage()) / (1024 * 1024 * 1024);
+    const freeDiskBytes =
+      typeof (DeviceInfo as any).getFreeDiskStorage === 'function'
+        ? await (DeviceInfo as any).getFreeDiskStorage()
+        : 100 * 1024 * 1024 * 1024;
+    const freeDisk = Number(freeDiskBytes || 0) / (1024 * 1024 * 1024);
 
-    console.log('Free disk storae ' + freeDisk);
+    console.log('Free disk storage ' + freeDisk);
 
     if (freeDisk <= 10) {
       Alert.alert(i18n.t('txtwarn'), i18n.t('msgOutOfMemory'), [
@@ -2400,15 +2403,20 @@ const GamePlayViewModel = () => {
     const availableSources = normalizeAvailableCameraSources(
       getAvailableCameraSources(),
     );
+    const isWindows = Platform.OS === 'windows';
+    const effectiveAvailableSources =
+      isWindows && availableSources.length === 0
+        ? (['back', 'front'] as Array<'back' | 'front' | 'external'>)
+        : availableSources;
     const hasExternalSource =
-      hasDetectedUvcSource() && availableSources.includes('external');
+      hasDetectedUvcSource() && effectiveAvailableSources.includes('external');
 
     const lockedLiveSource = resolveLockedLiveSource(
       currentSource,
-      availableSources,
+      effectiveAvailableSources,
     );
 
-    if (currentSource === 'external' && !hasExternalSource) {
+    if (currentSource === 'external' && !hasExternalSource && !isWindows) {
       Alert.alert(
         'Chưa nhận được webcam USB',
         'App chưa thấy webcam ngoài. Hãy kiểm tra OTG/nguồn và cắm lại webcam rồi thử lại.',
@@ -2416,7 +2424,10 @@ const GamePlayViewModel = () => {
       return;
     }
 
-    if (!lockedLiveSource) {
+    const resolvedLockedLiveSource =
+      isWindows && !lockedLiveSource ? 'back' : lockedLiveSource;
+
+    if (!resolvedLockedLiveSource) {
       Alert.alert(
         'Không tìm thấy camera',
         'Thiết bị hiện không có nguồn camera phù hợp để bắt đầu live.',
@@ -2425,22 +2436,22 @@ const GamePlayViewModel = () => {
     }
 
     const nativeSourceType =
-      lockedLiveSource === 'external' ? 'webcam' : 'phone';
-    const nativePhoneFacing = lockedLiveSource === 'front' ? 'front' : 'back';
+      resolvedLockedLiveSource === 'external' ? 'webcam' : 'phone';
+    const nativePhoneFacing = resolvedLockedLiveSource === 'front' ? 'front' : 'back';
 
     if (!shouldUseYouTubeLive) {
       console.log('[Live Flow] skip create reason=selectedPlatform is not youtube', {
         selectedLivestreamPlatform,
         currentSource,
         availableSources,
-        lockedLiveSource,
+        lockedLiveSource: resolvedLockedLiveSource,
       });
       console.log('[Live Flow] local recording active reason=selectedPlatform is not youtube');
       console.log('[Live] local recording mode only:', {
         selectedLivestreamPlatform,
         currentSource,
         availableSources,
-        lockedLiveSource,
+        lockedLiveSource: resolvedLockedLiveSource,
       });
 
       pendingYouTubeNativeStartRef.current = null;
@@ -2456,11 +2467,11 @@ const GamePlayViewModel = () => {
       return;
     }
 
-    setYouTubeSourceLock(lockedLiveSource);
+    setYouTubeSourceLock(resolvedLockedLiveSource);
     console.log('[YouTube Live] source resolved:', {
       currentSource,
       availableSources,
-      lockedLiveSource,
+      lockedLiveSource: resolvedLockedLiveSource,
       nativeSourceType,
       nativePhoneFacing,
     });

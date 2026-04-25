@@ -76,7 +76,7 @@ export interface ConsoleViewModelProps {
 
 const ConsoleViewModel = (props: ConsoleViewModelProps) => {
   const {gameSettings: reduxGameSettings} = useSelector((state: RootState) => state.game);
-  const gameSettings = reduxGameSettings ?? props.gameSettings;
+  const gameSettings = props.gameSettings ?? reduxGameSettings;
 
   const [remoteEnabled, setRemoteEnabled] = useState(false);
   const [tableNumber, setTableNumber] = useState('');
