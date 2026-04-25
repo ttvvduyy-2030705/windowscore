@@ -1,5 +1,6 @@
 import React, {memo, useEffect, useMemo, useRef} from 'react';
 import {
+  Image as RNImage,
   StyleSheet,
   Text as RNText,
 } from 'react-native';
@@ -25,6 +26,7 @@ import i18n from 'i18n';
 import useDesignSystem from 'theme/useDesignSystem';
 import {createGameplayLayoutRules, createGameplayStyles} from '../layoutRules';
 import Pool8BlackBall from '../pool8BlackBall';
+import images from 'assets';
 
 type ActionButtonTone = 'dark' | 'amber' | 'red' | 'green' | 'muted';
 type PoolBallButtonSize = 'large' | 'small';
@@ -220,6 +222,7 @@ const DualButton = ({
   onRightPress,
   leftTone = 'green',
   rightTone = 'red',
+  rightIcon,
   compact,
   extraCompact,
   poolCompact,
@@ -231,6 +234,7 @@ const DualButton = ({
   onRightPress?: () => void;
   leftTone?: ActionButtonTone;
   rightTone?: ActionButtonTone;
+  rightIcon?: number;
   compact?: boolean;
   extraCompact?: boolean;
   poolCompact?: boolean;
@@ -281,22 +285,55 @@ const DualButton = ({
           tight ? styles.tightDualButton : undefined,
           buttonToneStyle(rightTone),
         ]}>
-        <RNText
-  allowFontScaling={false}
-  maxFontSizeMultiplier={1}
-  style={[
-    styles.dualButtonText,
-    poolCompact ? styles.poolDualButtonText : undefined,
-    compact ? styles.compactDualButtonText : undefined,
-    extraCompact ? styles.extraCompactDualButtonText : undefined,
-    tight ? styles.tightDualButtonText : undefined,
-  ]}
-  numberOfLines={1}
-  adjustsFontSizeToFit={!!tight || !!compact || !!extraCompact}
-  minimumFontScale={0.78}
-  ellipsizeMode="tail">
-  {rightLabel}
-</RNText>
+        {rightIcon ? (
+          <View direction={"row"} style={styles.dualButtonLabelRow}>
+            <RNImage
+              source={rightIcon}
+              resizeMode="contain"
+              fadeDuration={0}
+              style={[
+                styles.dualButtonIcon,
+                poolCompact ? styles.poolDualButtonIcon : undefined,
+                compact ? styles.compactDualButtonIcon : undefined,
+                extraCompact ? styles.extraCompactDualButtonIcon : undefined,
+                tight ? styles.tightDualButtonIcon : undefined,
+              ]}
+            />
+            <RNText
+              allowFontScaling={false}
+              maxFontSizeMultiplier={1}
+              style={[
+                styles.dualButtonText,
+                poolCompact ? styles.poolDualButtonText : undefined,
+                compact ? styles.compactDualButtonText : undefined,
+                extraCompact ? styles.extraCompactDualButtonText : undefined,
+                tight ? styles.tightDualButtonText : undefined,
+              ]}
+              numberOfLines={1}
+              adjustsFontSizeToFit={!!tight || !!compact || !!extraCompact}
+              minimumFontScale={0.78}
+              ellipsizeMode="tail">
+              {rightLabel}
+            </RNText>
+          </View>
+        ) : (
+          <RNText
+            allowFontScaling={false}
+            maxFontSizeMultiplier={1}
+            style={[
+              styles.dualButtonText,
+              poolCompact ? styles.poolDualButtonText : undefined,
+              compact ? styles.compactDualButtonText : undefined,
+              extraCompact ? styles.extraCompactDualButtonText : undefined,
+              tight ? styles.tightDualButtonText : undefined,
+            ]}
+            numberOfLines={1}
+            adjustsFontSizeToFit={!!tight || !!compact || !!extraCompact}
+            minimumFontScale={0.78}
+            ellipsizeMode="tail">
+            {rightLabel}
+          </RNText>
+        )}
       </Button>
     </View>
   );
@@ -933,7 +970,8 @@ const GameConsole = (props: ConsoleViewModelProps) => {
       return (
         <DualButton
           leftLabel={startLabel}
-          rightLabel={`✈ ${tr('Kết thúc', 'End')}`}
+          rightLabel={tr('Kết thúc', 'End')}
+          rightIcon={images.game.endMatch}
           onLeftPress={handleBottomLeft}
           onRightPress={viewModel.onStop}
           leftTone={'amber'}
@@ -948,7 +986,8 @@ const GameConsole = (props: ConsoleViewModelProps) => {
     return (
       <DualButton
         leftLabel={startLabel}
-        rightLabel={`✈ ${tr('Kết thúc', 'End')}`}
+        rightLabel={tr('Kết thúc', 'End')}
+          rightIcon={images.game.endMatch}
         onLeftPress={handleBottomLeft}
         onRightPress={viewModel.onStop}
         leftTone={'amber'}
@@ -1524,7 +1563,8 @@ const GameConsole = (props: ConsoleViewModelProps) => {
         <View style={[styles.topButtonRowWrap, isCameraFullscreen ? styles.hiddenWhenFullscreen : undefined]}>
           <DualButton
             leftLabel={startLabel}
-            rightLabel={`✈ ${tr('Kết thúc', 'End')}`}
+            rightLabel={tr('Kết thúc', 'End')}
+          rightIcon={images.game.endMatch}
             onLeftPress={handleBottomLeft}
             onRightPress={viewModel.onStop}
             leftTone={'amber'}
@@ -2267,6 +2307,34 @@ const createStyles = (adaptive: any, design: any, rules: any) => createGameplayS
     minHeight: 84,
     borderRadius: 14,
     paddingHorizontal: 14,
+  },
+  dualButtonLabelRow: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    maxWidth: '100%',
+  },
+  dualButtonIcon: {
+    width: 20,
+    height: 20,
+    flexShrink: 0,
+    backgroundColor: 'transparent',
+  },
+  compactDualButtonIcon: {
+    width: 17,
+    height: 17,
+  },
+  extraCompactDualButtonIcon: {
+    width: 15,
+    height: 15,
+  },
+  tightDualButtonIcon: {
+    width: 14,
+    height: 14,
+  },
+  poolDualButtonIcon: {
+    width: 28,
+    height: 28,
   },
   dualButtonText: {
     color: '#FFFFFF',

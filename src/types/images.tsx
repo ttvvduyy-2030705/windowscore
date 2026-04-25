@@ -22,6 +22,8 @@ export type Images = {
   videoEditor: number;
   game: {
     edit: number;
+    editPencil: number;
+    endMatch: number;
     soundOn: number;
     soundOff: number;
     addTime: number;

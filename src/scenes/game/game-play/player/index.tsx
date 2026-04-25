@@ -323,6 +323,19 @@ const GamePlayer = (
   const playerFlagImage = getPlayerFlagImageUri(props.player as any);
 
   const fluidScale = Math.max(isHandheldLandscape ? 0.54 : 0.64, Math.min(1, uiScale));
+  const playerNameFontSize = Math.round(adaptive.fs(42, 0.72, 1.02) * uiScale);
+  const playerNameLineHeight = Math.round(adaptive.fs(48, 0.72, 1.02) * uiScale);
+  const editIconSize = Math.round(
+    Math.max(
+      isCompactLayout ? 18 : 22,
+      Math.min(
+        isCompactLayout ? 24 : isMediumResponsiveLayout ? 30 : 34,
+        playerNameFontSize * (isCompactLayout ? 0.72 : 0.76),
+      ),
+    ),
+  );
+  const editButtonSize = Math.round(editIconSize + Math.max(6, Math.round(8 * fluidScale)));
+
   const dynamicPanelStyle = {
     paddingHorizontal: Math.round((isPhoneLandscapeTwoPlayer ? design.spacing.xs : isMediumResponsiveLayout ? design.spacing.sm : isCompactLayout ? design.spacing.xs : design.spacing.md) * fluidScale),
     paddingTop: Math.round((isPhoneLandscapeTwoPlayer ? design.spacing.xs : isMediumResponsiveLayout ? design.spacing.sm : isCompactLayout ? design.spacing.xs : design.spacing.md) * fluidScale),
@@ -338,9 +351,13 @@ const GamePlayer = (
     marginRight: Math.round((isCompactLayout ? 10 : 14) * fluidScale),
   };
   const dynamicEditButtonStyle = {
-    width: Math.round((isCompactLayout ? 28 : isMediumResponsiveLayout ? 32 : 36) * fluidScale),
-    height: Math.round((isCompactLayout ? 28 : isMediumResponsiveLayout ? 32 : 36) * fluidScale),
+    width: editButtonSize,
+    height: editButtonSize,
     marginLeft: Math.round(6 * fluidScale),
+  };
+  const dynamicEditIconStyle = {
+    width: editIconSize,
+    height: editIconSize,
   };
   const dynamicStepButtonStyle = {
     minHeight: Math.round((isCompactLayout ? 36 : isMediumResponsiveLayout ? 40 : 46) * fluidScale),
@@ -421,7 +438,7 @@ const GamePlayer = (
             maxFontSizeMultiplier={1}
             style={[
               styles.nameInput,
-              {fontSize: Math.round(adaptive.fs(42, 0.72, 1.02) * uiScale), lineHeight: Math.round(adaptive.fs(48, 0.72, 1.02) * uiScale)},
+              {fontSize: playerNameFontSize, lineHeight: playerNameLineHeight},
               (playerFlagImage || playerFlag) && styles.nameTextWithFlag,
               isMediumResponsiveLayout ? styles.nameInputMedium : undefined,
               isCompactLayout && styles.nameInputCompact,
@@ -439,7 +456,7 @@ const GamePlayer = (
             maxFontSizeMultiplier={1}
             style={[
               styles.nameText,
-              {fontSize: Math.round(adaptive.fs(42, 0.72, 1.02) * uiScale), lineHeight: Math.round(adaptive.fs(48, 0.72, 1.02) * uiScale)},
+              {fontSize: playerNameFontSize, lineHeight: playerNameLineHeight},
               (playerFlagImage || playerFlag) && styles.nameTextWithFlag,
               isMediumResponsiveLayout ? styles.nameTextMedium : undefined,
               isCompactLayout && styles.nameTextCompact,
@@ -460,7 +477,7 @@ const GamePlayer = (
             dynamicEditButtonStyle,
           ]}>
           <RNImage
-            source={images.game.edit}
+            source={images.game.editPencil}
             resizeMode="contain"
             fadeDuration={0}
             style={[
@@ -468,6 +485,7 @@ const GamePlayer = (
               isMediumResponsiveLayout ? styles.editIconMedium : undefined,
               isCompactLayout && styles.editIconCompact,
               !isActiveCard && styles.editIconInactive,
+              dynamicEditIconStyle,
             ]}
           />
         </Button>
@@ -966,17 +984,17 @@ const createStyles = (adaptive: any, design: any, rules: any) => createGameplayS
     opacity: 0.9,
   },
   editIcon: {
-    width: 20,
-    height: 20,
-    tintColor: '#FFFFFF',
+    width: 28,
+    height: 28,
+    backgroundColor: 'transparent',
   },
   editIconMedium: {
-    width: 18,
-    height: 18,
+    width: 26,
+    height: 26,
   },
   editIconCompact: {
-    width: 16,
-    height: 16,
+    width: 22,
+    height: 22,
   },
   editIconInactive: {
     opacity: 0.92,

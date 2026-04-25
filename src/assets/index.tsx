@@ -25,6 +25,8 @@ const images: Images = {
 
   game: {
     edit: require('./images/game/edit.png'),
+    editPencil: require('./images/game/edit-pencil.png'),
+    endMatch: require('./images/game/end-match.png'),
     soundOn: require('./images/game/sound-on.png'),
     soundOff: require('./images/game/sound-off.png'),
     addTime: require('./images/game/add-time.png'),
