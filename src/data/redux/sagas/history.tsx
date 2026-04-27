@@ -12,7 +12,7 @@ const deleteHistory = function* ({payload}: any) {
   };
 
   if (item.webcamFolderName) {
-    yield call(deleteReplayFolder, item.webcamFolderName);
+    yield call(deleteReplayFolder, item.webcamFolderName, {includeArchive: true});
   }
 
   yield call(DeleteGame, realm, item.id);

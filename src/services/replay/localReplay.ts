@@ -36,6 +36,18 @@ export type ReplayMatchManifest = {
   segments: ReplaySegmentEntry[];
 };
 
+
+export type HistoryMatchEntry = {
+  webcamFolderName: string;
+  folderName: string;
+  folderPath: string;
+  manifest?: ReplayMatchManifest;
+  files: RNFS.ReadDirItem[];
+  createdAt: number;
+  updatedAt: number;
+  totalSizeBytes: number;
+};
+
 export type RegisterReplaySegmentOptions = {
   keepFullMatch?: boolean;
   matchSessionId?: string;
@@ -563,3 +575,41 @@ export const deleteReplayFolder = async (
     await RNFS.unlink(legacyPath);
   }
 };
+
+
+export const listHistoryMatches = async (): Promise<HistoryMatchEntry[]> => {
+  await ensureReplayRoot();
+
+  if (!(await RNFS.exists(ARCHIVE_ROOT))) {
+    return [];
+  }
+
+  const folders = await listChildDirectories(ARCHIVE_ROOT);
+  const entries: HistoryMatchEntry[] = [];
+
+  for (const folder of folders) {
+    const files = await listVideoFilesFromFolder(folder.path);
+    if (!files.length) {
+      continue;
+    }
+
+    const manifest = await readManifestFromFolder(folder.path, folder.name);
+    const totalSizeBytes = files.reduce((sum, file) => sum + Number(file.size || 0), 0);
+    const updatedAt = Math.max(...files.map(file => safeMtime(file)), safeMtime(folder), 0);
+
+    entries.push({
+      webcamFolderName: manifest.webcamFolderName || folder.name,
+      folderName: folder.name,
+      folderPath: folder.path,
+      manifest,
+      files,
+      createdAt: manifest.createdAt || safeMtime(folder) || Date.now(),
+      updatedAt: manifest.updatedAt || updatedAt || Date.now(),
+      totalSizeBytes,
+    });
+  }
+
+  return entries.sort((a, b) => b.updatedAt - a.updatedAt);
+};
+
+export const normalizeWindowsVideoUri = (inputPath?: string | null) => String(inputPath || '');

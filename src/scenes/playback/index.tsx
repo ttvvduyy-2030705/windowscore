@@ -32,6 +32,7 @@ import {
   buildReplayFolderPath,
   deleteReplayFolder,
   ensureArchiveFolder,
+  normalizeWindowsVideoUri,
   resolveReplayFolder,
 } from 'services/replay/localReplay';
 import {
@@ -92,27 +93,7 @@ const normalizePlaybackVideoUri = (inputPath?: string | null) => {
     return raw;
   }
 
-  if (/^[a-z]+:\/\//i.test(raw) && !raw.toLowerCase().startsWith('file://')) {
-    return raw;
-  }
-
-  if (raw.toLowerCase().startsWith('file://')) {
-    return raw.replace(/\\/g, '/');
-  }
-
-  const slashPath = raw.replace(/\\/g, '/');
-  const encodedPath = slashPath
-    .split('/')
-    .map((part, index) => {
-      if (index === 0 && /^[a-zA-Z]:$/.test(part)) {
-        return part;
-      }
-
-      return encodeURIComponent(part);
-    })
-    .join('/');
-
-  return `file:///${encodedPath}`;
+  return normalizeWindowsVideoUri(raw);
 };
 
 const parseThumbnailUris = (value?: string | null): string[] => {
@@ -341,13 +322,47 @@ const PlayBackWebcam = (props: PlayBackWebcamViewModelProps) => {
       return;
     }
 
-    console.log('[Replay] inputPath =', currentVideoPath);
-    console.log('[Replay] normalizedUri =', currentVideoUri);
+    const logPlayerState = async () => {
+      let existsBeforePlay = false;
+      let sizeBeforePlay = 0;
 
-    RNFS.exists(currentVideoPath)
-      .then(exists => console.log('[Replay] file exists', exists))
-      .catch(error => console.log('[Replay] file exists false', error));
-  }, [currentVideoPath, currentVideoUri]);
+      try {
+        existsBeforePlay = await RNFS.exists(currentVideoPath);
+        if (existsBeforePlay) {
+          const stat = await RNFS.stat(currentVideoPath);
+          sizeBeforePlay = Number(stat?.size || 0);
+        }
+      } catch (error) {
+        console.log('[ReplayPlayer]', {
+          event: 'stat-failed',
+          requestedPath: currentVideoPath,
+          normalizedUri: currentVideoUri,
+          playerSource: props.returnToMatch ? 'Replay' : 'History',
+          error,
+        });
+      }
+
+      console.log('[ReplayPlayer]', {
+        requestedPath: currentVideoPath,
+        normalizedUri: currentVideoUri,
+        existsBeforePlay,
+        sizeBeforePlay,
+        playerSource: props.returnToMatch ? 'Replay' : 'History',
+      });
+
+      if (!existsBeforePlay || sizeBeforePlay <= 0) {
+        console.log('[ReplayPlayer]', {
+          event: 'player-not-ready',
+          reason: !existsBeforePlay ? 'file chưa tồn tại' : 'file size = 0',
+          requestedPath: currentVideoPath,
+          normalizedUri: currentVideoUri,
+          playerSource: props.returnToMatch ? 'Replay' : 'History',
+        });
+      }
+    };
+
+    logPlayerState();
+  }, [currentVideoPath, currentVideoUri, props.returnToMatch]);
 
   const safeSeekTo = useCallback((time: number) => {
     const boundedDuration = Math.max(0, Number(currentVideoDuration || 0));

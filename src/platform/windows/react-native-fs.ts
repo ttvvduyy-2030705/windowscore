@@ -24,8 +24,13 @@ const memoryFiles = new Map<string, string>();
 const memoryDirs = new Set<string>();
 const memoryTimes = new Map<string, Date>();
 
-const ROOT = 'C:/video/aplus score';
-
+const WINDOWS_USERPROFILE_DIR = String((globalThis as any)?.process?.env?.USERPROFILE || '').replace(/\\/g, '/');
+const WINDOWS_USERNAME = String((globalThis as any)?.process?.env?.USERNAME || '').replace(/[^A-Za-z0-9._-]+/g, '');
+const ROOT = WINDOWS_USERPROFILE_DIR
+  ? `${WINDOWS_USERPROFILE_DIR}/Videos/Aplus Score`
+  : WINDOWS_USERNAME
+    ? `C:/Users/${WINDOWS_USERNAME}/Videos/Aplus Score`
+    : 'Videos/Aplus Score';
 const normalizePath = (path?: string | null) =>
   String(path || '').replace(/\\/g, '/').replace(/\/+$/g, '');
 
@@ -390,6 +395,19 @@ const RNFS = {
     return undefined;
   },
 
+  getVideosBaseDir: async () => {
+    try {
+      const nativeResult = await callNative<string>('getVideosBaseDir');
+      if (typeof nativeResult === 'string' && nativeResult.length > 0) {
+        return normalizePath(nativeResult);
+      }
+    } catch (error) {
+      console.log('[WindowsVideoStorage] videos base native error =', error);
+    }
+
+    return ROOT;
+  },
+
   getFallbackBaseDir: async () => {
     try {
       const nativeResult = await callNative<string>('getFallbackBaseDir');
@@ -400,7 +418,7 @@ const RNFS = {
       console.log('[WindowsVideoStorage] fallback base native error =', error);
     }
 
-    return 'C:/video/aplus score/local-fallback';
+    return ROOT;
   },
 };
 

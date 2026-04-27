@@ -8,6 +8,9 @@ namespace winrt::billiardsgrade::implementation
     REACT_MODULE(WindowsVideoStorageModule, L"WindowsVideoStorageModule");
     struct WindowsVideoStorageModule
     {
+        REACT_METHOD(GetVideosBaseDir, L"getVideosBaseDir");
+        void GetVideosBaseDir(winrt::Microsoft::ReactNative::ReactPromise<std::string> promise) noexcept;
+
         REACT_METHOD(GetFallbackBaseDir, L"getFallbackBaseDir");
         void GetFallbackBaseDir(winrt::Microsoft::ReactNative::ReactPromise<std::string> promise) noexcept;
 

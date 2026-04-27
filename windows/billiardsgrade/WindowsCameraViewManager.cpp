@@ -2,9 +2,11 @@
 #include "WindowsCameraViewManager.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cwctype>
 #include <filesystem>
 #include <string>
+#include <vector>
 
 #include <winrt/Windows.ApplicationModel.h>
 #include <winrt/Windows.ApplicationModel.Core.h>
@@ -12,6 +14,7 @@
 #include <winrt/Windows.Media.Capture.h>
 #include <winrt/Windows.Media.MediaProperties.h>
 #include <winrt/Windows.Storage.h>
+#include <winrt/Windows.Storage.FileProperties.h>
 #include <winrt/Windows.UI.Core.h>
 #include <winrt/Windows.UI.Xaml.Controls.h>
 #include <winrt/Windows.UI.Xaml.Media.h>
@@ -23,6 +26,7 @@ using namespace Windows::Foundation;
 using namespace Windows::Media::Capture;
 using namespace Windows::Media::MediaProperties;
 using namespace Windows::Storage;
+using namespace Windows::Storage::FileProperties;
 using namespace Windows::UI::Core;
 using namespace Windows::UI::Xaml;
 using namespace Windows::UI::Xaml::Controls;
@@ -38,6 +42,7 @@ namespace
     bool g_recordingStarting = false;
     bool g_recordingStopping = false;
     hstring g_lastRecordingPath{};
+    StorageFile g_currentRecordingFile{nullptr};
 
     void DebugLog(std::wstring const &message) noexcept
     {
@@ -104,6 +109,44 @@ namespace
             co_await resume_foreground(dispatcher);
         }
     }
+    std::vector<std::wstring> SplitPath(std::wstring const &value)
+    {
+        std::vector<std::wstring> parts;
+        std::wstring current;
+        for (auto ch : value)
+        {
+            if (ch == L'\\' || ch == L'/')
+            {
+                if (!current.empty())
+                {
+                    parts.push_back(current);
+                    current.clear();
+                }
+                continue;
+            }
+            current.push_back(ch);
+        }
+        if (!current.empty())
+        {
+            parts.push_back(current);
+        }
+        return parts;
+    }
+
+    std::vector<std::wstring> AplusRelativeSegmentsFromPath(std::wstring const &requestedPath, bool &matched)
+    {
+        auto parts = SplitPath(requestedPath);
+        matched = false;
+        for (size_t index = 0; index < parts.size(); ++index)
+        {
+            if (ToLower(parts[index]) == L"aplus score")
+            {
+                matched = true;
+                return std::vector<std::wstring>(parts.begin() + static_cast<std::ptrdiff_t>(index + 1), parts.end());
+            }
+        }
+        return {};
+    }
 
     std::filesystem::path ParentPath(std::wstring const &path)
     {
@@ -117,18 +160,92 @@ namespace
         return hstring(fsPath.filename().wstring());
     }
 
+    IAsyncOperation<StorageFolder> EnsureAplusRootFolderAsync()
+    {
+        try
+        {
+            auto videos = KnownFolders::VideosLibrary();
+            auto root = co_await videos.CreateFolderAsync(L"Aplus Score", CreationCollisionOption::OpenIfExists);
+            co_await ResumeOnCameraDispatcherAsync();
+            co_return root;
+        }
+        catch (hresult_error const &ex)
+        {
+            DebugLog(L"recording VideosLibrary access failed: " + std::wstring(ex.message().c_str()));
+            auto message = std::wstring(L"Cannot access Windows Videos library for recording: ") + std::wstring(ex.message().c_str());
+            throw hresult_error(ex.code(), winrt::hstring(message.c_str()));
+        }
+    }
+
+    IAsyncOperation<StorageFolder> EnsureAplusParentFolderAsync(std::vector<std::wstring> const &segments)
+    {
+        auto folder = co_await EnsureAplusRootFolderAsync();
+        co_await ResumeOnCameraDispatcherAsync();
+        if (segments.size() <= 1)
+        {
+            co_return folder;
+        }
+        for (size_t index = 0; index + 1 < segments.size(); ++index)
+        {
+            if (segments[index].empty())
+            {
+                continue;
+            }
+            folder = co_await folder.CreateFolderAsync(hstring(segments[index]), CreationCollisionOption::OpenIfExists);
+            co_await ResumeOnCameraDispatcherAsync();
+        }
+        co_return folder;
+    }
+
     IAsyncOperation<StorageFile> CreateStorageFileForPathAsync(hstring const &requestedPath)
     {
-        // This function is always called from the camera dispatcher coroutine.
+        // Packaged Windows apps cannot safely create files in Videos by direct
+        // C:\Users\... paths. For Aplus Score recordings, always resolve via
+        // KnownFolders::VideosLibrary + StorageFolder/StorageFile.
         std::wstring path(requestedPath.c_str());
-        auto parent = ParentPath(path);
+        bool isAplusPath = false;
+        auto segments = AplusRelativeSegmentsFromPath(path, isAplusPath);
 
+        if (isAplusPath)
+        {
+            if (segments.empty())
+            {
+                throw hresult_error(E_INVALIDARG, L"Missing recording file name under Aplus Score");
+            }
+            try
+            {
+                auto folder = co_await EnsureAplusParentFolderAsync(segments);
+                co_await ResumeOnCameraDispatcherAsync();
+                auto file = co_await folder.CreateFileAsync(hstring(segments.back()), CreationCollisionOption::ReplaceExisting);
+                co_await ResumeOnCameraDispatcherAsync();
+                DebugLog(L"recording output StorageFile created via VideosLibrary: " + std::wstring(file.Path().c_str()));
+                co_return file;
+            }
+            catch (hresult_error const &ex)
+            {
+                DebugLog(L"recording output VideosLibrary create failed: " + std::wstring(ex.message().c_str()));
+                auto message =
+                    std::wstring(L"Cannot create recording file through Windows Videos library: ") +
+                    std::wstring(requestedPath.c_str()) + L" (" + std::wstring(ex.message().c_str()) + L")";
+                throw hresult_error(ex.code(), winrt::hstring(message.c_str()));
+            }
+            catch (...)
+            {
+                DebugLog(L"recording output VideosLibrary create failed: unknown error");
+                auto message =
+                    std::wstring(L"Cannot create recording file through Windows Videos library: ") +
+                    std::wstring(requestedPath.c_str());
+                throw hresult_error(E_ACCESSDENIED, winrt::hstring(message.c_str()));
+            }
+        }
+
+        // Non-Aplus paths are kept as a compatibility fallback for any legacy caller outside the replay/history flow.
+        auto parent = ParentPath(path);
         if (!parent.empty())
         {
             std::error_code ec;
             std::filesystem::create_directories(parent, ec);
         }
-
         try
         {
             auto folder = co_await StorageFolder::GetFolderFromPathAsync(hstring(parent.wstring()));
@@ -139,42 +256,36 @@ namespace
         }
         catch (hresult_error const &ex)
         {
-            DebugLog(L"recording output path fallback: " + std::wstring(ex.message().c_str()));
+            DebugLog(L"recording output path failed: " + std::wstring(ex.message().c_str()));
+            auto message =
+                std::wstring(L"Cannot create recording file at requested Windows path: ") +
+                std::wstring(requestedPath.c_str()) + L" (" + std::wstring(ex.message().c_str()) + L")";
+            throw hresult_error(ex.code(), winrt::hstring(message.c_str()));
         }
-        catch (...)
-        {
-            DebugLog(L"recording output path fallback: unknown error");
-        }
-
-        auto localFolder = ApplicationData::Current().LocalFolder();
-        auto recordingsFolder = co_await localFolder.CreateFolderAsync(L"Recordings", CreationCollisionOption::OpenIfExists);
-        co_await ResumeOnCameraDispatcherAsync();
-        auto file = co_await recordingsFolder.CreateFileAsync(FileNameFromPath(path), CreationCollisionOption::ReplaceExisting);
-        co_await ResumeOnCameraDispatcherAsync();
-        co_return file;
     }
 
-    fire_and_forget StartRecordingOnCameraDispatcherAsync(hstring requestedPath) noexcept
+
+    IAsyncOperation<hstring> StartRecordingOnCameraDispatcherAsync(hstring requestedPath)
     {
         try
         {
             co_await ResumeOnCameraDispatcherAsync();
 
-            DebugLog(L"v13 recording command running on camera dispatcher threadAccess=" + BoolText(HasCameraThreadAccess()));
+            DebugLog(L"v15 recording command running on camera dispatcher threadAccess=" + BoolText(HasCameraThreadAccess()));
 
             auto media = g_mediaCapture;
             if (!media || !g_previewReady)
             {
                 g_recordingStarting = false;
                 DebugLog(L"recording start failed: preview is not ready");
-                co_return;
+                throw hresult_error(E_FAIL, L"Windows camera preview is not ready for recording");
             }
 
             if (g_isRecording)
             {
                 g_recordingStarting = false;
                 DebugLog(L"recording already active: " + std::wstring(g_lastRecordingPath.c_str()));
-                co_return;
+                co_return g_lastRecordingPath.size() == 0 ? requestedPath : g_lastRecordingPath;
             }
 
             auto file = co_await CreateStorageFileForPathAsync(requestedPath);
@@ -186,59 +297,89 @@ namespace
             co_await media.StartRecordToStorageFileAsync(profile, file);
             co_await ResumeOnCameraDispatcherAsync();
 
+            g_currentRecordingFile = file;
+            g_lastRecordingPath = file.Path();
             g_isRecording = true;
             g_recordingStarting = false;
-            g_lastRecordingPath = file.Path();
-            DebugLog(L"recording file created: " + std::wstring(g_lastRecordingPath.c_str()));
+            DebugLog(L"recording started and file handle is active: " + std::wstring(g_lastRecordingPath.c_str()));
+            co_return g_lastRecordingPath;
         }
         catch (hresult_error const &ex)
         {
             g_isRecording = false;
             g_recordingStarting = false;
+            g_currentRecordingFile = nullptr;
             DebugLog(L"recording start error: " + std::wstring(ex.message().c_str()));
+            throw;
         }
         catch (...)
         {
             g_isRecording = false;
             g_recordingStarting = false;
+            g_currentRecordingFile = nullptr;
             DebugLog(L"recording start error: unknown");
+            throw hresult_error(E_FAIL, L"Windows camera recording start failed");
         }
     }
 
-    fire_and_forget StopRecordingOnCameraDispatcherAsync() noexcept
+    IAsyncOperation<hstring> StopRecordingOnCameraDispatcherAsync()
     {
         try
         {
+            for (int attempt = 0; g_recordingStarting && !g_isRecording && attempt < 50; ++attempt)
+            {
+                co_await winrt::resume_after(std::chrono::milliseconds(100));
+            }
+
             co_await ResumeOnCameraDispatcherAsync();
-            DebugLog(L"v13 stop command running on camera dispatcher threadAccess=" + BoolText(HasCameraThreadAccess()));
+            DebugLog(L"v15 stop command running on camera dispatcher threadAccess=" + BoolText(HasCameraThreadAccess()));
 
             auto media = g_mediaCapture;
             if (!media || !g_isRecording)
             {
                 g_recordingStopping = false;
                 DebugLog(L"recording stop ignored: not recording");
-                co_return;
+                co_return g_lastRecordingPath;
             }
 
             co_await media.StopRecordAsync();
             co_await ResumeOnCameraDispatcherAsync();
 
             g_isRecording = false;
+            g_recordingStarting = false;
             g_recordingStopping = false;
-            DebugLog(L"recording finalized path: " + std::wstring(g_lastRecordingPath.c_str()));
+
+            uint64_t finalizedSize = 0;
+            if (g_currentRecordingFile)
+            {
+                try
+                {
+                    auto properties = co_await g_currentRecordingFile.GetBasicPropertiesAsync();
+                    finalizedSize = properties.Size();
+                }
+                catch (hresult_error const &ex)
+                {
+                    DebugLog(L"recording finalized size check failed: " + std::wstring(ex.message().c_str()));
+                }
+            }
+
+            DebugLog(L"recording finalized path: " + std::wstring(g_lastRecordingPath.c_str()) + L" size=" + std::to_wstring(static_cast<unsigned long long>(finalizedSize)));
+            g_currentRecordingFile = nullptr;
+            co_return g_lastRecordingPath;
         }
         catch (hresult_error const &ex)
         {
             g_recordingStopping = false;
             DebugLog(L"recording stop error: " + std::wstring(ex.message().c_str()));
+            throw;
         }
         catch (...)
         {
             g_recordingStopping = false;
             DebugLog(L"recording stop error: unknown");
+            throw hresult_error(E_FAIL, L"Windows camera recording stop failed");
         }
     }
-
     fire_and_forget StopPreviewAsync(Grid grid) noexcept
     {
         try
@@ -259,6 +400,7 @@ namespace
                     g_isRecording = false;
                     g_recordingStarting = false;
                     g_recordingStopping = false;
+                    g_currentRecordingFile = nullptr;
                     DebugLog(L"recording stopped on unload: " + std::wstring(g_lastRecordingPath.c_str()));
                 }
 
@@ -356,40 +498,42 @@ namespace winrt::billiardsgrade::implementation
 {
     IAsyncOperation<hstring> WindowsCameraStartRecordingAsync(hstring const &requestedPath)
     {
-        DebugLog(L"v13 WindowsCameraStartRecordingAsync scheduled: " + std::wstring(requestedPath.c_str()));
+        DebugLog(L"v15 WindowsCameraStartRecordingAsync awaiting native start: " + std::wstring(requestedPath.c_str()));
 
-        // Do not dereference g_mediaCapture on the React Native native-module thread.
-        // MediaCapture is apartment-affine; the dispatcher coroutine validates it.
-        if (g_isRecording || g_recordingStarting)
+        if (g_isRecording)
         {
-            DebugLog(L"recording already requested/active: " + std::wstring(g_lastRecordingPath.c_str()));
+            DebugLog(L"recording already active: " + std::wstring(g_lastRecordingPath.c_str()));
             co_return g_lastRecordingPath.size() == 0 ? requestedPath : g_lastRecordingPath;
+        }
+
+        if (g_recordingStarting)
+        {
+            for (int attempt = 0; g_recordingStarting && attempt < 50; ++attempt)
+            {
+                co_await winrt::resume_after(std::chrono::milliseconds(100));
+            }
+            if (g_isRecording)
+            {
+                co_return g_lastRecordingPath.size() == 0 ? requestedPath : g_lastRecordingPath;
+            }
         }
 
         g_recordingStarting = true;
         g_lastRecordingPath = requestedPath;
-        StartRecordingOnCameraDispatcherAsync(requestedPath);
-
-        // Resolve immediately after the start command is enqueued.  The JS layer
-        // keeps the session active and verifies the real file after stop.
-        co_return requestedPath;
+        co_return co_await StartRecordingOnCameraDispatcherAsync(requestedPath);
     }
 
     IAsyncOperation<hstring> WindowsCameraStopRecordingAsync()
     {
-        DebugLog(L"v13 WindowsCameraStopRecordingAsync scheduled");
+        DebugLog(L"v15 WindowsCameraStopRecordingAsync awaiting native finalize");
 
-        // Do not touch the MediaCapture object on the React Native module thread.
-        // Always enqueue stop on the camera dispatcher; it will ignore safely if idle.
         if (!g_recordingStopping)
         {
             g_recordingStopping = true;
-            StopRecordingOnCameraDispatcherAsync();
         }
 
-        co_return g_lastRecordingPath;
+        co_return co_await StopRecordingOnCameraDispatcherAsync();
     }
-
     winrt::hstring WindowsCameraViewManager::Name() noexcept
     {
         return L"WindowsCameraView";

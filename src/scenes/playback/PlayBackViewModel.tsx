@@ -84,13 +84,37 @@ const PlayBackWebcamViewModel = (props: PlayBackWebcamViewModelProps) => {
         return;
       }
 
+      const waitedReplayFiles = props.returnToMatch
+        ? await waitForReplayFiles(props.webcamFolderName, 1, 8000)
+        : [];
       const files = props.returnToMatch
-        ? (await waitForReplayFiles(props.webcamFolderName, 1, 8000)).length > 0
-          ? await waitForReplayFiles(props.webcamFolderName, 1, 8000)
+        ? waitedReplayFiles.length > 0
+          ? waitedReplayFiles
           : await listReplayFiles(props.webcamFolderName)
         : await listPlayableFiles(props.webcamFolderName, true);
       if (loadRequestIdRef.current !== requestId) {
         return;
+      }
+
+      for (const file of files) {
+        try {
+          const existsBeforePlay = await RNFS.exists(file.path);
+          const stat = existsBeforePlay ? await RNFS.stat(file.path) : undefined;
+          const sizeBeforePlay = Number(stat?.size || file.size || 0);
+          console.log('[ReplayPlayer]', {
+            requestedPath: file.path,
+            existsBeforePlay,
+            sizeBeforePlay,
+            playerSource: props.returnToMatch ? 'Replay' : 'History',
+          });
+        } catch (error) {
+          console.log('[ReplayPlayer]', {
+            event: 'stat-failed',
+            requestedPath: file.path,
+            playerSource: props.returnToMatch ? 'Replay' : 'History',
+            error,
+          });
+        }
       }
 
       setVideoFiles(files);
@@ -120,6 +144,12 @@ const PlayBackWebcamViewModel = (props: PlayBackWebcamViewModelProps) => {
 
       if (files.length === 0) {
         console.log('[Replay] No files found after extended retry:', props.webcamFolderName);
+        console.log('[ReplayPlayer]', {
+          event: 'player-not-ready',
+          reason: props.returnToMatch ? 'video bị xóa trước khi mở hoặc recorder chưa finalize' : 'History folder không có video',
+          requestedPath: folder,
+          playerSource: props.returnToMatch ? 'Replay' : 'History',
+        });
       }
     } finally {
       if (loadRequestIdRef.current === requestId) {

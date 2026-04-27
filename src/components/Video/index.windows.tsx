@@ -33,6 +33,32 @@ const debugWindowsCamera = (...args: any[]) => {
 
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
+const waitForFinalizedFile = async (filePath: string, timeoutMs = 8000) => {
+  const startedAt = Date.now();
+  let exists = false;
+  let fileSize = 0;
+  let lastError: any = null;
+
+  while (Date.now() - startedAt <= timeoutMs) {
+    try {
+      exists = await RNFS.exists(filePath);
+      if (exists) {
+        const stat = await RNFS.stat(filePath);
+        fileSize = Number(stat?.size || 0);
+        if (fileSize > 0) {
+          return {exists, fileSize, waitedMs: Date.now() - startedAt};
+        }
+      }
+    } catch (error) {
+      lastError = error;
+    }
+
+    await wait(250);
+  }
+
+  return {exists, fileSize, waitedMs: Date.now() - startedAt, error: lastError};
+};
+
 const getTurboModule = (moduleName: string) => {
   try {
     const rn = require("react-native") as any;
@@ -73,7 +99,7 @@ const VideoWindows = forwardRef<any, Props>((props, ref) => {
   const recordingStateRef = useRef<'idle' | 'starting' | 'recording' | 'stopping'>('idle');
 
   useEffect(() => {
-    console.log('[Build Info] windows-video-fix=v13-dispatcher-owned-recording');
+    console.log('[Build Info] windows-video-fix=v15-await-native-finalize-nonzero');
   }, []);
 
   const buildRecordingPath = useCallback(async (options?: RecordingCallbacks) => {
@@ -86,6 +112,20 @@ const VideoWindows = forwardRef<any, Props>((props, ref) => {
         });
       }
       console.log('[WindowsVideoStorage] outputFile =', String(options.path));
+      console.log('[HistoryRecorder]', {
+        event: 'start',
+        outputPath: String(options.path),
+        segmentPath: String(options.path),
+        webcamFolderName: options?.webcamFolderName,
+        segmentIndex: options?.segmentIndex,
+      });
+      console.log('[ReplayRecorder]', {
+        event: 'start',
+        outputPath: String(options.path),
+        segmentPath: String(options.path),
+        webcamFolderName: options?.webcamFolderName,
+        segmentIndex: options?.segmentIndex,
+      });
       return String(options.path);
     }
 
@@ -119,16 +159,33 @@ const VideoWindows = forwardRef<any, Props>((props, ref) => {
         console.log('[Recording] start requested');
         console.log('[Recording] selected camera/input source', 'WindowsNativeCameraView');
         console.log('[Recording] output path', outputPath);
+        console.log('[HistoryRecorder]', {
+          event: 'start',
+          outputPath,
+          segmentPath: outputPath,
+          webcamFolderName: options?.webcamFolderName,
+          segmentIndex: options?.segmentIndex,
+        });
+        console.log('[ReplayRecorder]', {
+          event: 'start',
+          outputPath,
+          segmentPath: outputPath,
+          webcamFolderName: options?.webcamFolderName,
+          segmentIndex: options?.segmentIndex,
+        });
 
         const actualPath = await nativeRecorder.startRecording(outputPath);
-        // Native v13 schedules MediaCapture.StartRecord on the camera view dispatcher
-        // and resolves after the command is queued. Give UWP a short moment to
-        // actually enter recording state before gameplay can request replay/stop.
-        await wait(600);
+        // Native v15 resolves only after MediaCapture has actually started recording.
         const finalPath = String(actualPath || outputPath);
 
         if (finalPath !== outputPath) {
           console.log('[WindowsVideoStorage] fallbackDir =', finalPath.replace(/[\\/][^\\/]+$/, ''));
+          console.log('[HistoryRecorder]', {
+            event: 'history-not-ready',
+            reason: 'path sai: native recorder returned a different path',
+            outputPath,
+            actualPath: finalPath,
+          });
         }
 
         lastRecordingPathRef.current = finalPath;
@@ -162,9 +219,7 @@ const VideoWindows = forwardRef<any, Props>((props, ref) => {
       try {
         recordingStateRef.current = 'stopping';
         const actualPath = await nativeRecorder.stopRecording();
-        // Native v13 returns after enqueueing stop on the camera dispatcher. Wait
-        // briefly so MediaCapture finalizes the mp4 before RNFS.stat/readDir.
-        await wait(1200);
+        // Native v15 resolves only after StopRecordAsync has completed.
         const finalPath = String(actualPath || lastRecordingPathRef.current || '');
 
         if (finalPath) {
@@ -172,20 +227,69 @@ const VideoWindows = forwardRef<any, Props>((props, ref) => {
           console.log('[Recording] finalized path', finalPath);
           console.log('[VideoStorage] segment stopped', finalPath);
           try {
-            const exists = await RNFS.exists(finalPath);
+            const finalized = await waitForFinalizedFile(finalPath, 8000);
+            const exists = finalized.exists;
+            const fileSize = finalized.fileSize;
             console.log('[WindowsVideoStorage] fileExists after record =', exists);
-            if (exists) {
-              const stat = await RNFS.stat(finalPath);
-              console.log('[HistoryVideo] file size after stop =', Number(stat?.size || 0));
+            console.log('[HistoryVideo] file size after stop =', fileSize);
+            console.log('[HistoryRecorder]', {
+              event: 'finalize-wait',
+              outputPath: finalPath,
+              fileExists: exists,
+              fileSize,
+              waitedMs: finalized.waitedMs,
+            });
+            console.log('[HistoryRecorder]', {
+              event: 'stop/finalize',
+              outputPath: finalPath,
+              fileExists: exists,
+              fileSize,
+            });
+            console.log('[ReplayRecorder]', {
+              event: 'stop/finalize',
+              outputPath: finalPath,
+              segmentPath: finalPath,
+              fileExists: exists,
+              fileSize,
+              latestReplayPath: exists && fileSize > 0 ? finalPath : undefined,
+            });
+            if (!exists || fileSize <= 0) {
+              console.log('[ReplayRecorder]', {
+                event: 'replay-not-ready',
+                reason: !exists ? 'file chưa tồn tại' : 'file size = 0',
+                outputPath: finalPath,
+                segmentPath: finalPath,
+              });
             }
           } catch (existsError) {
             console.log('[WindowsVideoStorage] fileExists after record =', false, existsError);
+            console.log('[HistoryRecorder]', {
+              event: 'history-not-ready',
+              reason: 'path sai hoặc RNFS.stat failed',
+              outputPath: finalPath,
+              error: existsError,
+            });
+            console.log('[ReplayRecorder]', {
+              event: 'replay-not-ready',
+              reason: 'path sai hoặc RNFS.stat failed',
+              outputPath: finalPath,
+              segmentPath: finalPath,
+              error: existsError,
+            });
           }
           callbacks?.onRecordingFinished?.({path: finalPath});
           console.log('[Replay] video discovered', finalPath);
         } else {
           const error = new Error('Windows recording stopped without a finalized path');
           console.log('[Recording] error', error.message);
+          console.log('[HistoryRecorder]', {
+            event: 'history-not-ready',
+            reason: 'recorder chưa finalize',
+          });
+          console.log('[ReplayRecorder]', {
+            event: 'replay-not-ready',
+            reason: 'recorder chưa finalize',
+          });
           callbacks?.onRecordingError?.(error);
         }
 

@@ -3,18 +3,30 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cwctype>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <sstream>
+#include <stdexcept>
 #include <string>
+#include <vector>
 
+#include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Storage.h>
+#include <winrt/Windows.Storage.FileProperties.h>
 
 using namespace winrt::Microsoft::ReactNative;
+using namespace winrt::Windows::Storage;
+using namespace winrt::Windows::Storage::FileProperties;
 
 namespace
 {
+    constexpr wchar_t const *AplusFolderName = L"Aplus Score";
+    constexpr wchar_t const *ReplayFolderName = L"Replay";
+    constexpr wchar_t const *HistoryFolderName = L"History";
+
     std::string JsonEscape(std::string const &value)
     {
         std::ostringstream escaped;
@@ -22,33 +34,18 @@ namespace
         {
             switch (ch)
             {
-            case '\\':
-                escaped << "\\\\";
-                break;
-            case '"':
-                escaped << "\\\"";
-                break;
-            case '\b':
-                escaped << "\\b";
-                break;
-            case '\f':
-                escaped << "\\f";
-                break;
-            case '\n':
-                escaped << "\\n";
-                break;
-            case '\r':
-                escaped << "\\r";
-                break;
-            case '\t':
-                escaped << "\\t";
-                break;
+            case '\\': escaped << "\\\\"; break;
+            case '"': escaped << "\\\""; break;
+            case '\b': escaped << "\\b"; break;
+            case '\f': escaped << "\\f"; break;
+            case '\n': escaped << "\\n"; break;
+            case '\r': escaped << "\\r"; break;
+            case '\t': escaped << "\\t"; break;
             default:
                 if (static_cast<unsigned char>(ch) < 0x20)
                 {
-                    escaped << "\\u00";
                     constexpr char hex[] = "0123456789abcdef";
-                    escaped << hex[(ch >> 4) & 0x0F] << hex[ch & 0x0F];
+                    escaped << "\\u00" << hex[(ch >> 4) & 0x0F] << hex[ch & 0x0F];
                 }
                 else
                 {
@@ -79,14 +76,13 @@ namespace
                     continue;
                 }
             }
-
             result.push_back(value[index]);
         }
 
         return result;
     }
 
-    std::filesystem::path ToPath(std::string const &input)
+    std::wstring NormalizePathString(std::string const &input)
     {
         std::string value = input;
         auto lower = value;
@@ -105,8 +101,12 @@ namespace
 
         value = PercentDecode(value);
         std::replace(value.begin(), value.end(), '/', '\\');
+        return std::wstring(winrt::to_hstring(value).c_str());
+    }
 
-        return std::filesystem::path(std::wstring(winrt::to_hstring(value).c_str()));
+    std::filesystem::path ToPath(std::string const &input)
+    {
+        return std::filesystem::path(NormalizePathString(input));
     }
 
     std::string ToUtf8(std::filesystem::path const &path)
@@ -114,6 +114,241 @@ namespace
         auto value = winrt::to_string(winrt::hstring(path.wstring()));
         std::replace(value.begin(), value.end(), '\\', '/');
         return value;
+    }
+
+    std::string HStringToUtf8(winrt::hstring const &value)
+    {
+        auto text = winrt::to_string(value);
+        std::replace(text.begin(), text.end(), '\\', '/');
+        return text;
+    }
+
+    std::wstring ToLower(std::wstring value)
+    {
+        std::transform(value.begin(), value.end(), value.begin(), [](wchar_t ch) {
+            return static_cast<wchar_t>(std::towlower(ch));
+        });
+        return value;
+    }
+
+    std::vector<std::wstring> SplitPath(std::wstring const &value)
+    {
+        std::vector<std::wstring> parts;
+        std::wstring current;
+        for (auto ch : value)
+        {
+            if (ch == L'\\' || ch == L'/')
+            {
+                if (!current.empty())
+                {
+                    parts.push_back(current);
+                    current.clear();
+                }
+                continue;
+            }
+            current.push_back(ch);
+        }
+        if (!current.empty())
+        {
+            parts.push_back(current);
+        }
+        return parts;
+    }
+
+    std::optional<std::vector<std::wstring>> AplusRelativeSegments(std::string const &path)
+    {
+        auto normalized = NormalizePathString(path);
+        auto parts = SplitPath(normalized);
+        for (size_t index = 0; index < parts.size(); ++index)
+        {
+            if (ToLower(parts[index]) == L"aplus score")
+            {
+                return std::vector<std::wstring>(parts.begin() + static_cast<std::ptrdiff_t>(index + 1), parts.end());
+            }
+        }
+        return std::nullopt;
+    }
+
+    bool IsAplusPath(std::string const &path)
+    {
+        return AplusRelativeSegments(path).has_value();
+    }
+
+    StorageFolder VideosLibraryFolder()
+    {
+        try
+        {
+            return KnownFolders::VideosLibrary();
+        }
+        catch (winrt::hresult_error const &ex)
+        {
+            throw std::runtime_error("videosLibrary access failed: " + winrt::to_string(ex.message()));
+        }
+    }
+
+    StorageFolder EnsureAplusRootFolder()
+    {
+        auto videos = VideosLibraryFolder();
+        try
+        {
+            return videos.CreateFolderAsync(AplusFolderName, CreationCollisionOption::OpenIfExists).get();
+        }
+        catch (winrt::hresult_error const &ex)
+        {
+            throw std::runtime_error("Cannot create Aplus Score under Windows Videos library: " + winrt::to_string(ex.message()));
+        }
+    }
+
+    StorageFolder EnsureStandardFolders()
+    {
+        auto root = EnsureAplusRootFolder();
+        root.CreateFolderAsync(ReplayFolderName, CreationCollisionOption::OpenIfExists).get();
+        root.CreateFolderAsync(HistoryFolderName, CreationCollisionOption::OpenIfExists).get();
+        return root;
+    }
+
+    StorageFolder EnsureFolderSegments(std::vector<std::wstring> const &segments)
+    {
+        auto folder = EnsureAplusRootFolder();
+        for (auto const &segment : segments)
+        {
+            if (segment.empty())
+            {
+                continue;
+            }
+            folder = folder.CreateFolderAsync(winrt::hstring(segment), CreationCollisionOption::OpenIfExists).get();
+        }
+        return folder;
+    }
+
+    StorageFolder TryGetFolderSegments(std::vector<std::wstring> const &segments)
+    {
+        try
+        {
+            auto folder = EnsureAplusRootFolder();
+            for (auto const &segment : segments)
+            {
+                if (segment.empty())
+                {
+                    continue;
+                }
+                folder = folder.GetFolderAsync(winrt::hstring(segment)).get();
+            }
+            return folder;
+        }
+        catch (...)
+        {
+            return nullptr;
+        }
+    }
+
+    StorageFolder EnsureParentFolder(std::vector<std::wstring> const &segments)
+    {
+        if (segments.empty())
+        {
+            return EnsureAplusRootFolder();
+        }
+        return EnsureFolderSegments(std::vector<std::wstring>(segments.begin(), segments.end() - 1));
+    }
+
+    StorageFile CreateFileForSegments(std::vector<std::wstring> const &segments, CreationCollisionOption option)
+    {
+        if (segments.empty())
+        {
+            throw std::runtime_error("Missing file name");
+        }
+        auto parent = EnsureParentFolder(segments);
+        return parent.CreateFileAsync(winrt::hstring(segments.back()), option).get();
+    }
+
+    StorageFile GetFileForSegments(std::vector<std::wstring> const &segments)
+    {
+        if (segments.empty())
+        {
+            throw std::runtime_error("Missing file name");
+        }
+        auto parent = TryGetFolderSegments(std::vector<std::wstring>(segments.begin(), segments.end() - 1));
+        if (!parent)
+        {
+            throw std::runtime_error("Parent folder does not exist");
+        }
+        return parent.GetFileAsync(winrt::hstring(segments.back())).get();
+    }
+
+    winrt::Windows::Storage::IStorageItem TryGetItemForSegments(std::vector<std::wstring> const &segments)
+    {
+        try
+        {
+            if (segments.empty())
+            {
+                return EnsureAplusRootFolder();
+            }
+            auto parent = TryGetFolderSegments(std::vector<std::wstring>(segments.begin(), segments.end() - 1));
+            if (!parent)
+            {
+                return nullptr;
+            }
+            return parent.TryGetItemAsync(winrt::hstring(segments.back())).get();
+        }
+        catch (...)
+        {
+            return nullptr;
+        }
+    }
+
+    std::filesystem::path EnvPath(wchar_t const *name)
+    {
+        wchar_t *value = nullptr;
+        size_t len = 0;
+        std::wstring result;
+        if (_wdupenv_s(&value, &len, name) == 0 && value && len > 0)
+        {
+            result = value;
+        }
+        if (value)
+        {
+            free(value);
+        }
+        return std::filesystem::path(result);
+    }
+
+    std::filesystem::path UserProfileVideosPath()
+    {
+        auto userProfile = EnvPath(L"USERPROFILE");
+        if (!userProfile.empty())
+        {
+            return userProfile / L"Videos" / AplusFolderName;
+        }
+        auto homeDrive = EnvPath(L"HOMEDRIVE");
+        auto homePath = EnvPath(L"HOMEPATH");
+        if (!homeDrive.empty() && !homePath.empty())
+        {
+            return std::filesystem::path(homeDrive.wstring() + homePath.wstring()) / L"Videos" / AplusFolderName;
+        }
+        return std::filesystem::path(L"Videos") / AplusFolderName;
+    }
+
+    std::string AplusRootPathString(StorageFolder const &root)
+    {
+        auto path = HStringToUtf8(root.Path());
+        if (!path.empty())
+        {
+            return path;
+        }
+        return ToUtf8(UserProfileVideosPath());
+    }
+
+    int64_t DateTimeToMs(winrt::Windows::Foundation::DateTime const &value)
+    {
+        try
+        {
+            auto systemTime = winrt::clock::to_sys(value);
+            return std::chrono::duration_cast<std::chrono::milliseconds>(systemTime.time_since_epoch()).count();
+        }
+        catch (...)
+        {
+            return 0;
+        }
     }
 
     int64_t LastWriteTimeMs(std::filesystem::path const &path)
@@ -124,7 +359,6 @@ namespace
         {
             return 0;
         }
-
         auto systemTime = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
             fileTime - std::filesystem::file_time_type::clock::now() + std::chrono::system_clock::now());
         return std::chrono::duration_cast<std::chrono::milliseconds>(systemTime.time_since_epoch()).count();
@@ -137,7 +371,6 @@ namespace
         {
             return 0;
         }
-
         auto size = std::filesystem::file_size(path, ec);
         return ec ? 0 : size;
     }
@@ -164,9 +397,35 @@ namespace
         return json.str();
     }
 
-    void Reject(ReactError const &error, ReactPromise<bool> const &promise) noexcept
+    std::string ItemJson(winrt::Windows::Storage::IStorageItem const &item)
     {
-        promise.Reject(error);
+        auto isDirectory = item.IsOfType(StorageItemTypes::Folder);
+        uint64_t size = 0;
+        int64_t mtime = DateTimeToMs(item.DateCreated());
+
+        if (!isDirectory)
+        {
+            try
+            {
+                auto file = item.as<StorageFile>();
+                auto properties = file.GetBasicPropertiesAsync().get();
+                size = properties.Size();
+                mtime = DateTimeToMs(properties.DateModified());
+            }
+            catch (...) {}
+        }
+
+        std::ostringstream json;
+        json << "{";
+        json << "\"name\":\"" << JsonEscape(winrt::to_string(item.Name())) << "\",";
+        json << "\"path\":\"" << JsonEscape(HStringToUtf8(item.Path())) << "\",";
+        json << "\"size\":" << static_cast<unsigned long long>(size) << ",";
+        json << "\"mtime\":" << mtime << ",";
+        json << "\"ctime\":" << DateTimeToMs(item.DateCreated()) << ",";
+        json << "\"type\":\"" << (isDirectory ? "directory" : "file") << "\",";
+        json << "\"isDirectory\":" << (isDirectory ? "true" : "false");
+        json << "}";
+        return json.str();
     }
 
     template <typename TPromise>
@@ -190,49 +449,29 @@ namespace
             }
         }
     }
-
-    std::filesystem::path FallbackBasePath()
-    {
-        // In a packaged React Native Windows/UWP app, arbitrary paths such as
-        // C:\\video or C:\\Users\\<User>\\Videos can still be denied by the
-        // app container unless the OS grants broad file-system access.
-        // ApplicationData.LocalFolder is always writable and persistent, so it
-        // is the final safe fallback for history/replay videos when C:\\video is
-        // blocked.
-        try
-        {
-            auto localFolder = winrt::Windows::Storage::ApplicationData::Current().LocalFolder();
-            return std::filesystem::path(std::wstring(localFolder.Path().c_str())) / L"aplus score";
-        }
-        catch (...)
-        {
-            wchar_t *localAppData = nullptr;
-            size_t len = 0;
-            std::wstring base = L"C:\\Users\\Public\\AppData\\Local";
-
-            if (_wdupenv_s(&localAppData, &len, L"LOCALAPPDATA") == 0 && localAppData && len > 0)
-            {
-                base = localAppData;
-            }
-
-            if (localAppData)
-            {
-                free(localAppData);
-            }
-
-            return std::filesystem::path(base) / L"billiardsgrade" / L"aplus score";
-        }
-    }
-
 }
 
 namespace winrt::billiardsgrade::implementation
 {
+    void WindowsVideoStorageModule::GetVideosBaseDir(ReactPromise<std::string> promise) noexcept
+    {
+        try
+        {
+            auto root = EnsureStandardFolders();
+            promise.Resolve(AplusRootPathString(root));
+        }
+        catch (std::exception const &ex)
+        {
+            RejectWithMessage(promise, ex.what());
+        }
+    }
+
     void WindowsVideoStorageModule::GetFallbackBaseDir(ReactPromise<std::string> promise) noexcept
     {
         try
         {
-            promise.Resolve(ToUtf8(FallbackBasePath()));
+            auto root = EnsureStandardFolders();
+            promise.Resolve(AplusRootPathString(root));
         }
         catch (std::exception const &ex)
         {
@@ -244,6 +483,14 @@ namespace winrt::billiardsgrade::implementation
     {
         try
         {
+            auto segments = AplusRelativeSegments(path);
+            if (segments)
+            {
+                auto item = TryGetItemForSegments(*segments);
+                promise.Resolve(item != nullptr);
+                return;
+            }
+
             std::error_code ec;
             auto exists = std::filesystem::exists(ToPath(path), ec);
             promise.Resolve(!ec && exists);
@@ -258,13 +505,20 @@ namespace winrt::billiardsgrade::implementation
     {
         try
         {
+            auto segments = AplusRelativeSegments(path);
+            if (segments)
+            {
+                EnsureFolderSegments(*segments);
+                promise.Resolve(true);
+                return;
+            }
+
             std::error_code ec;
             std::filesystem::create_directories(ToPath(path), ec);
             if (ec)
             {
                 throw std::runtime_error(ec.message());
             }
-
             promise.Resolve(true);
         }
         catch (std::exception const &ex)
@@ -277,6 +531,34 @@ namespace winrt::billiardsgrade::implementation
     {
         try
         {
+            auto segments = AplusRelativeSegments(path);
+            if (segments)
+            {
+                auto folder = TryGetFolderSegments(*segments);
+                if (!folder)
+                {
+                    promise.Resolve("[]");
+                    return;
+                }
+
+                std::ostringstream json;
+                json << "[";
+                bool first = true;
+                auto items = folder.GetItemsAsync().get();
+                for (auto const &item : items)
+                {
+                    if (!first)
+                    {
+                        json << ",";
+                    }
+                    json << ItemJson(item);
+                    first = false;
+                }
+                json << "]";
+                promise.Resolve(json.str());
+                return;
+            }
+
             auto folder = ToPath(path);
             if (!std::filesystem::exists(folder) || !std::filesystem::is_directory(folder))
             {
@@ -287,18 +569,15 @@ namespace winrt::billiardsgrade::implementation
             std::ostringstream json;
             json << "[";
             bool first = true;
-
             for (auto const &entry : std::filesystem::directory_iterator(folder))
             {
                 if (!first)
                 {
                     json << ",";
                 }
-
                 json << ItemJson(entry.path());
                 first = false;
             }
-
             json << "]";
             promise.Resolve(json.str());
         }
@@ -312,12 +591,23 @@ namespace winrt::billiardsgrade::implementation
     {
         try
         {
+            auto segments = AplusRelativeSegments(path);
+            if (segments)
+            {
+                auto item = TryGetItemForSegments(*segments);
+                if (!item)
+                {
+                    throw std::runtime_error("Path does not exist");
+                }
+                promise.Resolve(ItemJson(item));
+                return;
+            }
+
             auto target = ToPath(path);
             if (!std::filesystem::exists(target))
             {
                 throw std::runtime_error("Path does not exist");
             }
-
             promise.Resolve(ItemJson(target));
         }
         catch (std::exception const &ex)
@@ -330,15 +620,22 @@ namespace winrt::billiardsgrade::implementation
     {
         try
         {
-            std::ifstream file(ToPath(path), std::ios::in | std::ios::binary);
-            if (!file)
+            auto segments = AplusRelativeSegments(path);
+            if (segments)
             {
-                throw std::runtime_error("Cannot open file for reading");
+                auto file = GetFileForSegments(*segments);
+                promise.Resolve(winrt::to_string(FileIO::ReadTextAsync(file).get()));
+                return;
             }
 
-            std::ostringstream contents;
-            contents << file.rdbuf();
-            promise.Resolve(contents.str());
+            std::ifstream file(ToPath(path), std::ios::binary);
+            if (!file)
+            {
+                throw std::runtime_error("Unable to open file");
+            }
+            std::ostringstream buffer;
+            buffer << file.rdbuf();
+            promise.Resolve(buffer.str());
         }
         catch (std::exception const &ex)
         {
@@ -350,15 +647,22 @@ namespace winrt::billiardsgrade::implementation
     {
         try
         {
-            auto target = ToPath(path);
-            EnsureParent(target);
-
-            std::ofstream file(target, std::ios::out | std::ios::binary | std::ios::trunc);
-            if (!file)
+            auto segments = AplusRelativeSegments(path);
+            if (segments)
             {
-                throw std::runtime_error("Cannot open file for writing");
+                auto file = CreateFileForSegments(*segments, CreationCollisionOption::ReplaceExisting);
+                FileIO::WriteTextAsync(file, winrt::to_hstring(content)).get();
+                promise.Resolve(true);
+                return;
             }
 
+            auto target = ToPath(path);
+            EnsureParent(target);
+            std::ofstream file(target, std::ios::binary | std::ios::trunc);
+            if (!file)
+            {
+                throw std::runtime_error("Unable to write file");
+            }
             file << content;
             promise.Resolve(true);
         }
@@ -372,15 +676,30 @@ namespace winrt::billiardsgrade::implementation
     {
         try
         {
-            auto target = ToPath(path);
-            EnsureParent(target);
-
-            std::ofstream file(target, std::ios::out | std::ios::binary | std::ios::app);
-            if (!file)
+            auto segments = AplusRelativeSegments(path);
+            if (segments)
             {
-                throw std::runtime_error("Cannot open file for append");
+                std::string current;
+                try
+                {
+                    auto file = GetFileForSegments(*segments);
+                    current = winrt::to_string(FileIO::ReadTextAsync(file).get());
+                }
+                catch (...) {}
+
+                auto file = CreateFileForSegments(*segments, CreationCollisionOption::ReplaceExisting);
+                FileIO::WriteTextAsync(file, winrt::to_hstring(current + content)).get();
+                promise.Resolve(true);
+                return;
             }
 
+            auto target = ToPath(path);
+            EnsureParent(target);
+            std::ofstream file(target, std::ios::binary | std::ios::app);
+            if (!file)
+            {
+                throw std::runtime_error("Unable to append file");
+            }
             file << content;
             promise.Resolve(true);
         }
@@ -394,9 +713,20 @@ namespace winrt::billiardsgrade::implementation
     {
         try
         {
+            auto segments = AplusRelativeSegments(path);
+            if (segments)
+            {
+                auto item = TryGetItemForSegments(*segments);
+                if (item)
+                {
+                    item.DeleteAsync(StorageDeleteOption::PermanentDelete).get();
+                }
+                promise.Resolve(true);
+                return;
+            }
+
             auto target = ToPath(path);
             std::error_code ec;
-
             if (std::filesystem::is_directory(target, ec))
             {
                 std::filesystem::remove_all(target, ec);
@@ -405,12 +735,10 @@ namespace winrt::billiardsgrade::implementation
             {
                 std::filesystem::remove(target, ec);
             }
-
             if (ec)
             {
                 throw std::runtime_error(ec.message());
             }
-
             promise.Resolve(true);
         }
         catch (std::exception const &ex)
@@ -423,17 +751,30 @@ namespace winrt::billiardsgrade::implementation
     {
         try
         {
+            auto fromSegments = AplusRelativeSegments(from);
+            auto toSegments = AplusRelativeSegments(to);
+            if (fromSegments && toSegments)
+            {
+                if (toSegments->empty())
+                {
+                    throw std::runtime_error("Missing destination file name");
+                }
+                auto source = GetFileForSegments(*fromSegments);
+                auto destinationFolder = EnsureParentFolder(*toSegments);
+                source.CopyAsync(destinationFolder, winrt::hstring(toSegments->back()), NameCollisionOption::ReplaceExisting).get();
+                promise.Resolve(true);
+                return;
+            }
+
             auto source = ToPath(from);
             auto target = ToPath(to);
             EnsureParent(target);
-
             std::error_code ec;
             std::filesystem::copy_file(source, target, std::filesystem::copy_options::overwrite_existing, ec);
             if (ec)
             {
                 throw std::runtime_error(ec.message());
             }
-
             promise.Resolve(true);
         }
         catch (std::exception const &ex)
@@ -446,24 +787,39 @@ namespace winrt::billiardsgrade::implementation
     {
         try
         {
+            auto fromSegments = AplusRelativeSegments(from);
+            auto toSegments = AplusRelativeSegments(to);
+            if (fromSegments && toSegments)
+            {
+                if (toSegments->empty())
+                {
+                    throw std::runtime_error("Missing destination file name");
+                }
+                auto source = GetFileForSegments(*fromSegments);
+                auto destinationFolder = EnsureParentFolder(*toSegments);
+                source.MoveAsync(destinationFolder, winrt::hstring(toSegments->back()), NameCollisionOption::ReplaceExisting).get();
+                promise.Resolve(true);
+                return;
+            }
+
             auto source = ToPath(from);
             auto target = ToPath(to);
             EnsureParent(target);
-
             std::error_code ec;
             std::filesystem::rename(source, target, ec);
             if (ec)
             {
-                ec.clear();
                 std::filesystem::copy_file(source, target, std::filesystem::copy_options::overwrite_existing, ec);
                 if (ec)
                 {
                     throw std::runtime_error(ec.message());
                 }
-
                 std::filesystem::remove(source, ec);
+                if (ec)
+                {
+                    throw std::runtime_error(ec.message());
+                }
             }
-
             promise.Resolve(true);
         }
         catch (std::exception const &ex)

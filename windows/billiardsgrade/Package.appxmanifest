@@ -47,6 +47,7 @@
 
   <Capabilities>
     <Capability Name="internetClient" />
+    <uap:Capability Name="videosLibrary" />
     <rescap:Capability Name="broadFileSystem" />
     <DeviceCapability Name="webcam" />
     <DeviceCapability Name="microphone" />
