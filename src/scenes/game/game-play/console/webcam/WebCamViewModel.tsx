@@ -3,6 +3,7 @@ import {RootState} from 'data/redux/reducers';
 import {useSelector} from 'react-redux';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import RNFS from 'react-native-fs';
+import {Platform} from 'react-native';
 import {keys} from 'configuration/keys';
 import {
   WEBCAM_BASE_FILE_NAME,
@@ -354,6 +355,15 @@ const WebCamViewModel = (props: Props) => {
         webcamType === WebcamType.webcam && webcam
           ? `${WEBCAM_HOST}${webcam.username}:${webcam.password}@${webcam.webcamIP}:${WEBCAM_PORT}${WEBCAM_PATH}`
           : undefined;
+
+      if (Platform.OS === 'windows') {
+        // Windows preview/recording is handled by the native MediaCapture view.
+        // Do not start the old FFmpeg local-file bootstrap here, because it
+        // writes rotating .mov files under Downloads and does not feed replay/history.
+        console.log('[Replay] windows native preview: skip legacy streamWebcamToFile bootstrap');
+        setUrl(undefined);
+        return;
+      }
 
       if (outputType === OutputType.livestream) {
         liveStreamFromCamera(

@@ -1,7 +1,7 @@
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {useFocusEffect, useNavigation, useRoute} from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import {Alert} from 'react-native';
+import {Alert, Platform} from 'react-native';
 import {useSelector, useDispatch} from 'react-redux';
 import RNFS from 'react-native-fs';
 // import {captureRef} from 'react-native-view-shot';
@@ -2848,7 +2848,15 @@ const GamePlayViewModel = () => {
             return;
           }
 
-          if (saveToDeviceWhileStreaming) {
+          if (Platform.OS === 'windows') {
+            try {
+              const historyFolder = await exportMatchToArchive(webcamFolderName);
+              await deleteReplayFolder(webcamFolderName, {includeArchive: false});
+              console.log('[History] savedVideoPath =', historyFolder);
+            } catch (exportError) {
+              console.log('[HistoryVideo] error', exportError);
+            }
+          } else if (saveToDeviceWhileStreaming) {
             try {
               await exportMatchToArchive(webcamFolderName);
               await deleteReplayFolder(webcamFolderName, {includeArchive: false});
@@ -3026,9 +3034,13 @@ const GamePlayViewModel = () => {
                 webcamFolderName,
                 video.path,
                 {
-                  keepFullMatch: saveToDeviceWhileStreaming,
+                  keepFullMatch: true,
                   matchSessionId: matchSessionIdRef.current,
                   segmentIndex: currentReplaySegmentIndexRef.current,
+                  mode: gameSettings?.category,
+                  playerNames: playerSettings?.playingPlayers?.map(player => String(player?.name || '')).filter(Boolean) as string[],
+                  segmentStartedAt: Date.now() - Math.max(0, totalTime - currentReplaySegmentStartTotalTimeRef.current) * 1000,
+                  durationSeconds: Math.max(0, totalTime - currentReplaySegmentStartTotalTimeRef.current),
                 },
               );
 

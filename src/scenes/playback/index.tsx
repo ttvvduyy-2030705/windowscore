@@ -4,6 +4,7 @@ import {
   Image as RNImage,
   NativeEventEmitter,
   NativeModules,
+  Platform,
   ScrollView,
   StyleSheet,
 } from 'react-native';
@@ -29,6 +30,7 @@ import {RootState} from 'data/redux/reducers';
 import i18n from 'i18n';
 import {
   buildReplayFolderPath,
+  deleteReplayFolder,
   ensureArchiveFolder,
   resolveReplayFolder,
 } from 'services/replay/localReplay';
@@ -81,6 +83,36 @@ const EMPTY_THUMBNAIL_OVERLAY: PlaybackThumbnailOverlayState = {
   topRight: [],
   bottomLeft: [],
   bottomRight: [],
+};
+
+const normalizePlaybackVideoUri = (inputPath?: string | null) => {
+  const raw = String(inputPath || '').trim();
+
+  if (!raw || Platform.OS !== 'windows') {
+    return raw;
+  }
+
+  if (/^[a-z]+:\/\//i.test(raw) && !raw.toLowerCase().startsWith('file://')) {
+    return raw;
+  }
+
+  if (raw.toLowerCase().startsWith('file://')) {
+    return raw.replace(/\\/g, '/');
+  }
+
+  const slashPath = raw.replace(/\\/g, '/');
+  const encodedPath = slashPath
+    .split('/')
+    .map((part, index) => {
+      if (index === 0 && /^[a-zA-Z]:$/.test(part)) {
+        return part;
+      }
+
+      return encodeURIComponent(part);
+    })
+    .join('/');
+
+  return `file:///${encodedPath}`;
 };
 
 const parseThumbnailUris = (value?: string | null): string[] => {
@@ -262,6 +294,14 @@ const PlayBackWebcam = (props: PlayBackWebcamViewModelProps) => {
         webcamFolderName: props.webcamFolderName,
         requestedAt: Date.now(),
       });
+
+      if (Platform.OS === 'windows') {
+        try {
+          await deleteReplayFolder(props.webcamFolderName, {includeArchive: false});
+        } catch (cleanupError) {
+          console.log('[Replay] cleanup temp fail', cleanupError);
+        }
+      }
     }
 
     goBack();
@@ -288,8 +328,26 @@ const PlayBackWebcam = (props: PlayBackWebcamViewModelProps) => {
   const currentVideoPath =
     viewModel.videoFiles?.[viewModel.currentIndex]?.path || '';
 
+  const currentVideoUri = useMemo(
+    () => normalizePlaybackVideoUri(currentVideoPath),
+    [currentVideoPath],
+  );
+
   const currentVideoDuration =
     viewModel.videoDurations[currentVideoPath] || 0;
+
+  useEffect(() => {
+    if (Platform.OS !== 'windows' || !currentVideoPath) {
+      return;
+    }
+
+    console.log('[Replay] inputPath =', currentVideoPath);
+    console.log('[Replay] normalizedUri =', currentVideoUri);
+
+    RNFS.exists(currentVideoPath)
+      .then(exists => console.log('[Replay] file exists', exists))
+      .catch(error => console.log('[Replay] file exists false', error));
+  }, [currentVideoPath, currentVideoUri]);
 
   const safeSeekTo = useCallback((time: number) => {
     const boundedDuration = Math.max(0, Number(currentVideoDuration || 0));
@@ -666,20 +724,30 @@ const PlayBackWebcam = (props: PlayBackWebcamViewModelProps) => {
                 controls={false}
                 paused={isPaused || isScrubbing}
                 source={{
-                  uri:
-                    viewModel.videoFiles.length > 0
-                      ? viewModel.videoFiles[viewModel.currentIndex].path
-                      : '',
+                  uri: currentVideoUri,
                 }}
                 selectedVideoTrack={WEBCAM_SELECTED_VIDEO_TRACK}
                 onError={viewModel.onWebcamError}
                 renderLoader={WEBCAM_LOADER}
                 rate={playbackRate}
                 progressUpdateInterval={500}
+                startAtTailSeconds={props.returnToMatch ? 120 : 0}
                 onLoad={data => {
-                  viewModel.handleVideoLoad(currentVideoPath, data?.duration || 0);
+                  const duration = Number(data?.duration || 0);
+                  viewModel.handleVideoLoad(currentVideoPath, duration);
                   setPlaybackCurrentTime(0);
                   viewModel.handleLoad();
+
+                  if (props.returnToMatch && duration > 0) {
+                    const replayStartTime = Math.max(0, duration - 120);
+                    try {
+                      viewModel.videoRef.current?.seek?.(replayStartTime);
+                      setPlaybackCurrentTime(replayStartTime);
+                      console.log('[Replay] replay duration', Math.min(120, duration));
+                    } catch (seekError) {
+                      console.log('[Replay] seek to recent VAR window failed', seekError);
+                    }
+                  }
                 }}
                 onProgress={data => {
                   if (!isScrubbing) {

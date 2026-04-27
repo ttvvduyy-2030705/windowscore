@@ -40,6 +40,10 @@ export type RegisterReplaySegmentOptions = {
   keepFullMatch?: boolean;
   matchSessionId?: string;
   segmentIndex?: number;
+  mode?: string;
+  playerNames?: string[];
+  segmentStartedAt?: number;
+  durationSeconds?: number;
 };
 
 export const buildReplayFolderPath = (webcamFolderName: string) => `${REPLAY_ROOT}/${webcamFolderName}`;

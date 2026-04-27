@@ -7,6 +7,7 @@
 #include <string>
 
 #include <winrt/Windows.ApplicationModel.h>
+#include <winrt/Windows.ApplicationModel.Core.h>
 #include <winrt/Windows.Devices.Enumeration.h>
 #include <winrt/Windows.Media.Capture.h>
 #include <winrt/Windows.Media.MediaProperties.h>
@@ -17,6 +18,7 @@
 #include <winrt/Windows.UI.Xaml.Media.h>
 
 using namespace winrt;
+using namespace Windows::ApplicationModel::Core;
 using namespace Windows::Devices::Enumeration;
 using namespace Windows::Foundation;
 using namespace Windows::Media::Capture;
@@ -31,6 +33,7 @@ using namespace Microsoft::ReactNative;
 namespace
 {
     MediaCapture g_mediaCapture{nullptr};
+    CoreDispatcher g_cameraDispatcher{nullptr};
     bool g_previewReady = false;
     bool g_isRecording = false;
     hstring g_lastRecordingPath{};
@@ -38,6 +41,11 @@ namespace
     void DebugLog(std::wstring const &message) noexcept
     {
         OutputDebugStringW((L"[WindowsCameraView] " + message + L"\n").c_str());
+    }
+
+    std::wstring BoolText(bool value)
+    {
+        return value ? L"true" : L"false";
     }
 
     std::wstring ToLower(std::wstring value)
@@ -61,6 +69,45 @@ namespace
                id.find(L"vid_") != std::wstring::npos;
     }
 
+    CoreDispatcher GetCameraDispatcher() noexcept
+    {
+        if (g_cameraDispatcher)
+        {
+            return g_cameraDispatcher;
+        }
+
+        try
+        {
+            auto mainView = CoreApplication::MainView();
+            if (mainView && mainView.CoreWindow())
+            {
+                return mainView.CoreWindow().Dispatcher();
+            }
+        }
+        catch (...) {}
+
+        return nullptr;
+    }
+
+    bool HasCameraThreadAccess() noexcept
+    {
+        auto dispatcher = GetCameraDispatcher();
+        if (!dispatcher)
+        {
+            return false;
+        }
+        return dispatcher.HasThreadAccess();
+    }
+
+    IAsyncAction ResumeOnCameraDispatcherAsync()
+    {
+        auto dispatcher = GetCameraDispatcher();
+        if (dispatcher && !dispatcher.HasThreadAccess())
+        {
+            co_await resume_foreground(dispatcher);
+        }
+    }
+
     std::filesystem::path ParentPath(std::wstring const &path)
     {
         std::filesystem::path fsPath(path);
@@ -75,6 +122,8 @@ namespace
 
     IAsyncOperation<StorageFile> CreateStorageFileForPathAsync(hstring const &requestedPath)
     {
+        co_await ResumeOnCameraDispatcherAsync();
+
         std::wstring path(requestedPath.c_str());
         auto parent = ParentPath(path);
 
@@ -87,7 +136,9 @@ namespace
         try
         {
             auto folder = co_await StorageFolder::GetFolderFromPathAsync(hstring(parent.wstring()));
+            co_await ResumeOnCameraDispatcherAsync();
             auto file = co_await folder.CreateFileAsync(FileNameFromPath(path), CreationCollisionOption::ReplaceExisting);
+            co_await ResumeOnCameraDispatcherAsync();
             co_return file;
         }
         catch (hresult_error const &ex)
@@ -101,7 +152,9 @@ namespace
 
         auto localFolder = ApplicationData::Current().LocalFolder();
         auto recordingsFolder = co_await localFolder.CreateFolderAsync(L"Recordings", CreationCollisionOption::OpenIfExists);
+        co_await ResumeOnCameraDispatcherAsync();
         auto file = co_await recordingsFolder.CreateFileAsync(FileNameFromPath(path), CreationCollisionOption::ReplaceExisting);
+        co_await ResumeOnCameraDispatcherAsync();
         co_return file;
     }
 
@@ -109,17 +162,25 @@ namespace
     {
         try
         {
+            if (!g_cameraDispatcher)
+            {
+                g_cameraDispatcher = grid.Dispatcher();
+            }
+            co_await ResumeOnCameraDispatcherAsync();
+
             auto media = grid.Tag().try_as<MediaCapture>();
             if (media)
             {
                 if (g_isRecording)
                 {
                     co_await media.StopRecordAsync();
+                    co_await ResumeOnCameraDispatcherAsync();
                     g_isRecording = false;
                     DebugLog(L"recording stopped on unload: " + std::wstring(g_lastRecordingPath.c_str()));
                 }
 
                 co_await media.StopPreviewAsync();
+                co_await ResumeOnCameraDispatcherAsync();
             }
 
             if (g_mediaCapture == media)
@@ -141,10 +202,14 @@ namespace
     {
         try
         {
+            g_cameraDispatcher = grid.Dispatcher();
+            co_await ResumeOnCameraDispatcherAsync();
+
             DebugLog(L"enumerate devices start");
 
             auto devices = co_await DeviceInformation::FindAllAsync(DeviceClass::VideoCapture);
-            DebugLog(L"camera devices found: " + std::to_wstring(devices.Size()));
+            co_await ResumeOnCameraDispatcherAsync();
+            DebugLog(L"camera devices found: " + std::to_wstring(devices.Size()) + L" threadAccess=" + BoolText(HasCameraThreadAccess()));
 
             if (devices.Size() == 0)
             {
@@ -171,15 +236,20 @@ namespace
             settings.SharingMode(MediaCaptureSharingMode::ExclusiveControl);
             settings.MemoryPreference(MediaCaptureMemoryPreference::Auto);
 
+            co_await ResumeOnCameraDispatcherAsync();
             auto mediaCapture = MediaCapture();
+            DebugLog(L"media capture create threadAccess=" + BoolText(HasCameraThreadAccess()));
             co_await mediaCapture.InitializeAsync(settings);
+            co_await ResumeOnCameraDispatcherAsync();
 
             capture.Stretch(Stretch::UniformToFill);
             capture.Source(mediaCapture);
             grid.Tag(mediaCapture);
             g_mediaCapture = mediaCapture;
 
+            DebugLog(L"preview start threadAccess=" + BoolText(HasCameraThreadAccess()));
             co_await mediaCapture.StartPreviewAsync();
+            co_await ResumeOnCameraDispatcherAsync();
             g_previewReady = true;
             DebugLog(L"preview ready");
         }
@@ -202,9 +272,12 @@ namespace winrt::billiardsgrade::implementation
 {
     IAsyncOperation<hstring> WindowsCameraStartRecordingAsync(hstring const &requestedPath)
     {
-        DebugLog(L"recording start requested: " + std::wstring(requestedPath.c_str()));
+        co_await ResumeOnCameraDispatcherAsync();
 
-        if (!g_mediaCapture || !g_previewReady)
+        DebugLog(L"recording start requested: " + std::wstring(requestedPath.c_str()) + L" threadAccess=" + BoolText(HasCameraThreadAccess()));
+
+        auto media = g_mediaCapture;
+        if (!media || !g_previewReady)
         {
             throw hresult_error(E_FAIL, L"Windows camera preview is not ready");
         }
@@ -216,9 +289,12 @@ namespace winrt::billiardsgrade::implementation
         }
 
         auto file = co_await CreateStorageFileForPathAsync(requestedPath);
+        co_await ResumeOnCameraDispatcherAsync();
         auto profile = MediaEncodingProfile::CreateMp4(VideoEncodingQuality::HD720p);
 
-        co_await g_mediaCapture.StartRecordToStorageFileAsync(profile, file);
+        DebugLog(L"recording calling StartRecordToStorageFileAsync threadAccess=" + BoolText(HasCameraThreadAccess()));
+        co_await media.StartRecordToStorageFileAsync(profile, file);
+        co_await ResumeOnCameraDispatcherAsync();
         g_isRecording = true;
         g_lastRecordingPath = file.Path();
         DebugLog(L"recording file created: " + std::wstring(g_lastRecordingPath.c_str()));
@@ -227,15 +303,19 @@ namespace winrt::billiardsgrade::implementation
 
     IAsyncOperation<hstring> WindowsCameraStopRecordingAsync()
     {
-        DebugLog(L"recording stop requested");
+        co_await ResumeOnCameraDispatcherAsync();
 
-        if (!g_mediaCapture || !g_isRecording)
+        DebugLog(L"recording stop requested threadAccess=" + BoolText(HasCameraThreadAccess()));
+
+        auto media = g_mediaCapture;
+        if (!media || !g_isRecording)
         {
             DebugLog(L"recording stop ignored: not recording");
             co_return g_lastRecordingPath;
         }
 
-        co_await g_mediaCapture.StopRecordAsync();
+        co_await media.StopRecordAsync();
+        co_await ResumeOnCameraDispatcherAsync();
         g_isRecording = false;
         DebugLog(L"recording finalized path: " + std::wstring(g_lastRecordingPath.c_str()));
         co_return g_lastRecordingPath;

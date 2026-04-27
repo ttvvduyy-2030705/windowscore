@@ -95,13 +95,28 @@ const PlayBackWebcamViewModel = (props: PlayBackWebcamViewModelProps) => {
 
       setVideoFiles(files);
       setTotalFiles(files.length);
-      setCurrentIndex(prev => (files.length === 0 ? 0 : Math.min(prev, files.length - 1)));
+
+      const initialIndex =
+        props.returnToMatch && files.length > 0
+          ? files.length - 1
+          : files.length === 0
+            ? 0
+            : 0;
+
+      setCurrentIndex(initialIndex);
       setCurrentSegmentNumber(
         files.length > 0
-          ? extractReplaySegmentIndex(files[Math.max(0, Math.min(files.length - 1, 0))]?.name) || 0
+          ? extractReplaySegmentIndex(files[initialIndex]?.name) || initialIndex
           : 0,
       );
+      setStartTime(0);
+      setEndTime(0);
       setIsPlaying(files.length > 0);
+
+      if (props.returnToMatch) {
+        console.log('[Replay] selected replay segments', files.map(file => file.path));
+        console.log('[Replay] replay duration', 'target=120s');
+      }
 
       if (files.length === 0) {
         console.log('[Replay] No files found after extended retry:', props.webcamFolderName);
@@ -111,7 +126,7 @@ const PlayBackWebcamViewModel = (props: PlayBackWebcamViewModelProps) => {
         setIsLoading(false);
       }
     }
-  }, [props.webcamFolderName]);
+  }, [props.webcamFolderName, props.returnToMatch]);
 
   useEffect(() => {
     loadFiles();

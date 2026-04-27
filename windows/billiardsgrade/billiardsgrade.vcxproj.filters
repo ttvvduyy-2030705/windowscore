@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="Current" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
     <ApplicationDefinition Include="App.xaml" />
@@ -13,6 +13,8 @@
     <ClCompile Include="ReactPackageProvider.cpp" />
     <ClCompile Include="WindowsCameraViewManager.cpp" />
     <ClCompile Include="WindowsCameraRecordingModule.cpp" />
+    <ClCompile Include="WindowsVideoStorageModule.cpp" />
+    <ClCompile Include="WindowsVideoPlayerViewManager.cpp" />
     <ClCompile Include="AutolinkedNativeModules.g.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -21,6 +23,8 @@
     <ClInclude Include="ReactPackageProvider.h" />
     <ClInclude Include="WindowsCameraViewManager.h" />
     <ClInclude Include="WindowsCameraRecordingModule.h" />
+    <ClInclude Include="WindowsVideoStorageModule.h" />
+    <ClInclude Include="WindowsVideoPlayerViewManager.h" />
     <ClInclude Include="AutolinkedNativeModules.g.h" />
   </ItemGroup>
   <ItemGroup>

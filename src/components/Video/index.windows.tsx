@@ -3,7 +3,7 @@ import {Image, NativeModules, Platform, StyleSheet, View} from 'react-native';
 import RNFS from 'react-native-fs';
 
 import images from 'assets';
-import {REPLAY_ROOT} from 'services/replay/localReplay';
+import {buildWindowsRecordingOutputPath} from 'services/replay/localReplay';
 import WindowsNativeCameraView from './WindowsNativeCameraView';
 
 type Props = {
@@ -12,6 +12,7 @@ type Props = {
   overlayContent?: React.ReactNode;
   setIsCameraReady?: (isReady: boolean) => void;
   cameraScaleMode?: 'contain' | 'cover';
+  cameraRef?: React.Ref<any>;
 };
 
 type RecordingCallbacks = {
@@ -30,14 +31,37 @@ const debugWindowsCamera = (...args: any[]) => {
   }
 };
 
-const sanitizeFolderName = (value?: string) => {
-  const raw = String(value || '').trim();
-  return raw.replace(/[<>:"/\\|?*]+/g, '_') || `windows_match_${Date.now()}`;
+const getTurboModule = (moduleName: string) => {
+  try {
+    const rn = require("react-native") as any;
+    return rn?.TurboModuleRegistry?.get?.(moduleName) || null;
+  } catch (error) {
+    return null;
+  }
 };
 
 const getWindowsCameraRecordingModule = () => {
   const modules = NativeModules as any;
-  return modules?.WindowsCameraRecordingModule || modules?.WindowsCameraRecording || null;
+  const nativeModule = modules?.WindowsCameraRecordingModule || modules?.WindowsCameraRecording;
+
+  if (nativeModule?.startRecording || nativeModule?.stopRecording) {
+    return nativeModule;
+  }
+
+  const turboModule =
+    getTurboModule("WindowsCameraRecordingModule") ||
+    getTurboModule("WindowsCameraRecording");
+
+  if (turboModule?.startRecording || turboModule?.stopRecording) {
+    return turboModule;
+  }
+
+  console.log("[Recording] WindowsCameraRecordingModule unavailable", {
+    hasNativeModules: !!modules,
+    nativeModuleKeys: Object.keys(modules || {}).filter(key => key.toLowerCase().includes("camera") || key.toLowerCase().includes("record")),
+  });
+
+  return null;
 };
 
 const VideoWindows = forwardRef<any, Props>((props, ref) => {
@@ -50,24 +74,24 @@ const VideoWindows = forwardRef<any, Props>((props, ref) => {
     if (options?.path) {
       const parent = String(options.path).replace(/[\\/][^\\/]+$/, '');
       if (parent && parent !== options.path) {
-        await RNFS.mkdir(parent).catch(() => undefined);
+        await RNFS.mkdir(parent).catch(error => {
+          console.log('[WindowsVideoStorage] ensureDir ok =', false);
+          console.log('[WindowsVideoStorage] ensureDir error =', error);
+        });
       }
+      console.log('[WindowsVideoStorage] outputFile =', String(options.path));
       return String(options.path);
     }
 
-    const folderName = sanitizeFolderName(options?.webcamFolderName);
-    const folderPath = `${REPLAY_ROOT}/${folderName}`;
-    await RNFS.mkdir(folderPath).catch(() => undefined);
+    const outputPath = await buildWindowsRecordingOutputPath({
+      webcamFolderName: options?.webcamFolderName || `windows_match_${Date.now()}`,
+      segmentIndex: options?.segmentIndex,
+    });
 
-    const segmentIndex = Number.isFinite(Number(options?.segmentIndex))
-      ? Number(options?.segmentIndex)
-      : Date.now();
-    const indexLabel = segmentIndex < 10 ? `0${segmentIndex}` : String(segmentIndex);
-
-    return `${folderPath}/webcam_${indexLabel}_${Date.now()}.mp4`;
+    return outputPath;
   }, []);
 
-  useImperativeHandle(ref, () => ({
+  const createCameraHandle = useCallback(() => ({
     startRecording: async (options?: RecordingCallbacks) => {
       const nativeRecorder = getWindowsCameraRecordingModule();
 
@@ -93,9 +117,14 @@ const VideoWindows = forwardRef<any, Props>((props, ref) => {
         const actualPath = await nativeRecorder.startRecording(outputPath);
         const finalPath = String(actualPath || outputPath);
 
+        if (finalPath !== outputPath) {
+          console.log('[WindowsVideoStorage] fallbackDir =', finalPath.replace(/[\\/][^\\/]+$/, ''));
+        }
+
         lastRecordingPathRef.current = finalPath;
         recordingStateRef.current = 'recording';
         console.log('[Recording] file created', finalPath);
+        console.log('[VideoStorage] segment started', finalPath);
 
         return finalPath;
       } catch (error) {
@@ -128,6 +157,13 @@ const VideoWindows = forwardRef<any, Props>((props, ref) => {
         if (finalPath) {
           lastRecordingPathRef.current = finalPath;
           console.log('[Recording] finalized path', finalPath);
+          console.log('[VideoStorage] segment stopped', finalPath);
+          try {
+            const exists = await RNFS.exists(finalPath);
+            console.log('[WindowsVideoStorage] fileExists after record =', exists);
+          } catch (existsError) {
+            console.log('[WindowsVideoStorage] fileExists after record =', false, existsError);
+          }
           callbacks?.onRecordingFinished?.({path: finalPath});
           console.log('[Replay] video discovered', finalPath);
         } else {
@@ -165,6 +201,12 @@ const VideoWindows = forwardRef<any, Props>((props, ref) => {
       source: 'windows',
     }),
   }), [buildRecordingPath]);
+
+  useImperativeHandle(ref, createCameraHandle, [createCameraHandle]);
+  useImperativeHandle(props.cameraRef as any, createCameraHandle, [
+    props.cameraRef,
+    createCameraHandle,
+  ]);
 
   useEffect(() => {
     debugWindowsCamera('[WebCam] platform=windows', {
