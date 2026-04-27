@@ -31,6 +31,8 @@ const debugWindowsCamera = (...args: any[]) => {
   }
 };
 
+const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
 const getTurboModule = (moduleName: string) => {
   try {
     const rn = require("react-native") as any;
@@ -69,6 +71,10 @@ const VideoWindows = forwardRef<any, Props>((props, ref) => {
   const lastRecordingPathRef = useRef<string>('');
   const recordingCallbacksRef = useRef<RecordingCallbacks | null>(null);
   const recordingStateRef = useRef<'idle' | 'starting' | 'recording' | 'stopping'>('idle');
+
+  useEffect(() => {
+    console.log('[Build Info] windows-video-fix=v13-dispatcher-owned-recording');
+  }, []);
 
   const buildRecordingPath = useCallback(async (options?: RecordingCallbacks) => {
     if (options?.path) {
@@ -115,6 +121,10 @@ const VideoWindows = forwardRef<any, Props>((props, ref) => {
         console.log('[Recording] output path', outputPath);
 
         const actualPath = await nativeRecorder.startRecording(outputPath);
+        // Native v13 schedules MediaCapture.StartRecord on the camera view dispatcher
+        // and resolves after the command is queued. Give UWP a short moment to
+        // actually enter recording state before gameplay can request replay/stop.
+        await wait(600);
         const finalPath = String(actualPath || outputPath);
 
         if (finalPath !== outputPath) {
@@ -152,6 +162,9 @@ const VideoWindows = forwardRef<any, Props>((props, ref) => {
       try {
         recordingStateRef.current = 'stopping';
         const actualPath = await nativeRecorder.stopRecording();
+        // Native v13 returns after enqueueing stop on the camera dispatcher. Wait
+        // briefly so MediaCapture finalizes the mp4 before RNFS.stat/readDir.
+        await wait(1200);
         const finalPath = String(actualPath || lastRecordingPathRef.current || '');
 
         if (finalPath) {
@@ -161,6 +174,10 @@ const VideoWindows = forwardRef<any, Props>((props, ref) => {
           try {
             const exists = await RNFS.exists(finalPath);
             console.log('[WindowsVideoStorage] fileExists after record =', exists);
+            if (exists) {
+              const stat = await RNFS.stat(finalPath);
+              console.log('[HistoryVideo] file size after stop =', Number(stat?.size || 0));
+            }
           } catch (existsError) {
             console.log('[WindowsVideoStorage] fileExists after record =', false, existsError);
           }
