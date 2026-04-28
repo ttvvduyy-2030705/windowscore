@@ -1,4 +1,4 @@
-import React, {memo, useCallback, useEffect, useMemo, useState} from 'react';
+import React, {memo, useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {
   DeviceEventEmitter,
   Image as RNImage,
@@ -221,7 +221,14 @@ const PlayBackWebcam = (props: PlayBackWebcamViewModelProps) => {
   const loadScoreboardTimeline = useCallback(async () => {
     try {
       const timeline = await loadReplayScoreboardTimeline(props.webcamFolderName);
-      setScoreboardTimeline(timeline?.entries || []);
+      const entries = timeline?.entries || [];
+      setScoreboardTimeline(entries);
+      console.log(props.returnToMatch ? '[ReplayOverlaySync]' : '[HistoryOverlaySync]', {
+        event: 'timelineLoadedForPlayback',
+        webcamFolderName: props.webcamFolderName,
+        overlayTimelineEventsCount: entries.length,
+        usingLiveState: false,
+      });
     } catch (error) {
       console.log('[Playback] load scoreboard timeline error:', error);
       setScoreboardTimeline([]);
@@ -598,8 +605,62 @@ const PlayBackWebcam = (props: PlayBackWebcamViewModelProps) => {
     thumbnailOverlay,
   ]);
 
+  const activeTimelineEntry = useMemo(() => {
+    return findTimelineEntryForPlayback();
+  }, [findTimelineEntryForPlayback]);
+
+  const lastOverlaySyncLogRef = useRef('');
+
+  useEffect(() => {
+    const logKey = JSON.stringify({
+      source: props.returnToMatch ? 'Replay' : 'History',
+      path: currentVideoPath,
+      segment: viewModel.currentSegmentNumber,
+      time: Math.floor(Number(playbackCurrentTime || 0) * 2) / 2,
+      eventTime: activeTimelineEntry?.segmentTime,
+      scoreAt: activeTimelineEntry?.savedAt,
+    });
+
+    if (lastOverlaySyncLogRef.current === logKey) {
+      return;
+    }
+
+    lastOverlaySyncLogRef.current = logKey;
+
+    const tag = props.returnToMatch ? '[ReplayOverlaySync]' : '[HistoryOverlaySync]';
+    console.log(tag, {
+      replayVideoPath: props.returnToMatch ? currentVideoPath : undefined,
+      historyVideoPath: props.returnToMatch ? undefined : currentVideoPath,
+      historyDurationMs: props.returnToMatch ? undefined : Math.round((currentVideoDuration || 0) * 1000),
+      replayStartMatchElapsedMs: undefined,
+      replayDurationMs: props.returnToMatch ? Math.round((currentVideoDuration || 0) * 1000) : undefined,
+      playerCurrentTimeMs: Math.round(Number(playbackCurrentTime || 0) * 1000),
+      overlayLookupTimeMs: Math.round(Number(playbackCurrentTime || 0) * 1000),
+      selectedOverlayEventTimeMs: activeTimelineEntry
+        ? Math.round(Number(activeTimelineEntry.segmentTime || 0) * 1000)
+        : undefined,
+      selectedScoreSnapshot: activeTimelineEntry
+        ? {
+            currentPlayerIndex: activeTimelineEntry.currentPlayerIndex,
+            countdownTime: activeTimelineEntry.countdownTime,
+            totalTurns: activeTimelineEntry.totalTurns,
+          }
+        : undefined,
+      overlayTimelineEventsCount: scoreboardTimeline.length,
+      usingLiveState: false,
+    });
+  }, [
+    activeTimelineEntry,
+    currentVideoDuration,
+    currentVideoPath,
+    playbackCurrentTime,
+    props.returnToMatch,
+    scoreboardTimeline.length,
+    viewModel.currentSegmentNumber,
+  ]);
+
   const playbackScoreboardProps = useMemo(() => {
-    const timelineEntry = findTimelineEntryForPlayback();
+    const timelineEntry = activeTimelineEntry;
     const resolvedCategory = timelineEntry?.category ?? gameSettings?.category;
 
     if (timelineEntry?.playerSettings) {
@@ -633,27 +694,24 @@ const PlayBackWebcam = (props: PlayBackWebcamViewModelProps) => {
       };
     }
 
-    const hasMatchingSnapshot =
-      replaySnapshot?.webcamFolderName === props.webcamFolderName;
+    console.log(props.returnToMatch ? '[ReplayOverlaySync]' : '[HistoryOverlaySync]', {
+      event: 'noTimelineSnapshotForPlayback',
+      replayVideoPath: props.returnToMatch ? currentVideoPath : undefined,
+      historyVideoPath: props.returnToMatch ? undefined : currentVideoPath,
+      playerCurrentTimeMs: Math.round(Number(playbackCurrentTime || 0) * 1000),
+      overlayTimelineEventsCount: scoreboardTimeline.length,
+      usingLiveState: false,
+      reason: 'No timeline entry matched current video time; do not render live/current match state over old video.',
+    });
 
-    if (!hasMatchingSnapshot || !replaySnapshot?.playerSettings) {
-      return null;
-    }
-
-    return {
-      category: gameSettings?.category,
-      gameSettings,
-      playerSettings: replaySnapshot.playerSettings,
-      currentPlayerIndex: replaySnapshot.currentPlayerIndex ?? 0,
-      countdownTime:
-        replaySnapshot.countdownTime ?? gameSettings?.mode?.countdownTime ?? 0,
-      totalTurns: replaySnapshot.totalTurns ?? 1,
-    };
+    return null;
   }, [
-    findTimelineEntryForPlayback,
+    activeTimelineEntry,
+    currentVideoPath,
     gameSettings,
-    props.webcamFolderName,
-    replaySnapshot,
+    playbackCurrentTime,
+    props.returnToMatch,
+    scoreboardTimeline.length,
   ]);
 
   const shouldShowPlaybackMatchOverlay = useMemo(() => {
@@ -804,7 +862,7 @@ const PlayBackWebcam = (props: PlayBackWebcamViewModelProps) => {
                     playerSource: props.returnToMatch ? 'Replay' : 'History',
                   });
                 }}
-                startAtTailSeconds={props.returnToMatch ? 30 : 0}
+                startAtTailSeconds={props.returnToMatch ? 60 : 0}
                 onLoad={data => {
                   console.log('[VideoFreezeGuard]', {
                     action: 'playerLoad',
@@ -824,8 +882,8 @@ const PlayBackWebcam = (props: PlayBackWebcamViewModelProps) => {
                   setPlaybackCurrentTime(0);
                   viewModel.handleLoad();
 
-                  if (props.returnToMatch && duration > 30.05) {
-                    const replayStartTime = Math.max(0, duration - 30);
+                  if (props.returnToMatch && duration > 60.05) {
+                    const replayStartTime = Math.max(0, duration - 60);
                     try {
                       viewModel.videoRef.current?.seek?.(replayStartTime);
                       setPlaybackCurrentTime(replayStartTime);

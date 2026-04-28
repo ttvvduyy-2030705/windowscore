@@ -1,0 +1,9 @@
+<Project>
+  <!-- Late fallback for native Windows dependencies that still leave the min version unset. -->
+  <PropertyGroup Condition="'$(TargetPlatformMinVersion)' == '' Or '$(TargetPlatformMinVersion)' == '0'">
+    <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(WindowsTargetPlatformMinVersion)' == '' Or '$(WindowsTargetPlatformMinVersion)' == '0'">
+    <WindowsTargetPlatformMinVersion>10.0.17763.0</WindowsTargetPlatformMinVersion>
+  </PropertyGroup>
+</Project>

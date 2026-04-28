@@ -3,8 +3,8 @@ import RNFS from 'react-native-fs';
 export const RECORDING_SEGMENT_DURATION_MS = 30 * 1000;
 export const MAX_REPLAY_STORAGE_BYTES = 2 * 1024 * 1024 * 1024;
 export const VIDEO_STORAGE_CLEANUP_THRESHOLD_BYTES = 1536 * 1024 * 1024;
-export const REPLAY_WINDOW_SEGMENTS = 1;
-export const REPLAY_WINDOW_SECONDS = 30;
+export const REPLAY_WINDOW_SEGMENTS = 2;
+export const REPLAY_WINDOW_SECONDS = 60;
 
 export const WINDOWS_VIDEO_FOLDER_NAME = 'Aplus Score';
 const WINDOWS_USERPROFILE_DIR = String((globalThis as any)?.process?.env?.USERPROFILE || '').replace(/\\/g, '/');
@@ -515,6 +515,14 @@ export const buildWindowsRecordingOutputPath = async (
     targetWindowSeconds: REPLAY_WINDOW_SECONDS,
     currentSegmentPath: outputFile,
   });
+  console.log('[HistoryRecording]', {
+    event: 'startFullMatch',
+    segmentMode: true,
+    segmentIndex,
+    outputPath: outputFile,
+    segmentPath: outputFile,
+    segmentStartMs: Date.now(),
+  });
 
   return outputFile;
 };
@@ -704,8 +712,17 @@ export const listReplayFiles = async (webcamFolderName: string) => {
     .slice(-REPLAY_WINDOW_SEGMENTS);
 
   if (files.length) {
+    const estimatedSelectedTotalDuration = Math.min(
+      REPLAY_WINDOW_SECONDS,
+      files.length * (RECORDING_SEGMENT_DURATION_MS / 1000),
+    );
+    const reasonIfShorterThanTarget =
+      estimatedSelectedTotalDuration < REPLAY_WINDOW_SECONDS
+        ? `only ${files.length} finalized replay segment(s) available`
+        : undefined;
+
     console.log('[Replay] selected replay segments', files.map(file => file.path));
-    console.log('[Replay] replay duration', `target=${REPLAY_WINDOW_SECONDS}s`);
+    console.log('[Replay] replay duration', `target=${REPLAY_WINDOW_SECONDS}s estimated=${estimatedSelectedTotalDuration}s`);
     console.log('[VideoStorage] replay file selected', files[files.length - 1]?.path);
     console.log('[ReplayRecorder]', {
       event: 'latest',
@@ -714,9 +731,15 @@ export const listReplayFiles = async (webcamFolderName: string) => {
     });
     console.log('[ReplayBuffer]', {
       event: 'latestPlayableReplayPath',
-      latestPlayableReplayPath: files[files.length - 1]?.path,
-      finalizedSegmentSize: Number(files[files.length - 1]?.size || 0),
       targetWindowSeconds: REPLAY_WINDOW_SECONDS,
+      segmentDurationSeconds: RECORDING_SEGMENT_DURATION_MS / 1000,
+      finalizedSegmentsCount: discoveredFiles.length,
+      selectedSegments: files.map(file => file.path),
+      selectedTotalDuration: estimatedSelectedTotalDuration,
+      latestPlayableReplayPath: files[files.length - 1]?.path,
+      replayDurationMs: estimatedSelectedTotalDuration * 1000,
+      reasonIfShorterThanTarget,
+      finalizedSegmentSize: Number(files[files.length - 1]?.size || 0),
     });
   } else {
     const zeroFile = discoveredFiles.find(file => Number(file.size || 0) <= 0);
@@ -850,6 +873,33 @@ export const registerReplaySegment = async (
   );
 
   const manifest = await getManifest(webcamFolderName);
+  const previousSegment = manifest.segments
+    .filter(item => item.segmentIndex < segmentIndex)
+    .sort((a, b) => b.segmentIndex - a.segmentIndex)[0];
+  const segmentStartMs = Number(options.segmentStartedAt || now);
+  const segmentEndMs = now;
+  const gapFromPreviousSegmentMs = previousSegment?.finalizedAt
+    ? Math.max(0, segmentStartMs - Number(previousSegment.finalizedAt || 0))
+    : 0;
+  const segmentDurationMs = Math.max(
+    0,
+    Number(options.durationSeconds || 0) > 0
+      ? Number(options.durationSeconds || 0) * 1000
+      : segmentEndMs - segmentStartMs,
+  );
+
+  console.log('[HistoryRecording]', {
+    event: 'finalizeSegment',
+    segmentMode: true,
+    segmentIndex,
+    segmentPath: finalHistoryPath,
+    segmentStartMs,
+    segmentEndMs,
+    segmentDurationMs,
+    segmentSize: sizeBytes,
+    gapFromPreviousSegmentMs,
+  });
+
   manifest.matchId = options.matchSessionId || manifest.matchId || webcamFolderName;
   manifest.keepFullMatch = true;
   manifest.status = 'recording';
@@ -863,14 +913,28 @@ export const registerReplaySegment = async (
       fileName,
       path: finalHistoryPath,
       replayTempPath,
-      createdAt: options.segmentStartedAt || now,
+      createdAt: segmentStartMs,
       finalizedAt: now,
-      durationSeconds: options.durationSeconds,
+      durationSeconds: options.durationSeconds ?? segmentDurationMs / 1000,
       sizeBytes: effectiveSizeBytes,
     },
   ].sort((a, b) => a.segmentIndex - b.segmentIndex);
 
   await saveManifest(webcamFolderName, manifest);
+
+  console.log('[HistoryRecording]', {
+    event: 'segmentSaved',
+    segmentMode: true,
+    finalOutputPath: historyFolder,
+    finalDurationMs: manifest.segments.reduce(
+      (sum, segment) => sum + Math.max(0, Number(segment.durationSeconds || 0) * 1000),
+      0,
+    ),
+    finalSize: manifest.segments.reduce(
+      (sum, segment) => sum + Math.max(0, Number(segment.sizeBytes || 0)),
+      0,
+    ),
+  });
 
   console.log('[HistoryVideo] segment finalized', finalHistoryPath);
   console.log('[HistoryVideo] segment duration', options.durationSeconds ?? 'unknown');
@@ -898,7 +962,21 @@ export const exportMatchToArchive = async (webcamFolderName: string) => {
   manifest.exportedAt = Date.now();
 
   await saveManifest(webcamFolderName, manifest);
-  return ensureArchiveFolder(webcamFolderName);
+  const archiveFolder = await ensureArchiveFolder(webcamFolderName);
+  console.log('[HistoryRecording]', {
+    event: 'stopFullMatchRecording',
+    segmentMode: true,
+    finalOutputPath: archiveFolder,
+    finalDurationMs: manifest.segments.reduce(
+      (sum, segment) => sum + Math.max(0, Number(segment.durationSeconds || 0) * 1000),
+      0,
+    ),
+    finalSize: manifest.segments.reduce(
+      (sum, segment) => sum + Math.max(0, Number(segment.sizeBytes || 0)),
+      0,
+    ),
+  });
+  return archiveFolder;
 };
 
 export const pruneReplayStorage = async (

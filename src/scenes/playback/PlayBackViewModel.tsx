@@ -4,7 +4,15 @@ import {OnVideoErrorData, VideoRef} from 'react-native-video';
 import RNFS from 'react-native-fs';
 
 import i18n from 'i18n';
-import {extractReplaySegmentIndex, listPlayableFiles, listReplayFiles, resolveReplayFolder, waitForReplayFiles, normalizeWindowsVideoUri} from 'services/replay/localReplay';
+import {
+  REPLAY_WINDOW_SECONDS,
+  extractReplaySegmentIndex,
+  listPlayableFiles,
+  listReplayFiles,
+  resolveReplayFolder,
+  waitForReplayFiles,
+  normalizeWindowsVideoUri,
+} from 'services/replay/localReplay';
 
 export interface PlayBackWebcamViewModelProps {
   webcamFolderName: string;
@@ -128,12 +136,7 @@ const PlayBackWebcamViewModel = (props: PlayBackWebcamViewModelProps) => {
       setVideoFiles(files);
       setTotalFiles(files.length);
 
-      const initialIndex =
-        props.returnToMatch && files.length > 0
-          ? files.length - 1
-          : files.length === 0
-            ? 0
-            : 0;
+      const initialIndex = files.length === 0 ? 0 : 0;
 
       setCurrentIndex(initialIndex);
       setCurrentSegmentNumber(
@@ -146,8 +149,22 @@ const PlayBackWebcamViewModel = (props: PlayBackWebcamViewModelProps) => {
       setIsPlaying(files.length > 0);
 
       if (props.returnToMatch) {
+        const estimatedReplayDuration = Math.min(
+          REPLAY_WINDOW_SECONDS,
+          Math.max(0, files.length) * 30,
+        );
         console.log('[Replay] selected replay segments', files.map(file => file.path));
-        console.log('[Replay] replay duration', 'target=30s');
+        console.log('[Replay] replay duration', `target=${REPLAY_WINDOW_SECONDS}s estimated=${estimatedReplayDuration}s`);
+        console.log('[ReplayBuffer]', {
+          targetWindowSeconds: REPLAY_WINDOW_SECONDS,
+          finalizedSegmentsCount: files.length,
+          selectedSegments: files.map(file => file.path),
+          selectedTotalDuration: estimatedReplayDuration,
+          reasonIfShorterThanTarget:
+            estimatedReplayDuration < REPLAY_WINDOW_SECONDS
+              ? `only ${files.length} finalized segment(s) available`
+              : undefined,
+        });
       }
 
       if (files.length === 0) {

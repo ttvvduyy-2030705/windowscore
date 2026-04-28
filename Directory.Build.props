@@ -1,0 +1,19 @@
+<Project>
+  <!--
+    Keep Windows native dependencies (for example react-native-linear-gradient / Microsoft.UI.Xaml)
+    on the same minimum Windows target as the app. Without this, some node_modules
+    vcxproj files evaluate TargetPlatformMinVersion as 0 and MSBuild fails with:
+    "Microsoft.UI.Xaml nuget package requires TargetPlatformMinVersion >= 10.0.17763.0".
+  -->
+  <PropertyGroup>
+    <AplusDefaultWindowsTargetPlatformMinVersion>10.0.17763.0</AplusDefaultWindowsTargetPlatformMinVersion>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(TargetPlatformMinVersion)' == '' Or '$(TargetPlatformMinVersion)' == '0'">
+    <TargetPlatformMinVersion>$(AplusDefaultWindowsTargetPlatformMinVersion)</TargetPlatformMinVersion>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(WindowsTargetPlatformMinVersion)' == '' Or '$(WindowsTargetPlatformMinVersion)' == '0'">
+    <WindowsTargetPlatformMinVersion>$(AplusDefaultWindowsTargetPlatformMinVersion)</WindowsTargetPlatformMinVersion>
+  </PropertyGroup>
+</Project>

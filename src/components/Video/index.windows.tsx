@@ -102,7 +102,7 @@ const VideoWindows = forwardRef<any, Props>((props, ref) => {
   const recordingStateRef = useRef<'idle' | 'starting' | 'recording' | 'stopping'>('idle');
 
   useEffect(() => {
-    console.log('[Build Info] windows-video-fix=v23-storagefile-native-player-render-fix');
+    console.log('[Build Info] windows-video-fix=v24-replay60-overlaytimeline-historysync');
   }, []);
 
   const buildRecordingPath = useCallback(async (options?: RecordingCallbacks) => {
