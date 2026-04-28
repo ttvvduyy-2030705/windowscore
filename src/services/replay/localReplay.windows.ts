@@ -31,6 +31,7 @@ type ReadDirItem = {
   name: string;
   path: string;
   size: number;
+  createdAtMs?: number;
   isFile: () => boolean;
   isDirectory: () => boolean;
 };
@@ -577,6 +578,66 @@ export const extractReplaySegmentIndex = (filePathOrName?: string | null) => {
     : Math.max(0, parsed);
 };
 
+const enrichFilesWithManifestTimes = async (
+  webcamFolderName: string,
+  files: ReadDirItem[],
+  source: 'replay' | 'history',
+) => {
+  if (!files.length) {
+    return files;
+  }
+
+  try {
+    const manifest = await getManifest(webcamFolderName);
+
+    return files.map(file => {
+      const segmentIndex = extractReplaySegmentIndex(file.name);
+      const normalizedFilePath = normalizePath(file.path);
+      const segment = manifest.segments.find(item => {
+        const candidatePath = source === 'replay'
+          ? item.replayTempPath || item.path
+          : item.path;
+
+        if (normalizePath(candidatePath) === normalizedFilePath) {
+          return true;
+        }
+
+        return Number.isFinite(segmentIndex) && item.segmentIndex === segmentIndex;
+      });
+      const createdAtMs = Number(segment?.createdAt || safeMtime(file) || Date.now());
+      const createdAtDate = new Date(createdAtMs);
+
+      console.log('[ReplayTimeFormat]', {
+        rawTimestamp: createdAtMs,
+        parsedDate: createdAtDate.toString(),
+        timezoneOffsetMinutes: createdAtDate.getTimezoneOffset(),
+        formattedLocalTime:
+          String(createdAtDate.getHours()).padStart(2, '0') +
+          ':' +
+          String(createdAtDate.getMinutes()).padStart(2, '0'),
+        formattedOldWrongTime: createdAtDate.toISOString().slice(11, 16),
+        source: segment ? 'createdAtMs' : 'mtime',
+        filePath: file.path,
+      });
+
+      return {
+        ...file,
+        createdAtMs,
+        ctime: file.ctime || createdAtDate,
+        mtime: createdAtDate,
+      };
+    });
+  } catch (error) {
+    console.log('[ReplayTimeFormat]', {
+      event: 'manifest-time-enrich-failed',
+      webcamFolderName,
+      source,
+      error,
+    });
+    return files;
+  }
+};
+
 const copySegmentToReplayTemp = async (
   webcamFolderName: string,
   historySegmentPath: string,
@@ -726,7 +787,11 @@ const cleanupStaleReplayTemp = async (protectedFolderNames: string[] = []) => {
 
 export const listReplayFiles = async (webcamFolderName: string) => {
   const folderPath = await ensureReplayFolder(webcamFolderName);
-  const discoveredFiles = await readVideoFiles(folderPath, true);
+  const discoveredFiles = await enrichFilesWithManifestTimes(
+    webcamFolderName,
+    await readVideoFiles(folderPath, true),
+    'replay',
+  );
 
   for (const file of discoveredFiles) {
     console.log('[ReplayRecorder]', {
@@ -789,7 +854,11 @@ export const listReplayFiles = async (webcamFolderName: string) => {
 
 export const listArchiveFiles = async (webcamFolderName: string) => {
   const folderPath = await ensureArchiveFolder(webcamFolderName);
-  return readVideoFiles(folderPath, true);
+  return enrichFilesWithManifestTimes(
+    webcamFolderName,
+    await readVideoFiles(folderPath, true),
+    'history',
+  );
 };
 
 export const listPlayableFiles = async (

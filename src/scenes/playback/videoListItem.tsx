@@ -1,9 +1,9 @@
-import React from 'react';
+import React, {useMemo} from 'react';
 import {Text, TouchableOpacity, View} from 'react-native';
 
-import {responsiveDimension} from 'utils/helper';
+import useDesignSystem from 'theme/useDesignSystem';
 
-import styles from './styles';
+import createStyles from './styles';
 
 export interface VideoListItemProps {
   index: number;
@@ -13,9 +13,13 @@ export interface VideoListItemProps {
   currentIndex: number;
 }
 
-const thumbnailSize = responsiveDimension(40);
-
 const VideoListItem = (props: VideoListItemProps) => {
+  const {adaptive, design} = useDesignSystem();
+  const styles = useMemo(
+    () => createStyles(adaptive, design),
+    [adaptive.styleKey, design],
+  );
+
   return (
     <TouchableOpacity
       style={[
@@ -28,13 +32,6 @@ const VideoListItem = (props: VideoListItemProps) => {
         props.onPress(props.index);
       }}>
       <View style={styles.details}>
-        <View
-          style={[
-            styles.thumbnailPlaceholder,
-            {width: thumbnailSize, height: thumbnailSize},
-          ]}>
-          <Text style={styles.thumbnailIndex}>{props.index + 1}</Text>
-        </View>
         <Text style={styles.duration}>{props.time}</Text>
       </View>
     </TouchableOpacity>

@@ -23,6 +23,15 @@ type HistoryGameItem = GameSettings & {
 
 const FALLBACK_PLAYER_COLORS = ['#D82027', '#007AFF', '#34C759', '#FF9500'];
 
+const getHistoryScoreTotal = (game?: HistoryGameItem | GameSettings) => {
+  const players = game?.players?.playingPlayers || [];
+  return players.reduce(
+    (sum: number, player: any) =>
+      sum + Number(player?.totalPoint ?? player?.point ?? 0),
+    0,
+  );
+};
+
 const buildFallbackPlayers = (
   playerNames?: string[],
   finalScore?: number[],
@@ -121,16 +130,54 @@ const HistoryViewModel = () => {
 
   const combinedGames = useMemo(() => {
     const realmGames = games || [];
+    const scannedByWebcamFolder = new Map(
+      scannedHistoryGames
+        .map(game => [String(game.webcamFolderName || ''), game] as const)
+        .filter(([webcamFolderName]) => webcamFolderName.length > 0),
+    );
     const knownWebcamFolders = new Set(
       realmGames.map(game => String(game.webcamFolderName || '')).filter(Boolean),
     );
+
+    const mergedRealmGames = realmGames.map(game => {
+      const webcamFolderName = String(game.webcamFolderName || '');
+      const scannedGame = scannedByWebcamFolder.get(webcamFolderName);
+
+      if (!scannedGame) {
+        return game;
+      }
+
+      const realmScoreTotal = getHistoryScoreTotal(game);
+      const scannedScoreTotal = getHistoryScoreTotal(scannedGame);
+
+      if (scannedScoreTotal > realmScoreTotal) {
+        console.log('[HistoryFinalize]', {
+          event: 'history-list-score-overridden-from-manifest',
+          webcamFolderName,
+          realmScoreTotal,
+          scannedScoreTotal,
+          savedHistoryScore: scannedGame.players?.playingPlayers?.map((player: any) =>
+            Number(player?.totalPoint ?? player?.point ?? 0),
+          ),
+        });
+
+        return {
+          ...game,
+          players: scannedGame.players,
+          totalTime: scannedGame.totalTime || game.totalTime,
+          updatedAt: scannedGame.updatedAt || game.updatedAt,
+        } as HistoryGameItem;
+      }
+
+      return game;
+    });
 
     const scannedOnly = scannedHistoryGames.filter(game => {
       const webcamFolderName = String(game.webcamFolderName || '');
       return webcamFolderName.length > 0 && !knownWebcamFolders.has(webcamFolderName);
     });
 
-    return [...realmGames, ...scannedOnly].sort(
+    return [...mergedRealmGames, ...scannedOnly].sort(
       (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
     );
   }, [games, scannedHistoryGames]);

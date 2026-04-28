@@ -36,6 +36,7 @@ type WindowsVideoProps = {
   onEnd?: () => void;
   onError?: (error: any) => void;
   onReadyForDisplay?: () => void;
+  progressUpdateInterval?: number;
   startAtTailSeconds?: number;
   renderLoader?: React.ReactNode;
   [key: string]: any;
@@ -103,6 +104,7 @@ const VideoWindows = forwardRef<any, WindowsVideoProps>((props, ref) => {
     onEnd,
     onError,
     onReadyForDisplay,
+    progressUpdateInterval = 100,
     startAtTailSeconds = 0,
   } = props;
 
@@ -264,19 +266,22 @@ const VideoWindows = forwardRef<any, WindowsVideoProps>((props, ref) => {
     }, 0);
   }, [effectiveSourceUri, source, startAtTailSeconds]);
 
+  const clampedRate = Math.min(2, Math.max(0.1, Number(rate || 1)));
+
   useEffect(() => {
     if (effectivePaused || !effectiveSourceUri) {
       return undefined;
     }
 
+    const intervalMs = Math.max(80, Number(progressUpdateInterval || 100));
     const timer = setInterval(() => {
-      currentTimeRef.current += 0.5;
+      currentTimeRef.current += (intervalMs / 1000) * clampedRate;
       setCurrentTime(currentTimeRef.current);
       onProgressRef.current?.({currentTime: currentTimeRef.current});
-    }, 500);
+    }, intervalMs);
 
     return () => clearInterval(timer);
-  }, [effectivePaused, effectiveSourceUri]);
+  }, [clampedRate, effectivePaused, effectiveSourceUri, progressUpdateInterval]);
 
   useEffect(() => {
     if (Platform.OS !== 'windows') {
@@ -295,7 +300,7 @@ const VideoWindows = forwardRef<any, WindowsVideoProps>((props, ref) => {
         sourceUri={effectiveSourceUri}
         paused={effectivePaused}
         controls={controls}
-        rate={Number(rate || 1)}
+        rate={clampedRate}
         resizeMode={resizeMode}
         startAtTailSeconds={Number(startAtTailSeconds || 0)}
       />

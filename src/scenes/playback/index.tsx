@@ -61,6 +61,7 @@ const setReplayReturnRequestSync = (
 
 const REPLAY_RESUME_SNAPSHOT_STORAGE_KEY = '@APLUS_REPLAY_RESUME_SNAPSHOT_V3';
 const PLAYBACK_NATIVE_CONTROLS_BOTTOM_INSET = 100;
+const PLAYBACK_RATE_OPTIONS = [1, 1.25, 1.5, 1.75, 2];
 
 type PlaybackThumbnailOverlayState = {
   enabled: boolean;
@@ -84,6 +85,31 @@ const EMPTY_THUMBNAIL_OVERLAY: PlaybackThumbnailOverlayState = {
   topRight: [],
   bottomLeft: [],
   bottomRight: [],
+};
+
+const formatLocalReplayClipTime = (item: any) => {
+  const rawTimestamp = Number(
+    item?.createdAtMs ||
+      item?.createdAt ||
+      (item?.mtime instanceof Date ? item.mtime.getTime() : 0) ||
+      (item?.ctime instanceof Date ? item.ctime.getTime() : 0) ||
+      0,
+  );
+  const date = Number.isFinite(rawTimestamp) && rawTimestamp > 0
+    ? new Date(rawTimestamp)
+    : new Date();
+  const formattedLocalTime =
+    String(date.getHours()).padStart(2, '0') +
+    ':' +
+    String(date.getMinutes()).padStart(2, '0');
+  const formattedOldWrongTime = date.toISOString().slice(11, 16);
+
+  return {
+    rawTimestamp,
+    parsedDate: date,
+    formattedLocalTime,
+    formattedOldWrongTime,
+  };
 };
 
 const normalizePlaybackVideoUri = (inputPath?: string | null) => {
@@ -148,6 +174,7 @@ const PlayBackWebcam = (props: PlayBackWebcamViewModelProps) => {
   const [scoreboardTimeline, setScoreboardTimeline] =
     useState<ReplayScoreboardTimelineEntry[]>([]);
   const [playbackCurrentTime, setPlaybackCurrentTime] = useState(0);
+  const [playbackRate, setPlaybackRate] = useState(1);
 
   const loadThumbnailOverlay = useCallback(async () => {
     try {
@@ -239,6 +266,25 @@ const PlayBackWebcam = (props: PlayBackWebcamViewModelProps) => {
   useEffect(() => {
     setPlaybackCurrentTime(0);
   }, [viewModel.currentIndex]);
+
+  const cyclePlaybackRate = useCallback(() => {
+    setPlaybackRate(currentRate => {
+      const currentIndex = PLAYBACK_RATE_OPTIONS.findIndex(rate => rate === currentRate);
+      const nextRate =
+        PLAYBACK_RATE_OPTIONS[(currentIndex + 1) % PLAYBACK_RATE_OPTIONS.length] || 1;
+      const appliedRate = Math.min(2, Math.max(1, nextRate));
+
+      console.log('[PlaybackRate]', {
+        requestedRate: nextRate,
+        appliedRate,
+        maxRate: 2,
+        sourceType: props.returnToMatch ? 'replay' : 'history',
+        playerSupportsRate: Platform.OS === 'windows',
+      });
+
+      return appliedRate;
+    });
+  }, [props.returnToMatch]);
 
   useEffect(() => {
     resolveReplayFolder(props.webcamFolderName).then(path => {
@@ -401,6 +447,39 @@ const PlayBackWebcam = (props: PlayBackWebcamViewModelProps) => {
 
   const currentVideoDuration =
     viewModel.videoDurations[currentVideoPath] || 0;
+
+  const currentClipDisplay = useMemo(
+    () => formatLocalReplayClipTime(viewModel.videoFiles?.[viewModel.currentIndex]),
+    [viewModel.currentIndex, viewModel.videoFiles],
+  );
+
+  useEffect(() => {
+    if (!viewModel.videoFiles.length) {
+      return;
+    }
+
+    console.log('[ReplayClipSelector]', {
+      clipsCount: viewModel.videoFiles.length,
+      selectedClipIndex: viewModel.currentIndex,
+      selectedClipPath: currentVideoPath,
+      selectedClipDisplayTime: currentClipDisplay.formattedLocalTime,
+    });
+    console.log('[ReplayTimeFormat]', {
+      rawTimestamp: currentClipDisplay.rawTimestamp,
+      parsedDate: currentClipDisplay.parsedDate.toString(),
+      timezoneOffsetMinutes: currentClipDisplay.parsedDate.getTimezoneOffset(),
+      formattedLocalTime: currentClipDisplay.formattedLocalTime,
+      formattedOldWrongTime: currentClipDisplay.formattedOldWrongTime,
+      source: (viewModel.videoFiles?.[viewModel.currentIndex] as any)?.createdAtMs
+        ? 'createdAtMs'
+        : 'mtime',
+    });
+  }, [
+    currentClipDisplay,
+    currentVideoPath,
+    viewModel.currentIndex,
+    viewModel.videoFiles,
+  ]);
 
   useEffect(() => {
     if (Platform.OS !== 'windows' || !currentVideoPath) {
@@ -782,6 +861,30 @@ const PlayBackWebcam = (props: PlayBackWebcamViewModelProps) => {
     scoreboardTimeline.length,
   ]);
 
+  const lastTimerSyncLogRef = useRef(0);
+  useEffect(() => {
+    const now = Date.now();
+    if (now - lastTimerSyncLogRef.current < 1000) {
+      return;
+    }
+
+    lastTimerSyncLogRef.current = now;
+    console.log('[PlaybackTimerSync]', {
+      sourceType: props.returnToMatch ? 'replay' : 'history',
+      onProgressCurrentTimeMs: Math.round(Number(playbackCurrentTime || 0) * 1000),
+      interpolatedCurrentTimeMs: Math.round(Number(playbackCurrentTime || 0) * 1000),
+      paused: false,
+      playbackRate,
+      countdownValue: playbackScoreboardProps?.countdownTime,
+      usedLiveTimer: false,
+    });
+  }, [
+    playbackCurrentTime,
+    playbackRate,
+    props.returnToMatch,
+    playbackScoreboardProps?.countdownTime,
+  ]);
+
   const shouldShowPlaybackMatchOverlay = useMemo(() => {
     if (!playbackScoreboardProps) {
       return false;
@@ -861,20 +964,29 @@ const PlayBackWebcam = (props: PlayBackWebcamViewModelProps) => {
           </View>
           <View flex={'1'} style={{alignItems: 'center'}}>
             {viewModel.videoFiles.length > 0 ? (
-              <ScrollView
-                showsVerticalScrollIndicator={false}
-                style={{height: 300}}>
-                {viewModel.videoFiles.map((item, index) => (
-                  <VideoListItem
-                    key={index}
-                    time={item.mtime?.toLocaleTimeString()}
-                    path={item.path}
-                    onPress={() => onPress(index, item.path)}
-                    index={index}
-                    currentIndex={viewModel.currentIndex}
-                  />
-                ))}
-              </ScrollView>
+              <>
+                <Text style={styles.selectorTitle}>Chọn đoạn xem lại</Text>
+                <ScrollView
+                  showsVerticalScrollIndicator={false}
+                  style={styles.selectorScroll}>
+                  {viewModel.videoFiles.map((item, index) => {
+                    const clipTime = formatLocalReplayClipTime(item).formattedLocalTime;
+                    return (
+                      <VideoListItem
+                        key={`${item.path}-${index}`}
+                        time={`${index + 1}. ${clipTime}`}
+                        path={item.path}
+                        onPress={() => onPress(index, item.path)}
+                        index={index}
+                        currentIndex={viewModel.currentIndex}
+                      />
+                    );
+                  })}
+                </ScrollView>
+                <Button style={styles.rateButton} onPress={cyclePlaybackRate}>
+                  <Text style={styles.rateButtonText}>{`Tốc độ: ${playbackRate}x`}</Text>
+                </Button>
+              </>
             ) : (
               <Text lineHeight={15}>No video!</Text>
             )}
@@ -917,8 +1029,8 @@ const PlayBackWebcam = (props: PlayBackWebcamViewModelProps) => {
                   viewModel.onWebcamError(error);
                 }}
                 renderLoader={WEBCAM_LOADER}
-                rate={1}
-                progressUpdateInterval={500}
+                rate={playbackRate}
+                progressUpdateInterval={100}
                 onLoadStart={() => {
                   console.log('[ReplayPlayer]', {
                     event: 'open',
@@ -977,8 +1089,9 @@ const PlayBackWebcam = (props: PlayBackWebcamViewModelProps) => {
                   });
                 }}
                 onProgress={data => {
-                  setPlaybackCurrentTime(data?.currentTime || 0);
-                  viewModel.handleProgress(data);
+                  const currentTime = Number(data?.currentTime || 0);
+                  setPlaybackCurrentTime(currentTime);
+                  viewModel.handleProgress({...data, currentTime});
                 }}
                 onEnd={() => {
                   console.log('[ReplayPlayer]', {
