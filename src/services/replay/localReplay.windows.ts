@@ -553,17 +553,29 @@ const copySegmentToReplayTemp = async (
       segmentPath: historySegmentPath,
       fileExists,
       fileSize,
-      latestReplayPath: fileSize > 0 ? replayPath : undefined,
+      latestReplayPath: fileExists ? replayPath : undefined,
     });
 
-    if (!fileExists || fileSize <= 0) {
+    if (!fileExists) {
       console.log('[ReplayRecorder]', {
         event: 'replay-not-ready',
-        reason: !fileExists ? 'file chưa tồn tại' : 'file size = 0',
+        reason: 'file chưa tồn tại',
         outputPath: replayPath,
         segmentPath: historySegmentPath,
       });
       return undefined;
+    }
+
+    if (fileSize <= 0) {
+      console.log('[ReplayRecorder]', {
+        event: 'replay-size-unknown-accepted',
+        reason: 'Windows stat returned 0 but file exists; allow player to open it',
+        outputPath: replayPath,
+        segmentPath: historySegmentPath,
+        fileExists,
+        fileSize,
+        latestReplayPath: replayPath,
+      });
     }
   } catch (error) {
     console.log('[Replay] replay temp copy failed', {
@@ -613,17 +625,15 @@ export const cleanupBrokenReplayFiles = async (webcamFolderName?: string) => {
     : await readChildDirectories(replayRoot);
 
   for (const folder of folders) {
-    const files = await readVideoFiles(folder.path);
+    const files = await readVideoFiles(folder.path, true);
     for (const file of files) {
-      if (Number(file.size || 0) > 0) {
-        continue;
-      }
-
-      try {
-        await RNFS.unlink(file.path);
-        console.log('[Replay] cleanup temp success', file.path);
-      } catch (error) {
-        console.log('[Replay] cleanup temp fail', {path: file.path, error});
+      if (Number(file.size || 0) <= 0) {
+        console.log('[Replay]', {
+          event: 'cleanup-skip-size-unknown',
+          path: file.path,
+          size: Number(file.size || 0),
+          reason: 'Windows VideosLibrary stat can briefly report 0 for playable files',
+        });
       }
     }
   }
@@ -671,7 +681,7 @@ export const listReplayFiles = async (webcamFolderName: string) => {
   }
 
   const files = discoveredFiles
-    .filter(file => Number(file.size || 0) > 0)
+    .filter(file => file.isFile() && isVideoFile(file.name))
     .slice(-REPLAY_WINDOW_SEGMENTS);
 
   if (files.length) {
@@ -700,7 +710,7 @@ export const listReplayFiles = async (webcamFolderName: string) => {
 
 export const listArchiveFiles = async (webcamFolderName: string) => {
   const folderPath = await ensureArchiveFolder(webcamFolderName);
-  return readVideoFiles(folderPath);
+  return readVideoFiles(folderPath, true);
 };
 
 export const listPlayableFiles = async (
@@ -772,13 +782,26 @@ export const registerReplaySegment = async (
     fileSize: sizeBytes,
   });
 
-  if (!fileExists || sizeBytes <= 0) {
+  if (!fileExists) {
     console.log('[HistoryRecorder]', {
       event: 'history-not-ready',
-      reason: !fileExists ? 'file chưa tồn tại' : 'file size = 0',
+      reason: 'file chưa tồn tại',
       outputPath: finalHistoryPath,
     });
     return undefined;
+  }
+
+  const effectiveSizeBytes = sizeBytes > 0 ? sizeBytes : 1;
+
+  if (sizeBytes <= 0) {
+    console.log('[HistoryRecorder]', {
+      event: 'history-size-unknown-accepted',
+      reason: 'Windows stat returned 0 but file exists; keep it in replay/history',
+      outputPath: finalHistoryPath,
+      fileExists,
+      fileSize: sizeBytes,
+      effectiveSizeBytes,
+    });
   }
 
   const replayTempPath = await copySegmentToReplayTemp(
@@ -804,7 +827,7 @@ export const registerReplaySegment = async (
       createdAt: options.segmentStartedAt || now,
       finalizedAt: now,
       durationSeconds: options.durationSeconds,
-      sizeBytes,
+      sizeBytes: effectiveSizeBytes,
     },
   ].sort((a, b) => a.segmentIndex - b.segmentIndex);
 
@@ -930,7 +953,7 @@ export const listHistoryMatches = async (): Promise<HistoryMatchEntry[]> => {
       }
     }
 
-    const files = await readVideoFiles(folder.path);
+    const files = await readVideoFiles(folder.path, true);
     scannedFileCount += files.length;
 
     if (!files.length) {

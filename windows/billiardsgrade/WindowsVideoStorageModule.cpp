@@ -375,6 +375,38 @@ namespace
         return ec ? 0 : size;
     }
 
+    uint64_t FileSizeFromStorageFile(StorageFile const &file)
+    {
+        uint64_t size = 0;
+
+        try
+        {
+            auto properties = file.GetBasicPropertiesAsync().get();
+            size = properties.Size();
+        }
+        catch (...) {}
+
+        // Files created through KnownFolders::VideosLibrary can be visible and
+        // playable in Explorer while BasicProperties briefly reports 0 inside
+        // the packaged app. Stat/readDir may fall back to the physical path;
+        // folder/file creation still stays on the StorageFolder API.
+        if (size == 0)
+        {
+            try
+            {
+                std::filesystem::path physicalPath(std::wstring(file.Path().c_str()));
+                auto diskSize = FileSizeSafe(physicalPath);
+                if (diskSize > 0)
+                {
+                    size = static_cast<uint64_t>(diskSize);
+                }
+            }
+            catch (...) {}
+        }
+
+        return size;
+    }
+
     std::string ItemJson(std::filesystem::path const &path)
     {
         std::error_code ec;
@@ -409,7 +441,7 @@ namespace
             {
                 auto file = item.as<StorageFile>();
                 auto properties = file.GetBasicPropertiesAsync().get();
-                size = properties.Size();
+                size = FileSizeFromStorageFile(file);
                 mtime = DateTimeToMs(properties.DateModified());
             }
             catch (...) {}

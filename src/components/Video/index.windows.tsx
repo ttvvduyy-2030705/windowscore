@@ -99,7 +99,7 @@ const VideoWindows = forwardRef<any, Props>((props, ref) => {
   const recordingStateRef = useRef<'idle' | 'starting' | 'recording' | 'stopping'>('idle');
 
   useEffect(() => {
-    console.log('[Build Info] windows-video-fix=v15-await-native-finalize-nonzero');
+    console.log('[Build Info] windows-video-fix=v18-build-fix-no-coawait-in-catch');
   }, []);
 
   const buildRecordingPath = useCallback(async (options?: RecordingCallbacks) => {

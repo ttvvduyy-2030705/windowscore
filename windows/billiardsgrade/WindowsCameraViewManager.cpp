@@ -36,6 +36,7 @@ using namespace Microsoft::ReactNative;
 namespace
 {
     MediaCapture g_mediaCapture{nullptr};
+    winrt::agile_ref<MediaCapture> g_mediaCaptureAgile{};
     CoreDispatcher g_cameraDispatcher{nullptr};
     bool g_previewReady = false;
     bool g_isRecording = false;
@@ -101,6 +102,30 @@ namespace
         return dispatcher ? dispatcher.HasThreadAccess() : false;
     }
 
+    MediaCapture GetMediaCaptureForCurrentApartment() noexcept
+    {
+        try
+        {
+            if (g_mediaCaptureAgile)
+            {
+                auto media = g_mediaCaptureAgile.get();
+                if (media)
+                {
+                    return media;
+                }
+            }
+        }
+        catch (hresult_error const &ex)
+        {
+            DebugLog(L"agile MediaCapture get failed: " + std::wstring(ex.message().c_str()));
+        }
+        catch (...)
+        {
+            DebugLog(L"agile MediaCapture get failed: unknown");
+        }
+        return g_mediaCapture;
+    }
+
     IAsyncAction ResumeOnCameraDispatcherAsync()
     {
         auto dispatcher = GetCameraDispatcher();
@@ -158,6 +183,63 @@ namespace
     {
         std::filesystem::path fsPath(path);
         return hstring(fsPath.filename().wstring());
+    }
+
+    uint64_t PhysicalFileSizeSafe(std::wstring const &path)
+    {
+        try
+        {
+            std::error_code ec;
+            std::filesystem::path fsPath(path);
+            if (!std::filesystem::is_regular_file(fsPath, ec) || ec)
+            {
+                return 0;
+            }
+
+            auto size = std::filesystem::file_size(fsPath, ec);
+            return ec ? 0 : static_cast<uint64_t>(size);
+        }
+        catch (...)
+        {
+            return 0;
+        }
+    }
+
+    IAsyncOperation<uint64_t> GetFinalizedFileSizeAsync(StorageFile const &file)
+    {
+        if (!file)
+        {
+            co_return 0;
+        }
+
+        uint64_t size = 0;
+
+        for (int attempt = 0; attempt < 20; ++attempt)
+        {
+            try
+            {
+                auto properties = co_await file.GetBasicPropertiesAsync();
+                size = properties.Size();
+            }
+            catch (...)
+            {
+                size = 0;
+            }
+
+            if (size == 0)
+            {
+                size = PhysicalFileSizeSafe(std::wstring(file.Path().c_str()));
+            }
+
+            if (size > 0)
+            {
+                co_return size;
+            }
+
+            co_await winrt::resume_after(std::chrono::milliseconds(250));
+        }
+
+        co_return size;
     }
 
     IAsyncOperation<StorageFolder> EnsureAplusRootFolderAsync()
@@ -271,10 +353,13 @@ namespace
         {
             co_await ResumeOnCameraDispatcherAsync();
 
-            DebugLog(L"v15 recording command running on camera dispatcher threadAccess=" + BoolText(HasCameraThreadAccess()));
+            DebugLog(L"v17 recording command running on camera dispatcher threadAccess=" + BoolText(HasCameraThreadAccess()));
 
-            auto media = g_mediaCapture;
-            if (!media || !g_previewReady)
+            // Do not keep the MediaCapture COM interface in a local variable across
+            // any awaited storage operation. MediaCapture is apartment/thread-affine;
+            // carrying a captured interface through coroutine suspension can trigger:
+            // "The application called an interface that was marshalled for a different thread."
+            if (!g_previewReady)
             {
                 g_recordingStarting = false;
                 DebugLog(L"recording start failed: preview is not ready");
@@ -290,15 +375,51 @@ namespace
 
             auto file = co_await CreateStorageFileForPathAsync(requestedPath);
             co_await ResumeOnCameraDispatcherAsync();
+            auto filePath = file.Path();
+
+            // Re-open the StorageFile on the camera dispatcher before passing it to
+            // MediaCapture. This avoids passing a StorageFile interface that may have
+            // been marshalled through a different coroutine/apartment.
+            StorageFile recordFile = file;
+            bool reopenStorageFileFailed = false;
+            std::wstring reopenStorageFileError;
+            try
+            {
+                recordFile = co_await StorageFile::GetFileFromPathAsync(filePath);
+                co_await ResumeOnCameraDispatcherAsync();
+                DebugLog(L"recording StorageFile re-opened on camera dispatcher: " + std::wstring(recordFile.Path().c_str()));
+            }
+            catch (hresult_error const &ex)
+            {
+                // C++/WinRT does not allow co_await inside catch blocks. Capture the
+                // failure details here, then resume/log outside the catch.
+                reopenStorageFileFailed = true;
+                reopenStorageFileError = std::wstring(ex.message().c_str());
+                recordFile = file;
+            }
+
+            if (reopenStorageFileFailed)
+            {
+                co_await ResumeOnCameraDispatcherAsync();
+                DebugLog(L"recording StorageFile re-open fallback to created handle: " + reopenStorageFileError);
+            }
+
+            auto media = GetMediaCaptureForCurrentApartment();
+            if (!media || !g_previewReady)
+            {
+                g_recordingStarting = false;
+                DebugLog(L"recording start failed after file create: preview is not ready");
+                throw hresult_error(E_FAIL, L"Windows camera preview is not ready for recording");
+            }
 
             auto profile = MediaEncodingProfile::CreateMp4(VideoEncodingQuality::HD720p);
             DebugLog(L"recording calling StartRecordToStorageFileAsync threadAccess=" + BoolText(HasCameraThreadAccess()));
 
-            co_await media.StartRecordToStorageFileAsync(profile, file);
+            co_await media.StartRecordToStorageFileAsync(profile, recordFile);
             co_await ResumeOnCameraDispatcherAsync();
 
-            g_currentRecordingFile = file;
-            g_lastRecordingPath = file.Path();
+            g_currentRecordingFile = recordFile;
+            g_lastRecordingPath = recordFile.Path();
             g_isRecording = true;
             g_recordingStarting = false;
             DebugLog(L"recording started and file handle is active: " + std::wstring(g_lastRecordingPath.c_str()));
@@ -309,7 +430,7 @@ namespace
             g_isRecording = false;
             g_recordingStarting = false;
             g_currentRecordingFile = nullptr;
-            DebugLog(L"recording start error: " + std::wstring(ex.message().c_str()));
+            DebugLog(L"recording start error: " + std::wstring(ex.message().c_str()) + L" threadAccess=" + BoolText(HasCameraThreadAccess()));
             throw;
         }
         catch (...)
@@ -332,9 +453,9 @@ namespace
             }
 
             co_await ResumeOnCameraDispatcherAsync();
-            DebugLog(L"v15 stop command running on camera dispatcher threadAccess=" + BoolText(HasCameraThreadAccess()));
+            DebugLog(L"v17 stop command running on camera dispatcher threadAccess=" + BoolText(HasCameraThreadAccess()));
 
-            auto media = g_mediaCapture;
+            auto media = GetMediaCaptureForCurrentApartment();
             if (!media || !g_isRecording)
             {
                 g_recordingStopping = false;
@@ -354,8 +475,7 @@ namespace
             {
                 try
                 {
-                    auto properties = co_await g_currentRecordingFile.GetBasicPropertiesAsync();
-                    finalizedSize = properties.Size();
+                    finalizedSize = co_await GetFinalizedFileSizeAsync(g_currentRecordingFile);
                 }
                 catch (hresult_error const &ex)
                 {
@@ -411,6 +531,7 @@ namespace
             if (g_mediaCapture == media)
             {
                 g_mediaCapture = nullptr;
+                g_mediaCaptureAgile = {};
                 g_previewReady = false;
             }
 
@@ -430,7 +551,7 @@ namespace
             g_cameraDispatcher = grid.Dispatcher();
             co_await ResumeOnCameraDispatcherAsync();
 
-            DebugLog(L"v13 dispatcher-owned recorder loaded");
+            DebugLog(L"v17 dispatcher-owned recorder loaded");
             DebugLog(L"enumerate devices start");
 
             auto devices = co_await DeviceInformation::FindAllAsync(DeviceClass::VideoCapture);
@@ -472,6 +593,20 @@ namespace
             capture.Source(mediaCapture);
             grid.Tag(mediaCapture);
             g_mediaCapture = mediaCapture;
+            try
+            {
+                g_mediaCaptureAgile = winrt::make_agile(mediaCapture);
+            }
+            catch (hresult_error const &ex)
+            {
+                DebugLog(L"preview agile MediaCapture create failed: " + std::wstring(ex.message().c_str()));
+                g_mediaCaptureAgile = {};
+            }
+            catch (...)
+            {
+                DebugLog(L"preview agile MediaCapture create failed: unknown");
+                g_mediaCaptureAgile = {};
+            }
 
             DebugLog(L"preview start threadAccess=" + BoolText(HasCameraThreadAccess()));
             co_await mediaCapture.StartPreviewAsync();
@@ -482,6 +617,7 @@ namespace
         catch (hresult_error const &ex)
         {
             g_mediaCapture = nullptr;
+            g_mediaCaptureAgile = {};
             g_previewReady = false;
             DebugLog(L"preview error: " + std::wstring(ex.message().c_str()));
             try
@@ -498,7 +634,7 @@ namespace winrt::billiardsgrade::implementation
 {
     IAsyncOperation<hstring> WindowsCameraStartRecordingAsync(hstring const &requestedPath)
     {
-        DebugLog(L"v15 WindowsCameraStartRecordingAsync awaiting native start: " + std::wstring(requestedPath.c_str()));
+        DebugLog(L"v17 WindowsCameraStartRecordingAsync awaiting native start: " + std::wstring(requestedPath.c_str()));
 
         if (g_isRecording)
         {
@@ -525,7 +661,7 @@ namespace winrt::billiardsgrade::implementation
 
     IAsyncOperation<hstring> WindowsCameraStopRecordingAsync()
     {
-        DebugLog(L"v15 WindowsCameraStopRecordingAsync awaiting native finalize");
+        DebugLog(L"v17 WindowsCameraStopRecordingAsync awaiting native finalize");
 
         if (!g_recordingStopping)
         {
