@@ -314,6 +314,11 @@ const PlayBackWebcam = (props: PlayBackWebcamViewModelProps) => {
     [currentVideoPath],
   );
 
+  const playerKey = useMemo(
+    () => `playback-${props.returnToMatch ? 'replay' : 'history'}-${viewModel.currentIndex}-${currentVideoPath}`,
+    [currentVideoPath, props.returnToMatch, viewModel.currentIndex],
+  );
+
   const currentVideoDuration =
     viewModel.videoDurations[currentVideoPath] || 0;
 
@@ -338,6 +343,7 @@ const PlayBackWebcam = (props: PlayBackWebcamViewModelProps) => {
           requestedPath: currentVideoPath,
           normalizedUri: currentVideoUri,
           playerSource: props.returnToMatch ? 'Replay' : 'History',
+          playerKey,
           error,
         });
       }
@@ -348,6 +354,7 @@ const PlayBackWebcam = (props: PlayBackWebcamViewModelProps) => {
         existsBeforePlay,
         sizeBeforePlay,
         playerSource: props.returnToMatch ? 'Replay' : 'History',
+        playerKey,
       });
 
       if (!existsBeforePlay || sizeBeforePlay <= 0) {
@@ -357,12 +364,39 @@ const PlayBackWebcam = (props: PlayBackWebcamViewModelProps) => {
           requestedPath: currentVideoPath,
           normalizedUri: currentVideoUri,
           playerSource: props.returnToMatch ? 'Replay' : 'History',
-        });
+        playerKey,
+      });
       }
     };
 
     logPlayerState();
-  }, [currentVideoPath, currentVideoUri, props.returnToMatch]);
+  }, [currentVideoPath, currentVideoUri, props.returnToMatch, playerKey]);
+
+  useEffect(() => {
+    if (!currentVideoPath) {
+      return;
+    }
+
+    console.log('[VideoFreezeGuard]', {
+      action: 'openPlayer',
+      reason: 'watch player load/error timeout',
+      asyncOperationStarted: true,
+      playerKey,
+    });
+
+    const timer = setTimeout(() => {
+      console.log('[VideoFreezeGuard]', {
+        action: 'playerWatchdog',
+        reason: 'no onLoad/onError within timeout; pause player to keep UI responsive',
+        preventedFreeze: true,
+        playerKey,
+        requestedPath: currentVideoPath,
+      });
+      setIsPaused(true);
+    }, 10000);
+
+    return () => clearTimeout(timer);
+  }, [currentVideoPath, playerKey]);
 
   const safeSeekTo = useCallback((time: number) => {
     const boundedDuration = Math.max(0, Number(currentVideoDuration || 0));
@@ -732,6 +766,7 @@ const PlayBackWebcam = (props: PlayBackWebcamViewModelProps) => {
           ) : viewModel.videoFiles.length > 0 ? (
             <View style={styles.webcam} collapsable={false}>
               <Video
+                key={playerKey}
                 resizeMode="contain"
                 id={'webcam-billiards-playback'}
                 ref={viewModel.videoRef}
@@ -742,27 +777,67 @@ const PlayBackWebcam = (props: PlayBackWebcamViewModelProps) => {
                   uri: currentVideoUri,
                 }}
                 selectedVideoTrack={WEBCAM_SELECTED_VIDEO_TRACK}
-                onError={viewModel.onWebcamError}
+                onError={error => {
+                  console.log('[ReplayPlayer]', {
+                    event: 'onError',
+                    requestedPath: currentVideoPath,
+                    normalizedSource: currentVideoUri,
+                    playerKey,
+                    playerSource: props.returnToMatch ? 'Replay' : 'History',
+                    error,
+                  });
+                  viewModel.onWebcamError(error);
+                }}
                 renderLoader={WEBCAM_LOADER}
                 rate={playbackRate}
                 progressUpdateInterval={500}
-                startAtTailSeconds={props.returnToMatch ? 120 : 0}
+                onLoadStart={() => {
+                  console.log('[ReplayPlayer]', {
+                    event: 'open',
+                    requestedPath: currentVideoPath,
+                    normalizedSource: currentVideoUri,
+                    playerKey,
+                    playerSource: props.returnToMatch ? 'Replay' : 'History',
+                  });
+                }}
+                startAtTailSeconds={props.returnToMatch ? 30 : 0}
                 onLoad={data => {
+                  console.log('[VideoFreezeGuard]', {
+                    action: 'playerLoad',
+                    asyncOperationFinished: true,
+                    playerKey,
+                  });
                   const duration = Number(data?.duration || 0);
+                  console.log('[ReplayPlayer]', {
+                    event: 'onLoad',
+                    requestedPath: currentVideoPath,
+                    normalizedSource: currentVideoUri,
+                    playerKey,
+                    duration,
+                    playerSource: props.returnToMatch ? 'Replay' : 'History',
+                  });
                   viewModel.handleVideoLoad(currentVideoPath, duration);
                   setPlaybackCurrentTime(0);
                   viewModel.handleLoad();
 
                   if (props.returnToMatch && duration > 0) {
-                    const replayStartTime = Math.max(0, duration - 120);
+                    const replayStartTime = Math.max(0, duration - 30);
                     try {
                       viewModel.videoRef.current?.seek?.(replayStartTime);
                       setPlaybackCurrentTime(replayStartTime);
-                      console.log('[Replay] replay duration', Math.min(120, duration));
+                      console.log('[Replay] replay duration', Math.min(30, duration));
                     } catch (seekError) {
                       console.log('[Replay] seek to recent VAR window failed', seekError);
                     }
                   }
+                }}
+                onBuffer={data => {
+                  console.log('[ReplayPlayer]', {
+                    event: 'onBuffer',
+                    playerKey,
+                    isBuffering: data?.isBuffering,
+                    playerSource: props.returnToMatch ? 'Replay' : 'History',
+                  });
                 }}
                 onProgress={data => {
                   if (!isScrubbing) {
@@ -770,7 +845,16 @@ const PlayBackWebcam = (props: PlayBackWebcamViewModelProps) => {
                   }
                   viewModel.handleProgress(data);
                 }}
-                onEnd={viewModel.handleNext}
+                onEnd={() => {
+                  console.log('[ReplayPlayer]', {
+                    event: 'onEnd',
+                    requestedPath: currentVideoPath,
+                    normalizedSource: currentVideoUri,
+                    playerKey,
+                    playerSource: props.returnToMatch ? 'Replay' : 'History',
+                  });
+                  viewModel.handleNext();
+                }}
               />
               <View
                 style={overlayStyles.touchBlocker}

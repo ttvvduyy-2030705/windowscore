@@ -1,10 +1,10 @@
 import RNFS from 'react-native-fs';
 
-export const RECORDING_SEGMENT_DURATION_MS = 60 * 1000;
-export const MAX_REPLAY_STORAGE_BYTES = 15 * 1024 * 1024 * 1024;
-export const VIDEO_STORAGE_CLEANUP_THRESHOLD_BYTES = 14 * 1024 * 1024 * 1024;
-export const REPLAY_WINDOW_SEGMENTS = 2;
-export const REPLAY_WINDOW_SECONDS = 2 * 60;
+export const RECORDING_SEGMENT_DURATION_MS = 30 * 1000;
+export const MAX_REPLAY_STORAGE_BYTES = 2 * 1024 * 1024 * 1024;
+export const VIDEO_STORAGE_CLEANUP_THRESHOLD_BYTES = 1536 * 1024 * 1024;
+export const REPLAY_WINDOW_SEGMENTS = 1;
+export const REPLAY_WINDOW_SECONDS = 30;
 
 export const WINDOWS_VIDEO_FOLDER_NAME = 'Aplus Score';
 const WINDOWS_USERPROFILE_DIR = String((globalThis as any)?.process?.env?.USERPROFILE || '').replace(/\\/g, '/');
@@ -15,7 +15,7 @@ export const WINDOWS_VIDEO_PRIMARY_BASE_DIR = WINDOWS_USERPROFILE_DIR
     ? `C:/Users/${WINDOWS_USERNAME}/Videos/${WINDOWS_VIDEO_FOLDER_NAME}`
     : `Videos/${WINDOWS_VIDEO_FOLDER_NAME}`;
 export const HISTORY_FOLDER_NAME = 'History';
-export const REPLAY_TEMP_FOLDER_NAME = 'Replay';
+export const REPLAY_TEMP_FOLDER_NAME = 'ReplayTemp';
 export const REPLAY_TEMP_CURRENT_FOLDER_NAME = '';
 
 export const REPLAY_ROOT = `${WINDOWS_VIDEO_PRIMARY_BASE_DIR}/${REPLAY_TEMP_FOLDER_NAME}`;
@@ -287,7 +287,7 @@ const toSegmentFileName = (segmentIndex: number) =>
   `segment_${String(Math.max(0, segmentIndex) + 1).padStart(4, '0')}.mp4`;
 
 const toReplayTempFileName = (segmentIndex: number) =>
-  `replay_segment_${String(Math.max(0, segmentIndex) + 1).padStart(3, '0')}.mp4`;
+  `replay_30s_${String(Math.max(0, segmentIndex) + 1).padStart(3, '0')}.mp4`;
 
 const readVideoFiles = async (folderPath: string, includeZeroSize = false) => {
   try {
@@ -509,13 +509,19 @@ export const buildWindowsRecordingOutputPath = async (
     webcamFolderName: options.webcamFolderName,
     segmentIndex,
   });
+  console.log('[ReplayBuffer]', {
+    event: 'start',
+    segmentDuration: RECORDING_SEGMENT_DURATION_MS / 1000,
+    targetWindowSeconds: REPLAY_WINDOW_SECONDS,
+    currentSegmentPath: outputFile,
+  });
 
   return outputFile;
 };
 
 export const extractReplaySegmentIndex = (filePathOrName?: string | null) => {
   const target = String(filePathOrName || '');
-  const match = target.match(/(?:segment_|replay_segment_|part_|webcam_)(\d+)/i);
+  const match = target.match(/(?:segment_|replay_30s_|part_|webcam_)(\d+)/i);
 
   if (!match?.[1]) {
     return undefined;
@@ -528,7 +534,7 @@ export const extractReplaySegmentIndex = (filePathOrName?: string | null) => {
   }
 
   // Old webcam_00 files were zero-based. New segment_0001 files are one-based.
-  return /(?:segment_|replay_segment_)/i.test(target)
+  return /(?:segment_|replay_30s_)/i.test(target)
     ? Math.max(0, parsed - 1)
     : Math.max(0, parsed);
 };
@@ -547,6 +553,13 @@ const copySegmentToReplayTemp = async (
     const fileSize = fileExists ? await getFileSize(replayPath) : 0;
 
     console.log('[VideoStorage] replay buffer ready', replayPath);
+    console.log('[ReplayBuffer]', {
+      event: 'finalizeSegment',
+      finalizedSegmentPath: historySegmentPath,
+      finalizedSegmentSize: fileSize,
+      latestPlayableReplayPath: fileExists ? replayPath : undefined,
+      targetWindowSeconds: REPLAY_WINDOW_SECONDS,
+    });
     console.log('[ReplayRecorder]', {
       event: 'stop/finalize',
       outputPath: replayPath,
@@ -602,6 +615,12 @@ const trimReplayTempFolder = async (webcamFolderName: string) => {
   const files = await readVideoFiles(replayFolder);
   const keep = files.slice(-REPLAY_WINDOW_SEGMENTS);
   const keepPaths = new Set(keep.map(file => normalizePath(file.path)));
+  console.log('[ReplayBuffer]', {
+    event: 'cleanup',
+    cleanupKeptPaths: keep.map(file => file.path),
+    cleanupDeletedPaths: files.filter(file => !keepPaths.has(normalizePath(file.path))).map(file => file.path),
+    targetWindowSeconds: REPLAY_WINDOW_SECONDS,
+  });
 
   for (const file of files) {
     if (keepPaths.has(normalizePath(file.path))) {
@@ -693,6 +712,12 @@ export const listReplayFiles = async (webcamFolderName: string) => {
       latestReplayPath: files[files.length - 1]?.path,
       fileSize: Number(files[files.length - 1]?.size || 0),
     });
+    console.log('[ReplayBuffer]', {
+      event: 'latestPlayableReplayPath',
+      latestPlayableReplayPath: files[files.length - 1]?.path,
+      finalizedSegmentSize: Number(files[files.length - 1]?.size || 0),
+      targetWindowSeconds: REPLAY_WINDOW_SECONDS,
+    });
   } else {
     const zeroFile = discoveredFiles.find(file => Number(file.size || 0) <= 0);
     console.log('[VideoStorage] replay file missing', folderPath);
@@ -717,9 +742,23 @@ export const listPlayableFiles = async (
   webcamFolderName: string,
   preferArchive = false,
 ) => {
-  const archive = await listArchiveFiles(webcamFolderName);
+  if (preferArchive) {
+    const archive = await listArchiveFiles(webcamFolderName);
+    console.log('[HistoryScreen]', {
+      selectedWebcamFolderName: webcamFolderName,
+      selectedSource: 'HistoryOnly',
+      finalListCount: archive.length,
+    });
+    return archive;
+  }
+
   const replay = await listReplayFiles(webcamFolderName);
-  return preferArchive ? [...archive, ...replay] : [...replay, ...archive];
+  console.log('[ReplayBuffer]', {
+    event: 'latestPlayableReplayPath',
+    latestPlayableReplayPath: replay[replay.length - 1]?.path,
+    targetWindowSeconds: REPLAY_WINDOW_SECONDS,
+  });
+  return replay;
 };
 
 export const waitForReplayFiles = async (
@@ -879,8 +918,8 @@ export const pruneReplayStorage = async (
 
   console.log('[VideoStorage] total size before cleanup', total);
   console.log('[VideoStorage] current total size', total);
-  console.log('[VideoStorage] storage limit 15GB', MAX_REPLAY_STORAGE_BYTES);
-  console.log('[VideoStorage] max quota 15GB', maxBytes);
+  console.log('[VideoStorage] replay temp storage limit', MAX_REPLAY_STORAGE_BYTES);
+  console.log('[VideoStorage] max quota', maxBytes);
   console.log('[VideoStorage] cleanup threshold', VIDEO_STORAGE_CLEANUP_THRESHOLD_BYTES);
 
   if (total <= VIDEO_STORAGE_CLEANUP_THRESHOLD_BYTES) {

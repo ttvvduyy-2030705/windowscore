@@ -31,6 +31,9 @@ const debugWindowsCamera = (...args: any[]) => {
   }
 };
 
+const normalizeWindowsPathForCompare = (path?: string | null) =>
+  String(path || '').replace(/\\/g, '/').replace(/\/+$/g, '').toLowerCase();
+
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 const waitForFinalizedFile = async (filePath: string, timeoutMs = 8000) => {
@@ -99,7 +102,7 @@ const VideoWindows = forwardRef<any, Props>((props, ref) => {
   const recordingStateRef = useRef<'idle' | 'starting' | 'recording' | 'stopping'>('idle');
 
   useEffect(() => {
-    console.log('[Build Info] windows-video-fix=v18-build-fix-no-coawait-in-catch');
+    console.log('[Build Info] windows-video-fix=v20-replaytemp-30s-player-guard');
   }, []);
 
   const buildRecordingPath = useCallback(async (options?: RecordingCallbacks) => {
@@ -157,6 +160,10 @@ const VideoWindows = forwardRef<any, Props>((props, ref) => {
 
         console.log('[Recording] platform=windows');
         console.log('[Recording] start requested');
+        console.log('[VideoRecorder]', {
+          event: 'start',
+          outputPath,
+        });
         console.log('[Recording] selected camera/input source', 'WindowsNativeCameraView');
         console.log('[Recording] output path', outputPath);
         console.log('[HistoryRecorder]', {
@@ -175,14 +182,21 @@ const VideoWindows = forwardRef<any, Props>((props, ref) => {
         });
 
         const actualPath = await nativeRecorder.startRecording(outputPath);
-        // Native v15 resolves only after MediaCapture has actually started recording.
+        // Native resolves only after MediaCapture has actually started recording.
         const finalPath = String(actualPath || outputPath);
+        const requestedKey = normalizeWindowsPathForCompare(outputPath);
+        const actualKey = normalizeWindowsPathForCompare(finalPath);
 
-        if (finalPath !== outputPath) {
+        if (actualKey !== requestedKey) {
           console.log('[WindowsVideoStorage] fallbackDir =', finalPath.replace(/[\\/][^\\/]+$/, ''));
           console.log('[HistoryRecorder]', {
-            event: 'history-not-ready',
-            reason: 'path sai: native recorder returned a different path',
+            event: 'history-path-changed',
+            reason: 'native recorder returned a different physical path',
+            outputPath,
+            actualPath: finalPath,
+          });
+        } else if (finalPath !== outputPath) {
+          console.log('[WindowsVideoStorage] normalized native path separators', {
             outputPath,
             actualPath: finalPath,
           });
@@ -197,6 +211,11 @@ const VideoWindows = forwardRef<any, Props>((props, ref) => {
       } catch (error) {
         recordingStateRef.current = 'idle';
         console.log('[Recording] error', error);
+        console.log('[VideoRecorder]', {
+          event: 'error',
+          outputPath: lastRecordingPathRef.current || undefined,
+          error,
+        });
         options?.onRecordingError?.(error);
         return undefined;
       }
@@ -207,6 +226,10 @@ const VideoWindows = forwardRef<any, Props>((props, ref) => {
 
       console.log('[Recording] platform=windows');
       console.log('[Recording] stop requested');
+      console.log('[VideoRecorder]', {
+        event: 'stop',
+        outputPath: lastRecordingPathRef.current || undefined,
+      });
 
       if (!nativeRecorder?.stopRecording) {
         const error = new Error('WindowsCameraRecordingModule.stopRecording is not available');
@@ -225,6 +248,10 @@ const VideoWindows = forwardRef<any, Props>((props, ref) => {
         if (finalPath) {
           lastRecordingPathRef.current = finalPath;
           console.log('[Recording] finalized path', finalPath);
+          console.log('[VideoRecorder]', {
+            event: 'finalize',
+            outputPath: finalPath,
+          });
           console.log('[VideoStorage] segment stopped', finalPath);
           try {
             const finalized = await waitForFinalizedFile(finalPath, 8000);

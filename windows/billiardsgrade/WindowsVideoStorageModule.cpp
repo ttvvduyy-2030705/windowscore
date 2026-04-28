@@ -24,7 +24,7 @@ using namespace winrt::Windows::Storage::FileProperties;
 namespace
 {
     constexpr wchar_t const *AplusFolderName = L"Aplus Score";
-    constexpr wchar_t const *ReplayFolderName = L"Replay";
+    constexpr wchar_t const *ReplayFolderName = L"ReplayTemp";
     constexpr wchar_t const *HistoryFolderName = L"History";
 
     std::string JsonEscape(std::string const &value)

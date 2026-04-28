@@ -137,6 +137,16 @@ const HistoryViewModel = () => {
       });
     }
 
+    const selectedFile = files[0];
+    if (selectedFile) {
+      console.log('[HistoryScreen]', {
+        selectedPath: selectedFile.path,
+        selectedExists: true,
+        selectedSize: Number(selectedFile.size || 0),
+        selectedSource: 'HistoryOnly',
+      });
+    }
+
     if (!files.length) {
       Alert.alert(i18n.t('txtError'), i18n.t('msgWebcamVideoNotExist'));
       return;

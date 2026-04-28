@@ -1,10 +1,10 @@
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
-import {Alert} from 'react-native';
+import {Alert, Platform} from 'react-native';
 import {OnVideoErrorData, VideoRef} from 'react-native-video';
 import RNFS from 'react-native-fs';
 
 import i18n from 'i18n';
-import {extractReplaySegmentIndex, listPlayableFiles, listReplayFiles, resolveReplayFolder, waitForReplayFiles} from 'services/replay/localReplay';
+import {extractReplaySegmentIndex, listPlayableFiles, listReplayFiles, resolveReplayFolder, waitForReplayFiles, normalizeWindowsVideoUri} from 'services/replay/localReplay';
 
 export interface PlayBackWebcamViewModelProps {
   webcamFolderName: string;
@@ -27,9 +27,17 @@ const PlayBackWebcamViewModel = (props: PlayBackWebcamViewModelProps) => {
   const [isPlaying, setIsPlaying] = useState(false);
   const [resolvedFolder, setResolvedFolder] = useState<string>();
   const [currentSegmentNumber, setCurrentSegmentNumber] = useState<number>(0);
+  const failedVideoPathsRef = useRef<Set<string>>(new Set());
 
   const handleVideoLoad = useCallback((videoUri: string, duration: number) => {
+    failedVideoPathsRef.current.delete(videoUri);
     setVideoDurations(prev => ({...prev, [videoUri]: duration}));
+    console.log('[ReplayPlayer]', {
+      event: 'onLoad',
+      requestedPath: videoUri,
+      normalizedSource: Platform.OS === 'windows' ? normalizeWindowsVideoUri(videoUri) : videoUri,
+      duration,
+    });
   }, []);
 
   const handleNext = useCallback(() => {
@@ -139,7 +147,7 @@ const PlayBackWebcamViewModel = (props: PlayBackWebcamViewModelProps) => {
 
       if (props.returnToMatch) {
         console.log('[Replay] selected replay segments', files.map(file => file.path));
-        console.log('[Replay] replay duration', 'target=120s');
+        console.log('[Replay] replay duration', 'target=30s');
       }
 
       if (files.length === 0) {
@@ -150,6 +158,19 @@ const PlayBackWebcamViewModel = (props: PlayBackWebcamViewModelProps) => {
           requestedPath: folder,
           playerSource: props.returnToMatch ? 'Replay' : 'History',
         });
+      }
+    } catch (error) {
+      console.log('[VideoFreezeGuard]', {
+        action: 'loadFiles',
+        reason: 'caught replay/history file loading error',
+        preventedFreeze: true,
+        errorCaught: error,
+      });
+      if (loadRequestIdRef.current === requestId) {
+        setVideoFiles([]);
+        setTotalFiles(0);
+        setCurrentIndex(0);
+        setIsPlaying(false);
       }
     } finally {
       if (loadRequestIdRef.current === requestId) {
@@ -225,18 +246,31 @@ const PlayBackWebcamViewModel = (props: PlayBackWebcamViewModelProps) => {
   }, [currentIndex, videoFiles]);
 
   const onWebcamError = useCallback(
-    (_e: OnVideoErrorData) => {
-      const previousIndex = currentIndex - 1;
-      const nextIndex = currentIndex + 1;
-
-      if (previousIndex >= 0) {
-        console.log('[Replay] fallback to previous clip:', previousIndex);
-        setCurrentIndex(previousIndex);
-        return;
+    (e: OnVideoErrorData) => {
+      const currentPath = videoFiles[currentIndex]?.path || '';
+      if (currentPath) {
+        failedVideoPathsRef.current.add(currentPath);
       }
 
-      if (nextIndex < videoFiles.length) {
-        console.log('[Replay] fallback to next clip:', nextIndex);
+      console.log('[ReplayPlayer]', {
+        event: 'onError',
+        requestedPath: currentPath,
+        normalizedSource: Platform.OS === 'windows' ? normalizeWindowsVideoUri(currentPath) : currentPath,
+        playerKey: currentPath ? `video-${currentIndex}-${currentPath}` : undefined,
+        error: e,
+      });
+      console.log('[VideoFreezeGuard]', {
+        action: 'onVideoError',
+        reason: 'skip failed source and prevent previous/next error loop',
+        preventedFreeze: true,
+      });
+
+      const nextIndex = videoFiles.findIndex((file, index) => (
+        index !== currentIndex && !failedVideoPathsRef.current.has(file.path)
+      ));
+
+      if (nextIndex >= 0) {
+        console.log('[Replay] fallback to playable clip:', nextIndex);
         setCurrentIndex(nextIndex);
         return;
       }
@@ -244,7 +278,7 @@ const PlayBackWebcamViewModel = (props: PlayBackWebcamViewModelProps) => {
       setIsPlaying(false);
       Alert.alert(i18n.t('txtError'), i18n.t('msgWebcamVideoNotExist'));
     },
-    [currentIndex, videoFiles.length],
+    [currentIndex, videoFiles],
   );
 
   return useMemo(

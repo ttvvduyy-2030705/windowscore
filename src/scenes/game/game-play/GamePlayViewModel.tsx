@@ -64,6 +64,30 @@ import {
 let countdownInterval: NodeJS.Timeout, warmUpCountdownInterval: NodeJS.Timeout;
 const {CameraService} = NativeModules;
 
+const playCountdownBeepSafely = () => {
+  try {
+    const soundModule = Sound as any;
+
+    if (typeof soundModule?.beep === 'function') {
+      soundModule.beep();
+      return;
+    }
+
+    console.log('[WindowsVideoCrashGuard]', {
+      component: 'GamePlayViewModel',
+      reason: 'Sound.beep is not available on this platform; skipped countdown beep',
+      preventedRedScreen: true,
+    });
+  } catch (error) {
+    console.log('[WindowsVideoCrashGuard]', {
+      component: 'GamePlayViewModel',
+      reason: 'Sound.beep threw; skipped countdown beep',
+      preventedRedScreen: true,
+      error,
+    });
+  }
+};
+
 type Visibility = 'public' | 'private' | 'unlisted';
 
 type StoredSetup = {
@@ -1397,7 +1421,7 @@ const GamePlayViewModel = () => {
     }
 
     if (countdownTime > 0 && countdownTime <= 10) {
-      Sound.beep();
+      playCountdownBeepSafely();
     }
   }, [isStarted, soundEnabled, countdownTime, gameSettings]);
 
@@ -3013,8 +3037,6 @@ const GamePlayViewModel = () => {
         videoCodec: 'h264',
         onRecordingFinished: async video => {
           console.log('Recording finished:', video?.path);
-          setIsRecording(false);
-          isStoppingRecordingRef.current = false;
 
           if (recordingRotateTimeoutRef.current) {
             clearTimeout(recordingRotateTimeoutRef.current);
@@ -3030,13 +3052,14 @@ const GamePlayViewModel = () => {
                 // Mặc định tắt để ưu tiên độ mượt và tránh spike FFmpeg sau mỗi segment.
               }
 
+              const registeringSegmentIndex = currentReplaySegmentIndexRef.current;
               const registeredPath = await registerReplaySegment(
                 webcamFolderName,
                 video.path,
                 {
                   keepFullMatch: true,
                   matchSessionId: matchSessionIdRef.current,
-                  segmentIndex: currentReplaySegmentIndexRef.current,
+                  segmentIndex: registeringSegmentIndex,
                   mode: gameSettings?.category,
                   playerNames: playerSettings?.playingPlayers?.map(player => String(player?.name || '')).filter(Boolean) as string[],
                   segmentStartedAt: Date.now() - Math.max(0, totalTime - currentReplaySegmentStartTotalTimeRef.current) * 1000,
@@ -3051,7 +3074,7 @@ const GamePlayViewModel = () => {
                 finalPath = registeredPath;
                 replayCompletedSegmentsRef.current = Math.max(
                   replayCompletedSegmentsRef.current,
-                  currentReplaySegmentIndexRef.current + 1,
+                  registeringSegmentIndex + 1,
                 );
 
                 const completedSegments = replayCompletedSegmentsRef.current;
@@ -3077,11 +3100,20 @@ const GamePlayViewModel = () => {
             recordingFinishedResolverRef.current?.(finalPath);
             recordingFinishedResolverRef.current = null;
             recordingFinishedPromiseRef.current = null;
-          }
 
-          if (restartAfterStopRef.current) {
-            restartAfterStopRef.current = false;
-            pendingStartRecordingRef.current = true;
+            if (restartAfterStopRef.current) {
+              restartAfterStopRef.current = false;
+              pendingStartRecordingRef.current = true;
+            }
+
+            setIsRecording(false);
+            isStoppingRecordingRef.current = false;
+            console.log('[ReplayRecorder]', {
+              event: 'segment-registration-finished',
+              path: finalPath,
+              nextSegmentIndex: replayCompletedSegmentsRef.current,
+              restartPending: pendingStartRecordingRef.current,
+            });
           }
         },
         onRecordingError: error => {
