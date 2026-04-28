@@ -1,6 +1,5 @@
 import React from 'react';
 import {Text, TouchableOpacity, View} from 'react-native';
-import Video from 'react-native-video';
 
 import {responsiveDimension} from 'utils/helper';
 
@@ -29,10 +28,13 @@ const VideoListItem = (props: VideoListItemProps) => {
         props.onPress(props.index);
       }}>
       <View style={styles.details}>
-        <Video
-          style={{width: thumbnailSize, height: thumbnailSize}}
-          source={{uri: props.path}}
-        />
+        <View
+          style={[
+            styles.thumbnailPlaceholder,
+            {width: thumbnailSize, height: thumbnailSize},
+          ]}>
+          <Text style={styles.thumbnailIndex}>{props.index + 1}</Text>
+        </View>
         <Text style={styles.duration}>{props.time}</Text>
       </View>
     </TouchableOpacity>

@@ -458,8 +458,17 @@ namespace winrt::billiardsgrade::implementation
                     auto sourceUri = NormalizeUri(PropString(propertyValue));
                     if (sourceUri.empty())
                     {
+                        try
+                        {
+                            player.Pause();
+                            player.Source(nullptr);
+                        }
+                        catch (...)
+                        {
+                            DebugLog(L"source clear stop failed");
+                        }
                         element.Tag(winrt::box_value(L""));
-                        player.Source(nullptr);
+                        DebugLog(L"source cleared; playback stopped");
                         continue;
                     }
 
@@ -467,8 +476,12 @@ namespace winrt::billiardsgrade::implementation
                     auto currentSource = winrt::unbox_value_or<winrt::hstring>(element.Tag(), L"");
                     if (currentSource == normalizedSource)
                     {
-                        DebugLog(L"sourceUri unchanged; skip resetting MediaPlayer source");
-                        if (!pausedFromMap)
+                        DebugLog(L"sourceUri unchanged; keep source and apply paused state");
+                        if (pausedFromMap)
+                        {
+                            player.Pause();
+                        }
+                        else
                         {
                             player.Play();
                         }
@@ -476,6 +489,15 @@ namespace winrt::billiardsgrade::implementation
                     }
 
                     DebugLog(L"sourceUri=" + std::wstring(normalizedSource.c_str()));
+                    try
+                    {
+                        player.Pause();
+                        player.Source(nullptr);
+                    }
+                    catch (...)
+                    {
+                        DebugLog(L"previous source stop before switch failed");
+                    }
                     element.Tag(winrt::box_value(normalizedSource));
                     ApplyMediaSourceAsync(winrt::make_weak(element), sourceUri, tailSeconds, pausedFromMap, rateFromMap);
                 }

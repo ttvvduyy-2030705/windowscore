@@ -64,6 +64,12 @@ export type ReplayMatchManifest = {
   totalSizeBytes: number;
   finalVideoPath?: string;
   durationMs?: number;
+  finalScore?: number[];
+  winnerName?: string;
+  finalPlayers?: any[];
+  finalTurn?: number;
+  overlayTimelinePath?: string;
+  finalResultSavedAt?: number;
   segments: ReplaySegmentEntry[];
 };
 
@@ -95,6 +101,16 @@ export type BuildWindowsRecordingOutputPathOptions = {
   webcamFolderName: string;
   segmentIndex?: number;
   matchSessionId?: string;
+};
+
+export type ExportMatchArchiveOptions = {
+  finalScore?: number[];
+  winnerName?: string;
+  finalPlayers?: any[];
+  finalTurn?: number;
+  endedAt?: number;
+  durationMs?: number;
+  overlayTimelinePath?: string;
 };
 
 const manifests = new Map<string, ReplayMatchManifest>();
@@ -1023,20 +1039,42 @@ export const registerReplaySegment = async (
   return finalHistoryPath;
 };
 
-export const exportMatchToArchive = async (webcamFolderName: string) => {
+export const exportMatchToArchive = async (
+  webcamFolderName: string,
+  options: ExportMatchArchiveOptions = {},
+) => {
   const manifest = await getManifest(webcamFolderName);
   manifest.status = 'completed';
-  manifest.endTime = new Date().toISOString();
+  const endedAt = Number(options.endedAt || Date.now());
+  manifest.endTime = new Date(endedAt).toISOString();
   manifest.exportedAt = Date.now();
-  manifest.durationMs = manifest.segments.reduce(
-    (sum, segment) => sum + Math.max(0, Number(segment.durationSeconds || 0) * 1000),
-    0,
-  );
+  manifest.durationMs = Number.isFinite(Number(options.durationMs))
+    ? Number(options.durationMs)
+    : manifest.segments.reduce(
+        (sum, segment) => sum + Math.max(0, Number(segment.durationSeconds || 0) * 1000),
+        0,
+      );
   manifest.totalSizeBytes = manifest.segments.reduce(
     (sum, segment) => sum + Math.max(0, Number(segment.sizeBytes || 0)),
     0,
   );
   manifest.finalVideoPath = manifest.segments[manifest.segments.length - 1]?.path || manifest.finalVideoPath;
+  if (Array.isArray(options.finalScore)) {
+    manifest.finalScore = options.finalScore.map(score => Number(score || 0));
+  }
+  if (typeof options.winnerName === 'string') {
+    manifest.winnerName = options.winnerName;
+  }
+  if (Array.isArray(options.finalPlayers)) {
+    manifest.finalPlayers = JSON.parse(JSON.stringify(options.finalPlayers));
+  }
+  if (Number.isFinite(Number(options.finalTurn))) {
+    manifest.finalTurn = Number(options.finalTurn);
+  }
+  if (typeof options.overlayTimelinePath === 'string') {
+    manifest.overlayTimelinePath = options.overlayTimelinePath;
+  }
+  manifest.finalResultSavedAt = Date.now();
 
   await saveManifest(webcamFolderName, manifest);
   const archiveFolder = await ensureArchiveFolder(webcamFolderName);

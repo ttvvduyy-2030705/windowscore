@@ -47,7 +47,7 @@ const normalizeWindowsVideoUri = (input?: SourceShape) => {
   const raw =
     typeof input === 'string'
       ? input
-      : typeof input?.uri === 'string'
+      : input && typeof input === 'object' && typeof input.uri === 'string'
         ? input.uri
         : '';
 
@@ -85,9 +85,6 @@ const getSyntheticDuration = (startAtTailSeconds: number, sourceUri: string) => 
     return Math.max(1, tail);
   }
 
-  // Native MediaPlayerElement owns actual playback. Until native duration events
-  // are bridged, keep this positive so JS controls do not treat a valid local
-  // MP4 as a failed zero-duration source.
   return sourceUri ? 1 : 0;
 };
 
@@ -110,8 +107,12 @@ const VideoWindows = forwardRef<any, WindowsVideoProps>((props, ref) => {
   } = props;
 
   const [currentTime, setCurrentTime] = useState(0);
+  const [imperativePaused, setImperativePaused] = useState(false);
+  const [imperativeStopped, setImperativeStopped] = useState(false);
   const currentTimeRef = useRef(0);
   const sourceUri = useMemo(() => normalizeWindowsVideoUri(source), [source]);
+  const effectiveSourceUri = imperativeStopped ? '' : sourceUri;
+  const effectivePaused = paused || imperativePaused || imperativeStopped;
   const lastLoadedSourceRef = useRef<string>('');
 
   const onLoadRef = useRef(onLoad);
@@ -132,6 +133,13 @@ const VideoWindows = forwardRef<any, WindowsVideoProps>((props, ref) => {
     onReadyForDisplayRef.current = onReadyForDisplay;
   }, [onLoad, onLoadStart, onProgress, onBuffer, onEnd, onError, onReadyForDisplay]);
 
+  useEffect(() => {
+    setImperativeStopped(false);
+    setImperativePaused(false);
+    currentTimeRef.current = 0;
+    setCurrentTime(0);
+  }, [sourceUri]);
+
   const seek = useCallback((time: number) => {
     const nextTime = Math.max(0, Number(time || 0));
     currentTimeRef.current = nextTime;
@@ -140,46 +148,99 @@ const VideoWindows = forwardRef<any, WindowsVideoProps>((props, ref) => {
     console.log('[VideoPlayerEvent]', {
       event: 'seekRequested',
       time: nextTime,
-      sourceUri,
+      sourceUri: effectiveSourceUri,
       note: 'Windows MediaPlayerElement owns native playback; JS seek is best-effort in this RNW wrapper.',
     });
-  }, [sourceUri]);
+  }, [effectiveSourceUri]);
+
+  const pause = useCallback(() => {
+    setImperativePaused(true);
+    console.log('[VideoPlaybackControl]', {
+      action: 'pause',
+      playerId: props.id,
+      targetVideoPath: effectiveSourceUri,
+      pausedState: true,
+      nativePauseCalled: true,
+      nativeStopCalled: false,
+      audioMuted: true,
+      activePlayerCountAfterAction: 1,
+    });
+  }, [effectiveSourceUri, props.id]);
+
+  const resume = useCallback(() => {
+    setImperativeStopped(false);
+    setImperativePaused(false);
+    console.log('[VideoPlaybackControl]', {
+      action: 'play',
+      playerId: props.id,
+      targetVideoPath: sourceUri,
+      pausedState: false,
+      nativePauseCalled: false,
+      nativeStopCalled: false,
+      audioMuted: false,
+      activePlayerCountAfterAction: 1,
+    });
+  }, [sourceUri, props.id]);
+
+  const stop = useCallback(() => {
+    setImperativePaused(true);
+    setImperativeStopped(true);
+    currentTimeRef.current = 0;
+    setCurrentTime(0);
+    onProgressRef.current?.({currentTime: 0});
+    console.log('[VideoPlaybackControl]', {
+      action: 'stop',
+      playerId: props.id,
+      targetVideoPath: effectiveSourceUri || sourceUri,
+      pausedState: true,
+      nativePauseCalled: true,
+      nativeStopCalled: true,
+      audioMuted: true,
+      activePlayerCountAfterAction: 0,
+    });
+  }, [effectiveSourceUri, props.id, sourceUri]);
 
   useImperativeHandle(
     ref,
     () => ({
       seek,
-      pause: () => undefined,
-      resume: () => undefined,
+      pause,
+      resume,
+      stop,
       presentFullscreenPlayer: () => undefined,
       dismissFullscreenPlayer: () => undefined,
     }),
-    [seek],
+    [pause, resume, seek, stop],
   );
 
   useEffect(() => {
-    if (!sourceUri) {
+    if (!effectiveSourceUri) {
       lastLoadedSourceRef.current = '';
       return;
     }
 
-    if (lastLoadedSourceRef.current === sourceUri) {
+    if (lastLoadedSourceRef.current === effectiveSourceUri) {
       console.log('[VideoPlayerEvent]', {
         event: 'skipDuplicateSyntheticLoad',
-        sourceUri,
+        sourceUri: effectiveSourceUri,
       });
       return;
     }
 
-    lastLoadedSourceRef.current = sourceUri;
+    lastLoadedSourceRef.current = effectiveSourceUri;
     currentTimeRef.current = 0;
     setCurrentTime(0);
 
-    const syntheticDuration = getSyntheticDuration(startAtTailSeconds, sourceUri);
+    const syntheticDuration = getSyntheticDuration(startAtTailSeconds, effectiveSourceUri);
 
     console.log('[VideoPlayerOpen]', {
-      originalSource: typeof source === 'string' ? source : source?.uri,
-      normalizedSource: sourceUri,
+      originalSource:
+        typeof source === 'string'
+          ? source
+          : source && typeof source === 'object'
+            ? source.uri
+            : undefined,
+      normalizedSource: effectiveSourceUri,
       selectedSourceType: 'fileUri',
       syntheticDuration,
       platform: Platform.OS,
@@ -190,7 +251,7 @@ const VideoWindows = forwardRef<any, WindowsVideoProps>((props, ref) => {
     onLoadRef.current?.({duration: syntheticDuration});
     console.log('[VideoPlayerEvent]', {
       event: 'onLoadSynthetic',
-      sourceUri,
+      sourceUri: effectiveSourceUri,
       duration: syntheticDuration,
       note: 'Native Windows player opens local MP4 through StorageFile/CreateFromStorageFile.',
     });
@@ -198,13 +259,13 @@ const VideoWindows = forwardRef<any, WindowsVideoProps>((props, ref) => {
       onReadyForDisplayRef.current?.();
       console.log('[VideoPlayerEvent]', {
         event: 'onReadyForDisplaySynthetic',
-        sourceUri,
+        sourceUri: effectiveSourceUri,
       });
     }, 0);
-  }, [sourceUri, source, startAtTailSeconds]);
+  }, [effectiveSourceUri, source, startAtTailSeconds]);
 
   useEffect(() => {
-    if (paused || !sourceUri) {
+    if (effectivePaused || !effectiveSourceUri) {
       return undefined;
     }
 
@@ -215,33 +276,30 @@ const VideoWindows = forwardRef<any, WindowsVideoProps>((props, ref) => {
     }, 500);
 
     return () => clearInterval(timer);
-  }, [paused, sourceUri]);
+  }, [effectivePaused, effectiveSourceUri]);
 
   useEffect(() => {
     if (Platform.OS !== 'windows') {
       return;
     }
 
-    if (!sourceUri) {
+    if (!sourceUri && !imperativeStopped) {
       onErrorRef.current?.({error: 'Missing video source'});
     }
-  }, [sourceUri]);
+  }, [imperativeStopped, sourceUri]);
 
   return (
     <View style={[styles.container, style]}>
-      {sourceUri ? (
-        <NativeWindowsVideoPlayer
-          style={StyleSheet.absoluteFill}
-          sourceUri={sourceUri}
-          paused={paused}
-          controls={controls}
-          rate={Number(rate || 1)}
-          resizeMode={resizeMode}
-          startAtTailSeconds={Number(startAtTailSeconds || 0)}
-        />
-      ) : (
-        props.renderLoader || null
-      )}
+      <NativeWindowsVideoPlayer
+        style={StyleSheet.absoluteFill}
+        sourceUri={effectiveSourceUri}
+        paused={effectivePaused}
+        controls={controls}
+        rate={Number(rate || 1)}
+        resizeMode={resizeMode}
+        startAtTailSeconds={Number(startAtTailSeconds || 0)}
+      />
+      {!effectiveSourceUri ? props.renderLoader || null : null}
     </View>
   );
 });
@@ -258,5 +316,5 @@ export type VideoRef = {
   seek: (time: number) => void;
   pause?: () => void;
   resume?: () => void;
+  stop?: () => void;
 };
-export type OnVideoErrorData = any;

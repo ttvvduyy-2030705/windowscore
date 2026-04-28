@@ -42,7 +42,11 @@ import {
   cleanupBrokenReplayFiles,
   waitForReplayFiles,
 } from 'services/replay/localReplay';
-import {appendReplayScoreboardTimelineEntry, flushReplayScoreboardTimeline} from 'services/replay/replayTimeline';
+import {
+  appendReplayScoreboardTimelineEntry,
+  flushReplayScoreboardTimeline,
+  loadReplayScoreboardTimeline,
+} from 'services/replay/replayTimeline';
 import {screens} from 'scenes/screens';
 import {navigate, push} from 'utils/navigation';
 import {
@@ -359,6 +363,47 @@ const cloneReplayValue = <T,>(value: T): T => {
   }
 };
 
+
+const getFinalScoreSnapshot = (settings?: PlayerSettings | null) => {
+  const players = Array.isArray(settings?.playingPlayers)
+    ? settings!.playingPlayers
+    : [];
+
+  return players.map((player: any) =>
+    Number(player?.totalPoint ?? player?.point ?? 0),
+  );
+};
+
+const getScoreSnapshotTotal = (score?: number[] | null) =>
+  Array.isArray(score)
+    ? score.reduce((sum, value) => sum + Number(value || 0), 0)
+    : 0;
+
+const deriveWinnerNameFromScore = (
+  settings?: PlayerSettings | null,
+  finalScore?: number[],
+) => {
+  const players = Array.isArray(settings?.playingPlayers)
+    ? settings!.playingPlayers
+    : [];
+
+  if (!players.length || !Array.isArray(finalScore) || !finalScore.length) {
+    return undefined;
+  }
+
+  let winnerIndex = 0;
+  let winnerScore = Number(finalScore[0] || 0);
+
+  finalScore.forEach((score, index) => {
+    if (Number(score || 0) > winnerScore) {
+      winnerIndex = index;
+      winnerScore = Number(score || 0);
+    }
+  });
+
+  return players[winnerIndex]?.name;
+};
+
 const setReplayResumeSnapshotSync = (snapshot: ReplayResumeSnapshot | null) => {
   (globalThis as any).__APLUS_REPLAY_RESUME_SNAPSHOT__ = snapshot
     ? cloneReplayValue(snapshot)
@@ -515,6 +560,9 @@ const GamePlayViewModel = () => {
   const currentReplaySegmentStartTotalTimeRef = useRef(0);
   const currentReplaySegmentWallStartMsRef = useRef(0);
   const totalTimeRef = useRef(0);
+  const totalTurnsRef = useRef(1);
+  const playerSettingsRef = useRef<PlayerSettings | undefined>(undefined);
+  const winnerRef = useRef<Player | undefined>(undefined);
   const activeMatchFolderNameRef = useRef<string | null>(null);
   const replayTimelineSignatureRef = useRef('');
   const lastLiveSnapshotSignatureRef = useRef('');
@@ -567,7 +615,27 @@ const GamePlayViewModel = () => {
   const [countdownTime, setCountdownTime] = useState<number>(0);
   const [warmUpCount, setWarmUpCount] = useState<number>();
   const [warmUpCountdownTime, setWarmUpCountdownTime] = useState<number>();
-  const [playerSettings, setPlayerSettings] = useState<PlayerSettings>();
+  const [playerSettings, setPlayerSettingsState] = useState<PlayerSettings>();
+  const setPlayerSettings = useCallback(
+    (
+      value:
+        | PlayerSettings
+        | undefined
+        | ((previous: PlayerSettings | undefined) => PlayerSettings | undefined),
+    ) => {
+      setPlayerSettingsState(previous => {
+        const next =
+          typeof value === 'function'
+            ? (value as (
+                previous: PlayerSettings | undefined,
+              ) => PlayerSettings | undefined)(previous)
+            : value;
+        playerSettingsRef.current = cloneReplayValue(next);
+        return next;
+      });
+    },
+    [],
+  );
   const [winner, setWinner] = useState<Player>();
   const winnerAlertShownRef = useRef(false);
   const pendingNewGameAfterViolateRef = useRef(false);
@@ -586,6 +654,18 @@ const GamePlayViewModel = () => {
   useEffect(() => {
     totalTimeRef.current = totalTime;
   }, [totalTime]);
+
+  useEffect(() => {
+    totalTurnsRef.current = totalTurns;
+  }, [totalTurns]);
+
+  useEffect(() => {
+    playerSettingsRef.current = cloneReplayValue(playerSettings);
+  }, [playerSettings]);
+
+  useEffect(() => {
+    winnerRef.current = cloneReplayValue(winner);
+  }, [winner]);
 
   useEffect(() => {
     if (!playerSettings) {
@@ -1732,52 +1812,160 @@ const GamePlayViewModel = () => {
         return;
       }
 
-      const nextViolate = reset
-        ? 0
-        : (playerSettings.playingPlayers[playerIndex]?.violate || 0) + 1;
-      const opponentIndex = playerSettings.playingPlayers.findIndex(
-        (_, index) => index !== playerIndex,
+      const players = playerSettings.playingPlayers || [];
+      const triggeredPlayer = players[playerIndex];
+      const oldFoulCount = Number(triggeredPlayer?.violate || 0);
+      const nextViolate = reset ? 0 : oldFoulCount + 1;
+      const opponentIndex = players.findIndex((_, index) => index !== playerIndex);
+      const isThreeFoulPenalty = !reset && nextViolate >= 3 && opponentIndex >= 0;
+      const opponentPlayer = isThreeFoulPenalty ? players[opponentIndex] : undefined;
+      const opponentScoreBefore = Number(opponentPlayer?.totalPoint || 0);
+      const opponentScoreAfter = isThreeFoulPenalty
+        ? opponentScoreBefore + 1
+        : opponentScoreBefore;
+      const matchPausedBefore = Boolean(isPaused || isMatchPaused);
+      const timerRunningBefore = Boolean(isStarted && !isPaused && !isMatchPaused);
+      const recordingActiveBefore = Boolean(
+        isRecordingRef.current ||
+          isRecording ||
+          shouldStartRecordingRef.current ||
+          pendingStartRecordingRef.current,
       );
-      const shouldPauseForNewGame = !reset && nextViolate >= 3 && opponentIndex >= 0;
 
-      const newPlayingPlayers = playerSettings.playingPlayers.map(
-        (player, index) => {
-          if (playerIndex === index) {
-            return {
-              ...player,
-              violate: nextViolate,
-            } as Player;
-          }
+      const extraTimeTurns = gameSettings?.mode?.extraTimeTurns;
+      const newPlayingPlayers = players.map((player, index) => {
+        if (isThreeFoulPenalty) {
+          return {
+            ...player,
+            totalPoint:
+              index === opponentIndex
+                ? Number(player.totalPoint || 0) + 1
+                : player.totalPoint,
+            violate: 0,
+            scoredBalls: [],
+            proMode: player.proMode
+              ? {
+                  ...player.proMode,
+                  currentPoint: 0,
+                  extraTimeTurns:
+                    typeof extraTimeTurns === 'number'
+                      ? extraTimeTurns
+                      : player.proMode.extraTimeTurns,
+                }
+              : player.proMode,
+          } as Player;
+        }
 
-          if (shouldPauseForNewGame && index === opponentIndex) {
-            return {
-              ...player,
-              totalPoint: Number(player.totalPoint || 0) + 1,
-            } as Player;
-          }
+        if (playerIndex === index) {
+          return {
+            ...player,
+            violate: nextViolate,
+          } as Player;
+        }
 
-          return player;
-        },
-      );
+        return player;
+      });
 
       setPlayerSettings({...playerSettings, playingPlayers: newPlayingPlayers});
 
-      if (shouldPauseForNewGame) {
-        pendingNewGameAfterViolateRef.current = true;
-        clearInterval(countdownInterval);
-        shouldStartRecordingRef.current = false;
-        pendingStartRecordingRef.current = false;
-        setIsMatchPaused(true);
-        setIsPaused(true);
-
-        if (!youtubeLiveNativeMode) {
-          void stopVideoRecording(false).catch(error => {
-            console.log('[Violate] async stop on pause failed:', error);
-          });
-        }
+      if (!isThreeFoulPenalty) {
+        return;
       }
+
+      pendingNewGameAfterViolateRef.current = false;
+      setWinner(undefined);
+      setGameBreakEnabled(false);
+      setWarmUpCountdownTime(undefined);
+      clearInterval(warmUpCountdownInterval);
+
+      if (gameSettings?.mode?.countdownTime) {
+        const extraTimeBonus = isPoolGame(gameSettings?.category)
+          ? gameSettings.mode?.extraTimeBonus || 0
+          : 0;
+        setCountdownTime(gameSettings.mode.countdownTime + extraTimeBonus);
+      }
+
+      if (isPoolGame(gameSettings?.category)) {
+        setPoolBreakEnabled(!isPool15FreeGame(gameSettings?.category));
+      }
+
+      if (isPool15OnlyGame(gameSettings?.category)) {
+        setPool8SetWinnerIndex(null);
+        setPool8Trackers(prev =>
+          resetPool8Trackers(prev.length ? prev : buildDefaultPool8Trackers()),
+        );
+      }
+
+      if (isPool15FreeGame(gameSettings?.category)) {
+        setPool8FreeSetWinnerIndex(null);
+        setPool8FreeHole10Scores(prev => prev.map(() => 0));
+      }
+
+      const playerNumber = Math.max(1, Number(gameSettings?.players?.playerNumber || players.length || 1));
+      const nextRackPlayerIndex =
+        poolBreakPlayerIndex + 1 > playerNumber - 1
+          ? 0
+          : poolBreakPlayerIndex + 1;
+
+      setPoolBreakPlayerIndex(nextRackPlayerIndex);
+      setCurrentPlayerIndex(nextRackPlayerIndex);
+      setIsPaused(false);
+      setIsMatchPaused(false);
+
+      const timerRunningAfter = true;
+      const recordingActiveAfter = Boolean(
+        isRecordingRef.current ||
+          isRecording ||
+          shouldStartRecordingRef.current ||
+          pendingStartRecordingRef.current ||
+          recordingActiveBefore,
+      );
+
+      console.log('[ThreeFoulPenalty]', {
+        triggeredPlayerId: (triggeredPlayer as any)?.id ?? playerIndex,
+        opponentPlayerId: (opponentPlayer as any)?.id ?? opponentIndex,
+        oldFoulCount,
+        opponentScoreBefore,
+        opponentScoreAfter,
+        matchPausedBefore,
+        matchPausedAfter: false,
+        timerRunningBefore,
+        timerRunningAfter,
+        recordingActiveBefore,
+        recordingActiveAfter,
+        calledPauseFunction: false,
+        calledRecordingStop: false,
+        newRackState: {
+          currentPlayerIndex: nextRackPlayerIndex,
+          poolBreakPlayerIndex: nextRackPlayerIndex,
+          foulsReset: true,
+          scoredBallsReset: true,
+          matchContinues: true,
+        },
+      });
+
+      console.log('[RecordingContinuity]', {
+        reason: 'three-foul-penalty',
+        historyRecordingStillActive: recordingActiveAfter,
+        segmentNotFinalized: true,
+        videoNotSplit: true,
+        activeMatchId: matchSessionIdRef.current,
+        webcamFolderName,
+        activeSegmentIndex: currentReplaySegmentIndexRef.current,
+        completedSegments: replayCompletedSegmentsRef.current,
+      });
     },
-    [isStarted, playerSettings, winner, youtubeLiveNativeMode],
+    [
+      gameSettings,
+      isMatchPaused,
+      isPaused,
+      isRecording,
+      isStarted,
+      playerSettings,
+      poolBreakPlayerIndex,
+      webcamFolderName,
+      winner,
+    ],
   );
 
   const onSelectWinnerByIndex = useCallback(
@@ -2905,18 +3093,79 @@ const GamePlayViewModel = () => {
             return;
           }
 
+          await flushReplayScoreboardTimeline(webcamFolderName);
+          const replayTimeline = await loadReplayScoreboardTimeline(webcamFolderName);
+          const overlayLastSnapshot = replayTimeline?.entries?.length
+            ? replayTimeline.entries[replayTimeline.entries.length - 1]
+            : undefined;
+          const overlayLastSettings = overlayLastSnapshot?.playerSettings as
+            | PlayerSettings
+            | undefined;
+          const scoreBeforeFinalize = getFinalScoreSnapshot(playerSettings);
+          const latestStatePlayerSettings = playerSettingsRef.current || playerSettings;
+          const latestStateScore = getFinalScoreSnapshot(latestStatePlayerSettings);
+          const overlayLastSnapshotScore = getFinalScoreSnapshot(overlayLastSettings);
+          const useOverlayAsFinal =
+            overlayLastSettings &&
+            getScoreSnapshotTotal(overlayLastSnapshotScore) >=
+              getScoreSnapshotTotal(latestStateScore);
+          const finalPlayerSettings = cloneReplayValue(
+            useOverlayAsFinal ? overlayLastSettings : latestStatePlayerSettings,
+          );
+          const finalCommittedScore = getFinalScoreSnapshot(finalPlayerSettings);
+          const finalWinnerName =
+            winnerRef.current?.name ||
+            deriveWinnerNameFromScore(finalPlayerSettings, finalCommittedScore);
+          const finalTurn = totalTurnsRef.current;
+          const finalDurationSeconds = Math.max(
+            0,
+            Number(totalTimeRef.current || totalTime || 0),
+          );
+          const exportOptions = {
+            finalScore: finalCommittedScore,
+            winnerName: finalWinnerName,
+            finalPlayers: finalPlayerSettings?.playingPlayers,
+            finalTurn,
+            endedAt: Date.now(),
+            durationMs: finalDurationSeconds * 1000,
+          };
+
           if (Platform.OS === 'windows') {
             try {
-              const historyFolder = await exportMatchToArchive(webcamFolderName);
+              const historyFolder = await exportMatchToArchive(
+                webcamFolderName,
+                exportOptions,
+              );
               await deleteReplayFolder(webcamFolderName, {includeArchive: false});
               console.log('[History] savedVideoPath =', historyFolder);
+              console.log('[HistoryFinalize]', {
+                matchId: webcamFolderName,
+                scoreBeforeFinalize,
+                overlayLastSnapshotScore,
+                finalCommittedScore,
+                savedHistoryScore: finalCommittedScore,
+                winner: finalWinnerName,
+                historyRecordPath: historyFolder,
+              });
             } catch (exportError) {
               console.log('[HistoryVideo] error', exportError);
             }
           } else if (saveToDeviceWhileStreaming) {
             try {
-              await exportMatchToArchive(webcamFolderName);
+              const historyFolder = await exportMatchToArchive(
+                webcamFolderName,
+                exportOptions,
+              );
               await deleteReplayFolder(webcamFolderName, {includeArchive: false});
+              console.log('[HistoryFinalize]', {
+                matchId: webcamFolderName,
+                scoreBeforeFinalize,
+                overlayLastSnapshotScore,
+                finalCommittedScore,
+                savedHistoryScore: finalCommittedScore,
+                winner: finalWinnerName,
+                historyRecordPath: historyFolder,
+              });
             } catch (exportError) {
               console.log('[Replay] export full match failed:', exportError);
             }
@@ -2927,8 +3176,8 @@ const GamePlayViewModel = () => {
               realm,
               gameSettings: {
                 ...gameSettings,
-                players: playerSettings,
-                totalTime,
+                players: finalPlayerSettings || playerSettings,
+                totalTime: finalDurationSeconds || totalTime,
                 webcamFolderName,
                 replayPath: recordedPath,
                 saveToDeviceWhileStreaming,

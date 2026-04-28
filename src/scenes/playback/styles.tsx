@@ -99,6 +99,20 @@ const createStyles = (adaptive: AdaptiveLike, design: DesignSystem) => {
       height: adaptive.s(90),
       borderRadius: radius.sm,
     },
+    thumbnailPlaceholder: {
+      borderRadius: radius.sm,
+      backgroundColor: 'rgba(255,255,255,0.12)',
+      borderWidth: design.border.hairline,
+      borderColor: 'rgba(255,255,255,0.28)',
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginRight: spacing.xs,
+    },
+    thumbnailIndex: {
+      color: colors.white,
+      fontSize: font.small,
+      fontWeight: '900',
+    },
     details: {
       alignItems: 'center',
       flexDirection: 'row',

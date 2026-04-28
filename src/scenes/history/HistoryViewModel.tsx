@@ -23,7 +23,30 @@ type HistoryGameItem = GameSettings & {
 
 const FALLBACK_PLAYER_COLORS = ['#D82027', '#007AFF', '#34C759', '#FF9500'];
 
-const buildFallbackPlayers = (playerNames?: string[]) => {
+const buildFallbackPlayers = (
+  playerNames?: string[],
+  finalScore?: number[],
+  finalPlayers?: any[],
+) => {
+  if (Array.isArray(finalPlayers) && finalPlayers.length > 0) {
+    return {
+      playerNumber: Math.max(2, finalPlayers.length),
+      goal: {
+        goal: 0,
+        pointSteps: [],
+      },
+      playingPlayers: finalPlayers.map((player, index) => ({
+        ...(player || {}),
+        name: player?.name || playerNames?.[index] || `Player ${index + 1}`,
+        color: player?.color || FALLBACK_PLAYER_COLORS[index % FALLBACK_PLAYER_COLORS.length],
+        totalPoint: Number(
+          player?.totalPoint ?? player?.point ?? finalScore?.[index] ?? 0,
+        ),
+        scoredBalls: Array.isArray(player?.scoredBalls) ? player.scoredBalls : [],
+      })),
+    };
+  }
+
   const names = playerNames?.filter(Boolean)?.length
     ? playerNames.filter(Boolean)
     : ['Player 1', 'Player 2'];
@@ -37,7 +60,7 @@ const buildFallbackPlayers = (playerNames?: string[]) => {
     playingPlayers: names.map((name, index) => ({
       name,
       color: FALLBACK_PLAYER_COLORS[index % FALLBACK_PLAYER_COLORS.length],
-      totalPoint: 0,
+      totalPoint: Number(finalScore?.[index] ?? 0),
       scoredBalls: [],
     })),
   };
@@ -55,13 +78,17 @@ const buildScannedHistoryGame = (entry: any): HistoryGameItem => {
   return {
     createdAt: new Date(entry?.createdAt || Date.now()),
     updatedAt: new Date(entry?.updatedAt || Date.now()),
-    totalTime: Math.round(totalDurationSeconds || 0),
+    totalTime: Math.round(Number(manifest?.durationMs || 0) / 1000 || totalDurationSeconds || 0),
     category: (manifest?.mode as any) || ('libre' as any),
     mode: {
       mode: 'time',
       countdownTime: 0,
     } as any,
-    players: buildFallbackPlayers(manifest?.playerNames) as any,
+    players: buildFallbackPlayers(
+      manifest?.playerNames,
+      manifest?.finalScore,
+      manifest?.finalPlayers,
+    ) as any,
     webcamFolderName: entry?.webcamFolderName,
     isScannedHistoryOnly: true,
   } as HistoryGameItem;
