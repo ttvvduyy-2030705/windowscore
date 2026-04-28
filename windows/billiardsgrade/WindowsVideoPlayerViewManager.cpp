@@ -5,12 +5,14 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
+#include <cstdlib>
 #include <sstream>
 #include <string>
 
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.Media.Core.h>
 #include <winrt/Windows.Media.Playback.h>
+#include <winrt/Windows.Storage.h>
 #include <winrt/Windows.UI.Xaml.Controls.h>
 #include <winrt/Windows.UI.Xaml.Media.h>
 
@@ -19,6 +21,7 @@ using namespace winrt;
 using namespace Windows::Foundation;
 using namespace Windows::Media::Core;
 using namespace Windows::Media::Playback;
+using namespace Windows::Storage;
 using namespace Windows::UI::Xaml;
 using namespace Windows::UI::Xaml::Controls;
 using namespace Windows::UI::Xaml::Media;
@@ -28,6 +31,48 @@ namespace
     void DebugLog(std::wstring const &message) noexcept
     {
         OutputDebugStringW((L"[WindowsVideoPlayer] " + message + L"\n").c_str());
+    }
+
+    std::string ToLowerAscii(std::string value)
+    {
+        std::transform(value.begin(), value.end(), value.begin(), [](char ch) {
+            return static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        });
+        return value;
+    }
+
+    bool IsWindowsAbsolutePath(std::string const &value)
+    {
+        return value.size() >= 3 &&
+            std::isalpha(static_cast<unsigned char>(value[0])) &&
+            value[1] == ':' &&
+            (value[2] == '/' || value[2] == '\\');
+    }
+
+    std::string PercentDecode(std::string const &value)
+    {
+        std::string decoded;
+        decoded.reserve(value.size());
+
+        for (size_t index = 0; index < value.size(); ++index)
+        {
+            if (value[index] == '%' && index + 2 < value.size())
+            {
+                auto hex = value.substr(index + 1, 2);
+                char *end = nullptr;
+                auto decodedChar = static_cast<char>(std::strtol(hex.c_str(), &end, 16));
+                if (end != nullptr && *end == '\0')
+                {
+                    decoded.push_back(decodedChar);
+                    index += 2;
+                    continue;
+                }
+            }
+
+            decoded.push_back(value[index]);
+        }
+
+        return decoded;
     }
 
     std::string EncodeFileUriPart(std::string const &part)
@@ -62,13 +107,21 @@ namespace
 
         std::replace(uri.begin(), uri.end(), '\\', '/');
 
-        auto lower = uri;
-        std::transform(lower.begin(), lower.end(), lower.begin(), [](char ch) {
-            return static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-        });
+        auto lower = ToLowerAscii(uri);
 
-        if (lower.rfind("file://", 0) == 0 ||
-            lower.rfind("http://", 0) == 0 ||
+        if (lower.rfind("file:///", 0) == 0)
+        {
+            // Keep file URI as URI for logs/source identity. Actual local files are opened
+            // through StorageFile below to avoid UWP/sandbox URI access issues.
+            return uri;
+        }
+
+        if (lower.rfind("file://", 0) == 0)
+        {
+            return std::string("file:///") + uri.substr(7);
+        }
+
+        if (lower.rfind("http://", 0) == 0 ||
             lower.rfind("https://", 0) == 0)
         {
             return uri;
@@ -94,6 +147,48 @@ namespace
         }
 
         return encoded.str();
+    }
+
+    std::string LocalPathFromSource(std::string sourceUri)
+    {
+        if (sourceUri.empty())
+        {
+            return {};
+        }
+
+        std::replace(sourceUri.begin(), sourceUri.end(), '\\', '/');
+        auto lower = ToLowerAscii(sourceUri);
+
+        std::string path;
+        if (lower.rfind("file:///", 0) == 0)
+        {
+            path = sourceUri.substr(8);
+        }
+        else if (lower.rfind("file://", 0) == 0)
+        {
+            path = sourceUri.substr(7);
+            if (!path.empty() && path[0] == '/')
+            {
+                path.erase(path.begin());
+            }
+        }
+        else if (IsWindowsAbsolutePath(sourceUri))
+        {
+            path = sourceUri;
+        }
+        else
+        {
+            return {};
+        }
+
+        path = PercentDecode(path);
+        if (path.size() >= 3 && path[0] == '/' && std::isalpha(static_cast<unsigned char>(path[1])) && path[2] == ':')
+        {
+            path.erase(path.begin());
+        }
+
+        std::replace(path.begin(), path.end(), '/', '\\');
+        return path;
     }
 
     std::string PropString(JSValue const &value)
@@ -124,6 +219,18 @@ namespace
         }
 
         return fallback;
+    }
+
+    bool MapBool(JSValueObject const &propertyMap, char const *key, bool fallback)
+    {
+        auto it = propertyMap.find(key);
+        return it == propertyMap.end() ? fallback : PropBool(it->second, fallback);
+    }
+
+    double MapDouble(JSValueObject const &propertyMap, char const *key, double fallback)
+    {
+        auto it = propertyMap.find(key);
+        return it == propertyMap.end() ? fallback : PropDouble(it->second, fallback);
     }
 
     Stretch StretchFromResizeMode(std::string const &resizeMode)
@@ -176,6 +283,110 @@ namespace
         });
     }
 
+    fire_and_forget ApplyMediaSourceAsync(
+        winrt::weak_ref<MediaPlayerElement> weakElement,
+        std::string sourceUri,
+        double tailSeconds,
+        bool paused,
+        double rate) noexcept
+    {
+        apartment_context uiThread;
+        auto normalizedSource = winrt::to_hstring(sourceUri);
+        MediaSource mediaSource{nullptr};
+
+        try
+        {
+            auto localPath = LocalPathFromSource(sourceUri);
+            if (!localPath.empty())
+            {
+                DebugLog(L"open local mp4 via StorageFile path=" + std::wstring(winrt::to_hstring(localPath).c_str()));
+                auto storageFile = co_await StorageFile::GetFileFromPathAsync(winrt::to_hstring(localPath));
+                mediaSource = MediaSource::CreateFromStorageFile(storageFile);
+                DebugLog(L"MediaSource created from StorageFile");
+            }
+            else
+            {
+                mediaSource = MediaSource::CreateFromUri(Uri(normalizedSource));
+                DebugLog(L"MediaSource created from Uri");
+            }
+        }
+        catch (hresult_error const &ex)
+        {
+            DebugLog(L"StorageFile/MediaSource open failed: " + std::wstring(ex.message().c_str()) + L"; fallback to Uri");
+            try
+            {
+                mediaSource = MediaSource::CreateFromUri(Uri(normalizedSource));
+            }
+            catch (hresult_error const &uriEx)
+            {
+                DebugLog(L"Uri fallback failed: " + std::wstring(uriEx.message().c_str()));
+                co_return;
+            }
+            catch (...)
+            {
+                DebugLog(L"Uri fallback failed: unknown");
+                co_return;
+            }
+        }
+        catch (...)
+        {
+            DebugLog(L"StorageFile/MediaSource open failed: unknown");
+            co_return;
+        }
+
+        co_await uiThread;
+
+        auto element = weakElement.get();
+        if (!element)
+        {
+            DebugLog(L"element released before source applied");
+            co_return;
+        }
+
+        auto currentSource = winrt::unbox_value_or<winrt::hstring>(element.Tag(), L"");
+        if (currentSource != normalizedSource)
+        {
+            DebugLog(L"ignore stale source apply; view has newer source");
+            co_return;
+        }
+
+        auto player = element.MediaPlayer();
+        if (!player)
+        {
+            player = MediaPlayer();
+            element.SetMediaPlayer(player);
+        }
+
+        try
+        {
+            SeekToTailWhenReady(player, tailSeconds);
+            player.Source(mediaSource);
+            if (rate > 0)
+            {
+                player.PlaybackSession().PlaybackRate(rate);
+            }
+
+            if (paused)
+            {
+                player.Pause();
+            }
+            else
+            {
+                player.Play();
+            }
+
+            DebugLog(L"source applied and playback requested");
+        }
+        catch (hresult_error const &ex)
+        {
+            DebugLog(L"apply source failed: " + std::wstring(ex.message().c_str()));
+        }
+        catch (...)
+        {
+            DebugLog(L"apply source failed: unknown");
+        }
+    }
+
 }
 
 namespace winrt::billiardsgrade::implementation
@@ -225,6 +436,8 @@ namespace winrt::billiardsgrade::implementation
 
         auto propertyMap = JSValueObject::ReadFrom(propertyMapReader);
         auto tailSeconds = TailSecondsFromProps(propertyMap);
+        auto pausedFromMap = MapBool(propertyMap, "paused", false);
+        auto rateFromMap = MapDouble(propertyMap, "rate", 1.0);
         auto player = element.MediaPlayer();
 
         if (!player)
@@ -245,14 +458,26 @@ namespace winrt::billiardsgrade::implementation
                     auto sourceUri = NormalizeUri(PropString(propertyValue));
                     if (sourceUri.empty())
                     {
+                        element.Tag(winrt::box_value(L""));
                         player.Source(nullptr);
                         continue;
                     }
 
-                    DebugLog(L"sourceUri=" + std::wstring(winrt::to_hstring(sourceUri).c_str()));
-                    SeekToTailWhenReady(player, tailSeconds);
-                    player.Source(MediaSource::CreateFromUri(Uri(winrt::to_hstring(sourceUri))));
-                    player.Play();
+                    auto normalizedSource = winrt::to_hstring(sourceUri);
+                    auto currentSource = winrt::unbox_value_or<winrt::hstring>(element.Tag(), L"");
+                    if (currentSource == normalizedSource)
+                    {
+                        DebugLog(L"sourceUri unchanged; skip resetting MediaPlayer source");
+                        if (!pausedFromMap)
+                        {
+                            player.Play();
+                        }
+                        continue;
+                    }
+
+                    DebugLog(L"sourceUri=" + std::wstring(normalizedSource.c_str()));
+                    element.Tag(winrt::box_value(normalizedSource));
+                    ApplyMediaSourceAsync(winrt::make_weak(element), sourceUri, tailSeconds, pausedFromMap, rateFromMap);
                 }
                 else if (propertyName == "paused")
                 {

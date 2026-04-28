@@ -392,7 +392,11 @@ const PlayBackWebcam = (props: PlayBackWebcamViewModelProps) => {
         playerKey,
         requestedPath: currentVideoPath,
       });
-      setIsPaused(true);
+      console.log('[VideoPlayerFreezeGuard]', {
+        action: 'timeoutLogOnly',
+        reason: 'player still mounted; do not pause automatically because native playback may be active',
+        playerKey,
+      });
     }, 10000);
 
     return () => clearTimeout(timer);
@@ -771,7 +775,7 @@ const PlayBackWebcam = (props: PlayBackWebcamViewModelProps) => {
                 id={'webcam-billiards-playback'}
                 ref={viewModel.videoRef}
                 style={styles.webcam}
-                controls={false}
+                controls={Platform.OS === 'windows' ? true : false}
                 paused={isPaused || isScrubbing}
                 source={{
                   uri: currentVideoUri,
@@ -820,16 +824,25 @@ const PlayBackWebcam = (props: PlayBackWebcamViewModelProps) => {
                   setPlaybackCurrentTime(0);
                   viewModel.handleLoad();
 
-                  if (props.returnToMatch && duration > 0) {
+                  if (props.returnToMatch && duration > 30.05) {
                     const replayStartTime = Math.max(0, duration - 30);
                     try {
                       viewModel.videoRef.current?.seek?.(replayStartTime);
                       setPlaybackCurrentTime(replayStartTime);
-                      console.log('[Replay] replay duration', Math.min(30, duration));
+                      console.log('[Replay]', {event: 'seekToTail', replayStartTime, duration});
                     } catch (seekError) {
                       console.log('[Replay] seek to recent VAR window failed', seekError);
                     }
                   }
+                }}
+                onReadyForDisplay={() => {
+                  console.log('[VideoPlayerEvents]', {
+                    event: 'onReadyForDisplay',
+                    requestedPath: currentVideoPath,
+                    normalizedSource: currentVideoUri,
+                    playerKey,
+                    playerSource: props.returnToMatch ? 'Replay' : 'History',
+                  });
                 }}
                 onBuffer={data => {
                   console.log('[ReplayPlayer]', {
@@ -856,11 +869,13 @@ const PlayBackWebcam = (props: PlayBackWebcamViewModelProps) => {
                   viewModel.handleNext();
                 }}
               />
-              <View
-                style={overlayStyles.touchBlocker}
-                onStartShouldSetResponder={() => true}
-                onMoveShouldSetResponder={() => true}
-              />
+              {Platform.OS === 'windows' ? null : (
+                <View
+                  style={overlayStyles.touchBlocker}
+                  onStartShouldSetResponder={() => true}
+                  onMoveShouldSetResponder={() => true}
+                />
+              )}
               {shouldShowPlaybackMatchOverlay ? renderPlaybackLogoOverlay() : null}
               {renderPlaybackScoreboard()}
               <View style={overlayStyles.transportBar} pointerEvents={'box-none'}>
