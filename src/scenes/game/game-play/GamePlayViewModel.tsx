@@ -513,6 +513,9 @@ const GamePlayViewModel = () => {
   const replayCompletedSegmentsRef = useRef(0);
   const currentReplaySegmentIndexRef = useRef(0);
   const currentReplaySegmentStartTotalTimeRef = useRef(0);
+  const currentReplaySegmentWallStartMsRef = useRef(0);
+  const totalTimeRef = useRef(0);
+  const activeMatchFolderNameRef = useRef<string | null>(null);
   const replayTimelineSignatureRef = useRef('');
   const lastLiveSnapshotSignatureRef = useRef('');
   const lastLiveSnapshotSyncAtRef = useRef(0);
@@ -579,6 +582,10 @@ const GamePlayViewModel = () => {
   useEffect(() => {
     isRecordingRef.current = isRecording;
   }, [isRecording]);
+
+  useEffect(() => {
+    totalTimeRef.current = totalTime;
+  }, [totalTime]);
 
   useEffect(() => {
     if (!playerSettings) {
@@ -684,6 +691,7 @@ const GamePlayViewModel = () => {
     replayCompletedSegmentsRef.current = 0;
     currentReplaySegmentIndexRef.current = 0;
     currentReplaySegmentStartTotalTimeRef.current = 0;
+    currentReplaySegmentWallStartMsRef.current = 0;
     replayTimelineSignatureRef.current = '';
     lastPruneCompletedSegmentsRef.current = 0;
 
@@ -691,6 +699,31 @@ const GamePlayViewModel = () => {
       return () => {
         mounted = false;
       };
+    }
+
+    if (!activeMatchFolderNameRef.current) {
+      activeMatchFolderNameRef.current = webcamFolderName;
+      console.log('[MatchSession]', {
+        event: 'createMatchId',
+        activeMatchId: matchSessionIdRef.current,
+        webcamFolderName,
+        reasonIfCreateNew: 'initial gameplay session folder',
+      });
+    } else if (activeMatchFolderNameRef.current !== webcamFolderName) {
+      console.log('[MatchSession]', {
+        event: 'reuseMatchId',
+        activeMatchId: matchSessionIdRef.current,
+        webcamFolderName,
+        previousWebcamFolderName: activeMatchFolderNameRef.current,
+        reasonIfCreateNew: 'webcamFolderName state changed; existing recorder session remains guarded',
+      });
+      activeMatchFolderNameRef.current = webcamFolderName;
+    } else {
+      console.log('[MatchSession]', {
+        event: 'reuseMatchId',
+        activeMatchId: matchSessionIdRef.current,
+        webcamFolderName,
+      });
     }
 
     void (async () => {
@@ -3014,6 +3047,7 @@ const GamePlayViewModel = () => {
       restartAfterStopRef.current = false;
       isStoppingRecordingRef.current = false;
       lastRecordedVideoPathRef.current = undefined;
+      isRecordingRef.current = true;
       setIsRecording(true);
 
       recordingFinishedPromiseRef.current = new Promise(resolve => {
@@ -3025,7 +3059,8 @@ const GamePlayViewModel = () => {
       }
 
       currentReplaySegmentIndexRef.current = replayCompletedSegmentsRef.current;
-      currentReplaySegmentStartTotalTimeRef.current = totalTime;
+      currentReplaySegmentStartTotalTimeRef.current = totalTimeRef.current;
+      currentReplaySegmentWallStartMsRef.current = Date.now();
       replayTimelineSignatureRef.current = '';
       lastReplayTimelineWriteSignatureRef.current = '';
 
@@ -3053,6 +3088,35 @@ const GamePlayViewModel = () => {
               }
 
               const registeringSegmentIndex = currentReplaySegmentIndexRef.current;
+              const nativeDurationSeconds = Number((video as any)?.durationSeconds || 0);
+              const wallDurationSeconds = Math.max(
+                0,
+                (Date.now() - Math.max(0, currentReplaySegmentWallStartMsRef.current || Date.now())) / 1000,
+              );
+              const matchClockDurationSeconds = Math.max(
+                0,
+                totalTimeRef.current - currentReplaySegmentStartTotalTimeRef.current,
+              );
+              const resolvedDurationSeconds = Math.max(
+                nativeDurationSeconds,
+                wallDurationSeconds,
+                matchClockDurationSeconds,
+              );
+              const resolvedSegmentStartedAt = Number((video as any)?.nativeStartResolvedAtMs || 0) ||
+                currentReplaySegmentWallStartMsRef.current ||
+                Date.now() - resolvedDurationSeconds * 1000;
+
+              console.log('[SegmentLifecycle]', {
+                event: 'registerFromGameplay',
+                segmentIndex: registeringSegmentIndex,
+                path: video.path,
+                nativeDurationSeconds,
+                wallDurationSeconds,
+                matchClockDurationSeconds,
+                resolvedDurationSeconds,
+                segmentStartedAt: resolvedSegmentStartedAt,
+              });
+
               const registeredPath = await registerReplaySegment(
                 webcamFolderName,
                 video.path,
@@ -3062,8 +3126,8 @@ const GamePlayViewModel = () => {
                   segmentIndex: registeringSegmentIndex,
                   mode: gameSettings?.category,
                   playerNames: playerSettings?.playingPlayers?.map(player => String(player?.name || '')).filter(Boolean) as string[],
-                  segmentStartedAt: Date.now() - Math.max(0, totalTime - currentReplaySegmentStartTotalTimeRef.current) * 1000,
-                  durationSeconds: Math.max(0, totalTime - currentReplaySegmentStartTotalTimeRef.current),
+                  segmentStartedAt: resolvedSegmentStartedAt,
+                  durationSeconds: resolvedDurationSeconds,
                 },
               );
 
@@ -3106,6 +3170,7 @@ const GamePlayViewModel = () => {
               pendingStartRecordingRef.current = true;
             }
 
+            isRecordingRef.current = false;
             setIsRecording(false);
             isStoppingRecordingRef.current = false;
             console.log('[ReplayRecorder]', {
@@ -3118,6 +3183,7 @@ const GamePlayViewModel = () => {
         },
         onRecordingError: error => {
           console.error('Recording error:', error);
+          isRecordingRef.current = false;
           setIsRecording(false);
           isStoppingRecordingRef.current = false;
 
@@ -3148,6 +3214,8 @@ const GamePlayViewModel = () => {
       return true;
     } catch (error) {
       console.error('Failed to start recording:', error);
+      isRecordingRef.current = false;
+      isRecordingRef.current = false;
       setIsRecording(false);
       isStoppingRecordingRef.current = false;
       recordingFinishedResolverRef.current?.(undefined);
@@ -3212,6 +3280,7 @@ const GamePlayViewModel = () => {
 
       if (!recordedPath) {
         console.log('[Replay] stop timeout fallback: release stopping flag');
+        isRecordingRef.current = false;
         setIsRecording(false);
         isStoppingRecordingRef.current = false;
         restartAfterStopRef.current = false;
@@ -3221,6 +3290,7 @@ const GamePlayViewModel = () => {
       return recordedPath;
     } catch (error) {
       console.error('Failed to stop recording:', error);
+      isRecordingRef.current = false;
       setIsRecording(false);
       isStoppingRecordingRef.current = false;
       restartAfterStopRef.current = false;

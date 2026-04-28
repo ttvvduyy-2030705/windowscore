@@ -15,8 +15,18 @@ type Props = {
   cameraRef?: React.Ref<any>;
 };
 
+type RecordingFinishedPayload = {
+  path?: string;
+  requestedStartAtMs?: number;
+  nativeStartResolvedAtMs?: number;
+  requestedStopAtMs?: number;
+  nativeStopResolvedAtMs?: number;
+  durationSeconds?: number;
+  fileSize?: number;
+};
+
 type RecordingCallbacks = {
-  onRecordingFinished?: (video: {path?: string}) => void;
+  onRecordingFinished?: (video: RecordingFinishedPayload) => void;
   onRecordingError?: (error: any) => void;
   webcamFolderName?: string;
   segmentIndex?: number;
@@ -100,9 +110,12 @@ const VideoWindows = forwardRef<any, Props>((props, ref) => {
   const lastRecordingPathRef = useRef<string>('');
   const recordingCallbacksRef = useRef<RecordingCallbacks | null>(null);
   const recordingStateRef = useRef<'idle' | 'starting' | 'recording' | 'stopping'>('idle');
+  const recordingRequestedStartAtMsRef = useRef<number>(0);
+  const recordingNativeStartResolvedAtMsRef = useRef<number>(0);
+  const recordingRequestedStopAtMsRef = useRef<number>(0);
 
   useEffect(() => {
-    console.log('[Build Info] windows-video-fix=v24-replay60-overlaytimeline-historysync');
+    console.log('[Build Info] windows-video-fix=v26-recording-segment-lifecycle-fix');
   }, []);
 
   const buildRecordingPath = useCallback(async (options?: RecordingCallbacks) => {
@@ -115,19 +128,13 @@ const VideoWindows = forwardRef<any, Props>((props, ref) => {
         });
       }
       console.log('[WindowsVideoStorage] outputFile =', String(options.path));
-      console.log('[HistoryRecorder]', {
-        event: 'start',
+      console.log('[MatchSegmentRecorder]', {
+        event: 'buildOutputPath',
         outputPath: String(options.path),
         segmentPath: String(options.path),
         webcamFolderName: options?.webcamFolderName,
         segmentIndex: options?.segmentIndex,
-      });
-      console.log('[ReplayRecorder]', {
-        event: 'start',
-        outputPath: String(options.path),
-        segmentPath: String(options.path),
-        webcamFolderName: options?.webcamFolderName,
-        segmentIndex: options?.segmentIndex,
+        note: 'single native MediaCapture recorder; Replay/History observe finalized segments',
       });
       return String(options.path);
     }
@@ -166,18 +173,22 @@ const VideoWindows = forwardRef<any, Props>((props, ref) => {
         });
         console.log('[Recording] selected camera/input source', 'WindowsNativeCameraView');
         console.log('[Recording] output path', outputPath);
-        console.log('[HistoryRecorder]', {
+        console.log('[MatchSegmentRecorder]', {
           event: 'start',
           outputPath,
           segmentPath: outputPath,
           webcamFolderName: options?.webcamFolderName,
           segmentIndex: options?.segmentIndex,
+          note: 'single native MediaCapture recorder; not a separate ReplayRecorder/HistoryRecorder start',
         });
-        console.log('[ReplayRecorder]', {
-          event: 'start',
+
+        const requestedStartAtMs = Date.now();
+        recordingRequestedStartAtMsRef.current = requestedStartAtMs;
+        recordingNativeStartResolvedAtMsRef.current = 0;
+        console.log('[SegmentLifecycle]', {
+          event: 'startRequested',
           outputPath,
-          segmentPath: outputPath,
-          webcamFolderName: options?.webcamFolderName,
+          requestedStartAt: requestedStartAtMs,
           segmentIndex: options?.segmentIndex,
         });
 
@@ -204,6 +215,16 @@ const VideoWindows = forwardRef<any, Props>((props, ref) => {
 
         lastRecordingPathRef.current = finalPath;
         recordingStateRef.current = 'recording';
+        const nativeStartResolvedAtMs = Date.now();
+        recordingNativeStartResolvedAtMsRef.current = nativeStartResolvedAtMs;
+        console.log('[SegmentLifecycle]', {
+          event: 'nativeStartResolved',
+          outputPath: finalPath,
+          requestedStartAt: recordingRequestedStartAtMsRef.current,
+          nativeStartResolvedAt: nativeStartResolvedAtMs,
+          startupDelayMs: Math.max(0, nativeStartResolvedAtMs - recordingRequestedStartAtMsRef.current),
+          segmentIndex: options?.segmentIndex,
+        });
         console.log('[Recording] file created', finalPath);
         console.log('[VideoStorage] segment started', finalPath);
 
@@ -241,11 +262,25 @@ const VideoWindows = forwardRef<any, Props>((props, ref) => {
 
       try {
         recordingStateRef.current = 'stopping';
+        const requestedStopAtMs = Date.now();
+        recordingRequestedStopAtMsRef.current = requestedStopAtMs;
+        console.log('[SegmentLifecycle]', {
+          event: 'stopRequested',
+          outputPath: lastRecordingPathRef.current || undefined,
+          requestedStartAt: recordingRequestedStartAtMsRef.current || undefined,
+          nativeStartResolvedAt: recordingNativeStartResolvedAtMsRef.current || undefined,
+          requestedStopAt: requestedStopAtMs,
+        });
         const actualPath = await nativeRecorder.stopRecording();
         // Native v15 resolves only after StopRecordAsync has completed.
         const finalPath = String(actualPath || lastRecordingPathRef.current || '');
+        const nativeStopResolvedAtMs = Date.now();
+        const nativeStartResolvedAtMs = recordingNativeStartResolvedAtMsRef.current || recordingRequestedStartAtMsRef.current || nativeStopResolvedAtMs;
+        const durationMs = Math.max(0, nativeStopResolvedAtMs - nativeStartResolvedAtMs);
 
         if (finalPath) {
+          let finalizedFileSize = 0;
+          let finalizedExists = false;
           lastRecordingPathRef.current = finalPath;
           console.log('[Recording] finalized path', finalPath);
           console.log('[VideoRecorder]', {
@@ -257,6 +292,26 @@ const VideoWindows = forwardRef<any, Props>((props, ref) => {
             const finalized = await waitForFinalizedFile(finalPath, 8000);
             const exists = finalized.exists;
             const fileSize = finalized.fileSize;
+            finalizedExists = exists;
+            finalizedFileSize = fileSize;
+            console.log('[SegmentLifecycle]', {
+              event: 'nativeStopResolved',
+              outputPath: finalPath,
+              requestedStartAt: recordingRequestedStartAtMsRef.current || undefined,
+              nativeStartResolvedAt: nativeStartResolvedAtMs,
+              requestedStopAt: recordingRequestedStopAtMsRef.current || undefined,
+              nativeStopResolvedAt: nativeStopResolvedAtMs,
+              durationMs,
+              fileSize,
+              valid: exists && fileSize > 0 && durationMs >= 1000,
+              invalidReason: !exists
+                ? 'file-missing'
+                : fileSize <= 0
+                  ? 'file-size-zero'
+                  : durationMs < 1000
+                    ? 'duration-under-1000ms'
+                    : undefined,
+            });
             console.log('[WindowsVideoStorage] fileExists after record =', exists);
             console.log('[HistoryVideo] file size after stop =', fileSize);
             console.log('[HistoryRecorder]', {
@@ -304,7 +359,15 @@ const VideoWindows = forwardRef<any, Props>((props, ref) => {
               error: existsError,
             });
           }
-          callbacks?.onRecordingFinished?.({path: finalPath});
+          callbacks?.onRecordingFinished?.({
+            path: finalPath,
+            requestedStartAtMs: recordingRequestedStartAtMsRef.current || undefined,
+            nativeStartResolvedAtMs,
+            requestedStopAtMs: recordingRequestedStopAtMsRef.current || undefined,
+            nativeStopResolvedAtMs,
+            durationSeconds: durationMs / 1000,
+            fileSize: finalizedFileSize || undefined,
+          });
           console.log('[Replay] video discovered', finalPath);
         } else {
           const error = new Error('Windows recording stopped without a finalized path');
