@@ -13,8 +13,6 @@ export const LANGUAGES = ['vi', 'en'];
 export const loadLanguage = async () => {
   const currentLanguage = await AsyncStorage.getItem('language');
 
-  console.log('[Windows i18n] lang ' + currentLanguage);
-
   const systemLanguage = 'vi';
 
   const language =
@@ -23,6 +21,8 @@ export const loadLanguage = async () => {
       : LANGUAGES.includes(systemLanguage)
         ? systemLanguage
         : 'vi';
+
+  console.log('[Windows i18n] lang ' + language);
 
   Numeral.locale(language);
 
