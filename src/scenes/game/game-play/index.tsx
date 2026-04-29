@@ -209,6 +209,131 @@ const createLocalStyles = (a: AdaptiveLayout, design: any, rules: any) =>
       fontWeight: '700',
       textAlign: 'center',
     },
+    youtubeLiveOverlayBackdrop: {
+      position: 'absolute',
+      top: 0,
+      right: 0,
+      bottom: 0,
+      left: 0,
+      zIndex: 320,
+      elevation: 60,
+      backgroundColor: 'rgba(0, 0, 0, 0.78)',
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingHorizontal: a.s(24),
+      paddingVertical: a.s(24),
+    },
+    youtubeLiveOverlayCard: {
+      width: '100%',
+      maxWidth: a.s(720),
+      borderRadius: a.s(26),
+      borderWidth: 1.4,
+      borderColor: 'rgba(255, 49, 49, 0.78)',
+      backgroundColor: 'rgba(10, 10, 12, 0.98)',
+      paddingHorizontal: a.s(28),
+      paddingVertical: a.s(26),
+      shadowColor: '#FF174F',
+      shadowOpacity: 0.28,
+      shadowRadius: a.s(20),
+      shadowOffset: {width: 0, height: 0},
+      elevation: 18,
+    },
+    youtubeLiveOverlayTitle: {
+      color: '#FFFFFF',
+      fontSize: a.fs(34, 0.78, 1.04),
+      lineHeight: a.fs(41, 0.78, 1.04),
+      fontWeight: '900',
+      textAlign: 'center',
+    },
+    youtubeLiveOverlayMessage: {
+      color: '#FFFFFF',
+      opacity: 0.9,
+      fontSize: a.fs(18, 0.82, 1.04),
+      lineHeight: a.fs(25, 0.82, 1.04),
+      textAlign: 'center',
+      marginTop: a.s(12),
+      marginBottom: a.s(18),
+    },
+    youtubeLiveCheckList: {
+      width: '100%',
+      gap: a.s(12),
+      marginTop: a.s(4),
+    },
+    youtubeLiveCheckRow: {
+      flexDirection: 'row',
+      alignItems: 'flex-start',
+      paddingHorizontal: a.s(14),
+      paddingVertical: a.s(12),
+      borderRadius: a.s(16),
+      backgroundColor: 'rgba(255, 255, 255, 0.06)',
+      borderWidth: 1,
+      borderColor: 'rgba(255, 255, 255, 0.08)',
+    },
+    youtubeLiveCheckDot: {
+      width: a.s(14),
+      height: a.s(14),
+      borderRadius: a.s(7),
+      marginTop: a.s(4),
+      marginRight: a.s(12),
+      backgroundColor: '#FF174F',
+    },
+    youtubeLiveCheckDotPass: {
+      backgroundColor: '#14D36B',
+    },
+    youtubeLiveCheckDotUnknown: {
+      backgroundColor: '#F3B233',
+    },
+    youtubeLiveCheckTextWrap: {
+      flex: 1,
+      minWidth: 0,
+    },
+    youtubeLiveCheckLabel: {
+      color: '#FFFFFF',
+      fontSize: a.fs(17, 0.82, 1.04),
+      lineHeight: a.fs(22, 0.82, 1.04),
+      fontWeight: '800',
+    },
+    youtubeLiveCheckDetail: {
+      color: '#D7D7D7',
+      fontSize: a.fs(14, 0.82, 1.04),
+      lineHeight: a.fs(20, 0.82, 1.04),
+      marginTop: a.s(4),
+    },
+    youtubeLiveActionRow: {
+      flexDirection: a.shortSide < 520 ? 'column' : 'row',
+      gap: a.s(12),
+      marginTop: a.s(22),
+      width: '100%',
+    },
+    youtubeLivePrimaryButton: {
+      flex: 1,
+      backgroundColor: '#C91D24',
+      borderColor: '#FF4D55',
+      borderRadius: a.s(16),
+      paddingHorizontal: a.s(18),
+      paddingVertical: a.s(12),
+      minHeight: a.s(50),
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    youtubeLiveSecondaryButton: {
+      flex: 1,
+      backgroundColor: 'rgba(255,255,255,0.08)',
+      borderColor: 'rgba(255,255,255,0.18)',
+      borderRadius: a.s(16),
+      paddingHorizontal: a.s(18),
+      paddingVertical: a.s(12),
+      minHeight: a.s(50),
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    youtubeLiveButtonText: {
+      color: '#FFFFFF',
+      fontSize: a.fs(16, 0.82, 1.04),
+      lineHeight: a.fs(20, 0.82, 1.04),
+      fontWeight: '900',
+      textAlign: 'center',
+    },
   });
 
 const GamePlay = () => {
@@ -640,6 +765,103 @@ const GamePlay = () => {
     );
   };
 
+
+  const renderYouTubeLiveOverlay = () => {
+    const overlay = viewModel.youtubeLiveOverlay;
+
+    if (!overlay?.visible) {
+      return null;
+    }
+
+    const checks = overlay.checks || [];
+
+    return (
+      <View style={localStyles.youtubeLiveOverlayBackdrop}>
+        <View style={localStyles.youtubeLiveOverlayCard}>
+          <Text
+            color={colors.white}
+            style={localStyles.youtubeLiveOverlayTitle}
+            allowFontScaling={false}
+            maxFontSizeMultiplier={1}>
+            {overlay.title || 'Chưa thể live YouTube'}
+          </Text>
+
+          <Text
+            color={colors.white}
+            style={localStyles.youtubeLiveOverlayMessage}
+            allowFontScaling={false}
+            maxFontSizeMultiplier={1}>
+            {overlay.message ||
+              'Tài khoản YouTube hiện chưa đủ điều kiện phát trực tiếp.'}
+          </Text>
+
+          {checks.length > 0 ? (
+            <View style={localStyles.youtubeLiveCheckList}>
+              {checks.map((check, index) => {
+                const dotStyle =
+                  check.status === 'pass'
+                    ? localStyles.youtubeLiveCheckDotPass
+                    : check.status === 'unknown'
+                      ? localStyles.youtubeLiveCheckDotUnknown
+                      : undefined;
+
+                return (
+                  <View
+                    key={String(check.key || index)}
+                    style={localStyles.youtubeLiveCheckRow}>
+                    <View style={[localStyles.youtubeLiveCheckDot, dotStyle]} />
+                    <View style={localStyles.youtubeLiveCheckTextWrap}>
+                      <Text
+                        color={colors.white}
+                        style={localStyles.youtubeLiveCheckLabel}
+                        allowFontScaling={false}
+                        maxFontSizeMultiplier={1}>
+                        {check.label}
+                      </Text>
+                      <Text
+                        color={'#D7D7D7'}
+                        style={localStyles.youtubeLiveCheckDetail}
+                        allowFontScaling={false}
+                        maxFontSizeMultiplier={1}>
+                        {check.detail}
+                      </Text>
+                    </View>
+                  </View>
+                );
+              })}
+            </View>
+          ) : null}
+
+          <View style={localStyles.youtubeLiveActionRow}>
+            <Button
+              style={localStyles.youtubeLivePrimaryButton}
+              onPress={viewModel.openYouTubeLiveLogin}>
+              <Text
+                color={colors.white}
+                style={localStyles.youtubeLiveButtonText}
+                allowFontScaling={false}
+                maxFontSizeMultiplier={1}>
+                Quay lại thiết lập YouTube
+              </Text>
+            </Button>
+
+            <Button
+              style={localStyles.youtubeLiveSecondaryButton}
+              onPress={viewModel.dismissYouTubeLiveOverlay}>
+              <Text
+                color={colors.white}
+                style={localStyles.youtubeLiveButtonText}
+                allowFontScaling={false}
+                maxFontSizeMultiplier={1}>
+                Đóng
+              </Text>
+            </Button>
+          </View>
+        </View>
+      </View>
+    );
+  };
+
   const WARM_UP_VIEW = !viewModel.warmUpCountdownTime || isCameraFullscreen ? (
     <View />
   ) : (
@@ -787,6 +1009,8 @@ const GamePlay = () => {
         ) : null}
 
         {WARM_UP_VIEW}
+
+        {renderYouTubeLiveOverlay()}
       </View>
     </Container>
   );

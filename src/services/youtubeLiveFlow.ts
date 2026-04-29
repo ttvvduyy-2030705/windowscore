@@ -44,6 +44,55 @@ export type YouTubeCreateLivePayload = {
   frameRate?: string;
 };
 
+const maskSecret = (value?: string | null) => {
+  const raw = String(value || '').trim();
+  if (!raw) {
+    return '';
+  }
+  if (raw.length <= 8) {
+    return `${raw.slice(0, 2)}****`;
+  }
+  return `${raw.slice(0, 4)}-****-${raw.slice(-4)}`;
+};
+
+const sanitizeYouTubeLiveLogPayload = (value: any): any => {
+  if (Array.isArray(value)) {
+    return value.map(sanitizeYouTubeLiveLogPayload);
+  }
+
+  if (!value || typeof value !== 'object') {
+    return value;
+  }
+
+  const result: any = {};
+  Object.keys(value).forEach(key => {
+    const lowerKey = key.toLowerCase();
+    const item = value[key];
+
+    if (
+      lowerKey.includes('streamname') ||
+      lowerKey.includes('streamkey') ||
+      lowerKey === 'key'
+    ) {
+      result[key] = maskSecret(item);
+      return;
+    }
+
+    if (lowerKey.includes('streamurlwithkey')) {
+      const raw = String(item || '');
+      const lastSlash = raw.lastIndexOf('/');
+      result[key] = lastSlash >= 0
+        ? `${raw.slice(0, lastSlash + 1)}${maskSecret(raw.slice(lastSlash + 1))}`
+        : maskSecret(raw);
+      return;
+    }
+
+    result[key] = sanitizeYouTubeLiveLogPayload(item);
+  });
+
+  return result;
+};
+
 type StoredSetup = {
   setupToken?: string;
 };
@@ -129,7 +178,7 @@ const requestJson = async <T>(path: string, init?: RequestInit): Promise<T> => {
   }
 
   console.log('[YouTube Live API] response status=' + response.status);
-  console.log('[YouTube Live API] response body=', data);
+  console.log('[YouTube Live API] response body=', sanitizeYouTubeLiveLogPayload(data));
   console.log('[YouTube Live API] response:', {
     path,
     status: response.status,

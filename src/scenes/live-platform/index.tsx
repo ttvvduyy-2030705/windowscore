@@ -1,6 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, {memo, useCallback, useContext, useEffect, useMemo, useRef, useState} from 'react';
-import {Image, Pressable, ScrollView, StyleSheet, Switch, View} from 'react-native';
+import {Image, Platform, Pressable, ScrollView, StyleSheet, Switch, View} from 'react-native';
 
 import images from 'assets';
 import AppImage from 'components/Image';
@@ -122,7 +122,7 @@ const LivePlatform = (props: any) => {
     titleSize: metrics.fs(isCompact ? 15 : 16),
     subtitleSize: metrics.fs(isCompact ? 12 : 13),
   }), [adaptive, isCompact, metrics]);
-  const platformItems: PlatformItem[] = useMemo(() => [{key:'device', label:localized.deviceLabel}, {key:'youtube', label:'YouTube', image:youtubeLogo}, {key:'facebook', label:'Facebook', image:facebookLogo}], [localized.deviceLabel]);
+  const platformItems: PlatformItem[] = useMemo(() => [{key:'device', label:localized.deviceLabel}, {key:'youtube', label: 'YouTube', image:youtubeLogo}, {key:'facebook', label:'Facebook', image:facebookLogo}], [localized.deviceLabel]);
 
   const onBack = useCallback(() => { if (typeof props?.goBack === 'function') { props.goBack(); return; } if (typeof props?.navigation?.goBack === 'function') { props.navigation.goBack(); } }, [props]);
 

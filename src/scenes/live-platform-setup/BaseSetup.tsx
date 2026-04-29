@@ -66,6 +66,57 @@ type StorageShape = {
   tiktok?: StoredSetup;
 };
 
+
+const OAUTH_CALLBACK_DEDUPE_TTL_MS = 5 * 60 * 1000;
+const handledOAuthCallbackUrls = new Map<string, number>();
+const handledOAuthSuccessKeys = new Map<string, number>();
+
+const pruneOAuthDedupeCache = () => {
+  const now = Date.now();
+  handledOAuthCallbackUrls.forEach((timestamp, key) => {
+    if (now - timestamp > OAUTH_CALLBACK_DEDUPE_TTL_MS) {
+      handledOAuthCallbackUrls.delete(key);
+    }
+  });
+  handledOAuthSuccessKeys.forEach((timestamp, key) => {
+    if (now - timestamp > OAUTH_CALLBACK_DEDUPE_TTL_MS) {
+      handledOAuthSuccessKeys.delete(key);
+    }
+  });
+};
+
+const shouldProcessOAuthCallbackUrl = (url?: string | null) => {
+  const callbackUrl = String(url || '').trim();
+  if (!callbackUrl) {
+    return false;
+  }
+
+  pruneOAuthDedupeCache();
+
+  if (handledOAuthCallbackUrls.has(callbackUrl)) {
+    return false;
+  }
+
+  handledOAuthCallbackUrls.set(callbackUrl, Date.now());
+  return true;
+};
+
+const shouldShowOAuthSuccessOnce = (key: string) => {
+  pruneOAuthDedupeCache();
+
+  if (handledOAuthSuccessKeys.has(key)) {
+    return false;
+  }
+
+  handledOAuthSuccessKeys.set(key, Date.now());
+  return true;
+};
+
+const clearOAuthDedupeCache = () => {
+  handledOAuthCallbackUrls.clear();
+  handledOAuthSuccessKeys.clear();
+};
+
 const normalizePlatform = (value?: string | null): Platform | null => {
   if (value === 'facebook' || value === 'youtube' || value === 'tiktok') {
     return value;
@@ -192,6 +243,7 @@ const LivePlatformSetup = (props: Props) => {
   const [visibility, setVisibility] = useState<Visibility>('public');
 
   const autoAuthTriggeredRef = useRef(false);
+  const latestOAuthSuccessKeyRef = useRef('');
   const {isAplusProActive, showPaywall} = useAplusPro();
 
   const compact = !adaptive.isLandscape || adaptive.width < 1100;
@@ -408,6 +460,13 @@ const LivePlatformSetup = (props: Props) => {
     try {
       setIsAuthorizing(true);
       if (platform === 'youtube') {
+        console.log('[LiveWindowsMode]', {
+          selectedMode: 'youtube-oauth-then-ffmpeg-local',
+          usesNgrok: false,
+          usesMetro: false,
+          usesRenderForAuth: true,
+          usesRenderForStream: false,
+        });
         console.log('[YouTube OAuth] opening browser auth');
       }
       await openPlatformOAuth(platform as LivestreamPlatform);
@@ -418,14 +477,32 @@ const LivePlatformSetup = (props: Props) => {
   }, [isAplusProActive, platform, showLivestreamPaywall]);
 
   useEffect(() => {
+    let mounted = true;
+
     const handleUrl = async ({url}: {url: string}) => {
-      if (url?.toLowerCase().startsWith('aplusscore://oauth/callback')) {
-        console.log('[YouTube OAuth] deep link received:', url);
+      const callbackMatched = url?.toLowerCase().startsWith('aplusscore://oauth/callback');
+
+      if (callbackMatched) {
+        const shouldProcess = shouldProcessOAuthCallbackUrl(url);
+
+        console.log('[YouTube OAuth] deep link received', {
+          callbackMatched: true,
+          containsSetupToken: /setupToken|setup_token|sessionToken|session_token|token/i.test(url || ''),
+          duplicateSkipped: !shouldProcess,
+        });
+
+        if (!shouldProcess) {
+          return;
+        }
       }
 
       const payload = parseOAuthCallback(url);
 
       if (!payload || payload.platform !== platform) {
+        return;
+      }
+
+      if (!mounted) {
         return;
       }
 
@@ -439,17 +516,34 @@ const LivePlatformSetup = (props: Props) => {
         return;
       }
 
-      if (platform === 'youtube') {
-        console.log('[YouTube OAuth] connected state refresh start', {
-          hasSetupToken: Boolean(payload.setupToken || setupToken),
-          accountName: payload.accountName || '',
-          accountId: payload.accountId || '',
-        });
-      }
-
       const nextAccountName = payload.accountName || `${platformName} Account`;
       const nextAccountId = payload.accountId || '';
       const nextSetupToken = payload.setupToken || setupToken;
+      const successKey = [
+        platform,
+        nextAccountId,
+        nextAccountName,
+        nextSetupToken,
+      ].join('|');
+
+      if (latestOAuthSuccessKeyRef.current === successKey) {
+        console.log('[YouTube OAuth] duplicate connected state skipped', {
+          accountName: nextAccountName,
+          accountId: nextAccountId,
+          hasSetupToken: Boolean(nextSetupToken),
+        });
+        return;
+      }
+
+      latestOAuthSuccessKeyRef.current = successKey;
+
+      if (platform === 'youtube') {
+        console.log('[YouTube OAuth] connected state refresh start', {
+          hasSetupToken: Boolean(nextSetupToken),
+          accountName: nextAccountName,
+          accountId: nextAccountId,
+        });
+      }
 
       setAccountName(nextAccountName);
       setAccountId(nextAccountId);
@@ -463,6 +557,10 @@ const LivePlatformSetup = (props: Props) => {
         nextSetupToken,
       );
 
+      if (!mounted) {
+        return;
+      }
+
       if (platform === 'youtube') {
         console.log('[YouTube OAuth] connected state refresh success', {
           accountName: nextAccountName,
@@ -471,7 +569,14 @@ const LivePlatformSetup = (props: Props) => {
         });
       }
 
-      Alert.alert('Kết nối thành công', `Đã kết nối với ${platformName}.`);
+      if (shouldShowOAuthSuccessOnce(successKey)) {
+        Alert.alert('Kết nối thành công', `Đã kết nối với ${platformName}.`);
+      } else {
+        console.log('[YouTube OAuth] duplicate success alert skipped', {
+          accountName: nextAccountName,
+          accountId: nextAccountId,
+        });
+      }
     };
 
     const subscription = Linking.addEventListener('url', handleUrl);
@@ -483,6 +588,7 @@ const LivePlatformSetup = (props: Props) => {
     });
 
     return () => {
+      mounted = false;
       subscription.remove();
     };
   }, [persistLocalState, platform, platformName, setupToken, visibility]);
@@ -514,6 +620,8 @@ const LivePlatformSetup = (props: Props) => {
       setAccountId('');
       setSetupToken('');
       autoAuthTriggeredRef.current = false;
+      latestOAuthSuccessKeyRef.current = '';
+      clearOAuthDedupeCache();
       Alert.alert('Đã đăng xuất', `Đã gỡ ${platformName} khỏi giao diện này.`);
     } catch (_error) {
       Alert.alert('Lỗi', 'Không thể đăng xuất lúc này.');

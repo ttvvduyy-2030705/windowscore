@@ -44,6 +44,11 @@ export type LiveStreamCamera = {
   resolution: Resolution;
   fps: Fps;
   bitrate: Bitrate;
+  ffmpegPath?: string;
+  cameraDeviceName?: string;
+  audioDeviceName?: string;
+  useAudio?: boolean;
+  localLiveMode?: 'ffmpeg-local' | 'oauth-backend';
 };
 
 export enum WebcamType {

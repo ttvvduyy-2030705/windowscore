@@ -65,6 +65,15 @@ import {
   stopYouTubeNativeLive,
   subscribeYouTubeNativeLiveState,
 } from 'services/youtubeNativeLive';
+import {
+  DEFAULT_YOUTUBE_RTMP_URL,
+  createWindowsFfmpegSnapshotFromGameState,
+  maskStreamKey,
+  startWindowsFfmpegYouTubeLive,
+  stopWindowsFfmpegYouTubeLive,
+  updateWindowsFfmpegOverlay,
+  type WindowsFfmpegLiveConfig,
+} from 'services/livestream/WindowsFfmpegLiveEngine';
 
 let countdownInterval: NodeJS.Timeout, warmUpCountdownInterval: NodeJS.Timeout;
 const {CameraService} = NativeModules;
@@ -1301,7 +1310,19 @@ const GamePlayViewModel = () => {
     lastLiveSnapshotSignatureRef.current = signature;
     lastLiveSnapshotSyncAtRef.current = now;
     setLiveMatchSnapshotSync(snapshot);
-  }, [buildLiveMatchSnapshot]);
+
+    if (Platform.OS === 'windows' && selectedLivestreamPlatform === 'youtube') {
+      void updateWindowsFfmpegOverlay(
+        createWindowsFfmpegSnapshotFromGameState({
+          gameSettings,
+          playerSettings: snapshot.playerSettings,
+          currentPlayerIndex: snapshot.currentPlayerIndex,
+          countdownTime: snapshot.countdownTime,
+          totalTurns: snapshot.totalTurns,
+        }),
+      );
+    }
+  }, [buildLiveMatchSnapshot, gameSettings, selectedLivestreamPlatform]);
 
   // useEffect(() => {
   //      if(!hasPermission){
@@ -2658,8 +2679,11 @@ const GamePlayViewModel = () => {
 
   const openYouTubeLiveLogin = useCallback(() => {
     setYoutubeLiveOverlay(null);
-    navigate(screens.livePlatformSetupYoutube);
-  }, []);
+    navigate(screens.livePlatformSetupYoutube, {
+      livestreamPlatform: 'youtube',
+      saveToDeviceWhileStreaming,
+    });
+  }, [saveToDeviceWhileStreaming]);
 
   const buildYouTubeLiveOverlay = useCallback(
     (
@@ -2722,6 +2746,17 @@ const GamePlayViewModel = () => {
       fallbackMessage?: string,
     ) => {
       const overlayState = buildYouTubeLiveOverlay(eligibility, fallbackMessage);
+      console.log('[YouTubeLiveEligibilityOverlay]', {
+        visible: true,
+        title: overlayState.title,
+        checks: overlayState.checks?.map(check => ({
+          key: check.key,
+          label: check.label,
+          status: check.status,
+          detail: check.detail,
+        })),
+        willReturnToSetup: true,
+      });
       setYoutubeLiveOverlay(overlayState);
     },
     [buildYouTubeLiveOverlay],
@@ -2830,6 +2865,214 @@ const GamePlayViewModel = () => {
       shouldStartRecordingRef.current = true;
       pendingStartRecordingRef.current = true;
       setIsStarted(true);
+      return;
+    }
+
+    if (Platform.OS === 'windows' && shouldUseYouTubeLive) {
+      console.log('[LiveWindowsMode]', {
+        selectedMode: 'ffmpeg-local-oauth',
+        usesNgrok: false,
+        usesMetro: false,
+        usesRenderForAuth: true,
+        usesRenderForStream: false,
+      });
+
+      shouldStartRecordingRef.current = saveToDeviceWhileStreaming;
+      pendingStartRecordingRef.current = saveToDeviceWhileStreaming;
+      pendingYouTubeNativeStartRef.current = null;
+      setYoutubeLiveOverlay(null);
+      setYoutubeLivePreparing(true);
+      setYoutubeLivePreviewActive(false);
+      setYouTubeNativeCameraLock(false);
+      setYouTubeSourceLock(null);
+      setIsStarted(true);
+
+      const firstPlayerName =
+        playerSettingsRef.current?.playingPlayers?.[0]?.name?.trim() ||
+        playerSettings?.playingPlayers?.[0]?.name?.trim() ||
+        'Player 1';
+      const secondPlayerName =
+        playerSettingsRef.current?.playingPlayers?.[1]?.name?.trim() ||
+        playerSettings?.playingPlayers?.[1]?.name?.trim() ||
+        'Player 2';
+      const youtubeTitle = `${firstPlayerName} vs ${secondPlayerName} - ${new Date().toLocaleString()}`;
+
+      const resolveIngestion = (session: any) => {
+        const streamUrlWithKey = String(session?.streamUrlWithKey || '').trim();
+        const streamUrl = String(
+          session?.streamUrl ||
+            session?.ingestionAddress ||
+            session?.cdn?.ingestionInfo?.ingestionAddress ||
+            '',
+        ).trim();
+        const streamName = String(
+          session?.streamName ||
+            session?.streamKey ||
+            session?.cdn?.ingestionInfo?.streamName ||
+            '',
+        ).trim();
+
+        if (streamUrl && streamName) {
+          return {rtmpUrl: streamUrl.replace(/\/+$/g, ''), streamKey: streamName};
+        }
+
+        if (streamUrlWithKey) {
+          const clean = streamUrlWithKey.replace(/\/+$/g, '');
+          const lastSlash = clean.lastIndexOf('/');
+          if (lastSlash > 0) {
+            return {
+              rtmpUrl: clean.slice(0, lastSlash),
+              streamKey: clean.slice(lastSlash + 1),
+            };
+          }
+        }
+
+        return {
+          rtmpUrl: streamUrl || DEFAULT_YOUTUBE_RTMP_URL,
+          streamKey: streamName,
+        };
+      };
+
+      const prepareWindowsFfmpegYouTubeLive = async () => {
+        let liveResponse: any = null;
+
+        try {
+          const selectedLiveVisibility = await readYouTubeVisibilityFromStorage();
+
+          liveResponse = await createYouTubeLiveSession({
+            title: youtubeTitle,
+            description: `Live score từ trận đấu ${firstPlayerName} vs ${secondPlayerName}`,
+            privacyStatus: selectedLiveVisibility,
+            enableAutoStart: true,
+            enableAutoStop: true,
+            enableDvr: true,
+            recordFromStart: true,
+            resolution: '1080p',
+            frameRate: '30fps',
+          });
+
+          const ingestion = resolveIngestion(liveResponse?.session);
+          activeYouTubeBroadcastIdRef.current =
+            liveResponse?.session?.broadcastId || liveResponse?.session?.id || '';
+
+          console.log('[YouTube Live] created for Windows FFmpeg:', {
+            broadcastId: liveResponse?.session?.broadcastId || '',
+            streamId: liveResponse?.session?.streamId || '',
+            hasRtmpUrl: Boolean(ingestion.rtmpUrl),
+            streamKeyMasked: maskStreamKey(ingestion.streamKey),
+            watchUrl: liveResponse?.session?.watchUrl || '',
+          });
+
+          if (!ingestion.streamKey) {
+            throw new Error('Backend chưa trả về stream key YouTube.');
+          }
+
+          const liveConfigItems = await AsyncStorage.multiGet([
+            'WindowsFfmpegPath',
+            'WindowsFfmpegCameraDevice',
+            'WindowsFfmpegAudioDevice',
+          ]);
+          const liveConfigLookup = liveConfigItems.reduce<Record<string, string>>(
+            (acc, [key, value]) => ({...acc, [key]: value || ''}),
+            {},
+          );
+
+          const windowsLiveConfig: WindowsFfmpegLiveConfig = {
+            platform: 'youtube',
+            rtmpUrl: ingestion.rtmpUrl || DEFAULT_YOUTUBE_RTMP_URL,
+            streamKey: ingestion.streamKey,
+            ffmpegPath: liveConfigLookup.WindowsFfmpegPath || '',
+            cameraDeviceName: liveConfigLookup.WindowsFfmpegCameraDevice || '',
+            audioDeviceName: liveConfigLookup.WindowsFfmpegAudioDevice || '',
+            useAudio: Boolean(liveConfigLookup.WindowsFfmpegAudioDevice),
+            fps: 30,
+            bitrate: '6000k',
+          };
+
+          const snapshot = createWindowsFfmpegSnapshotFromGameState({
+            gameSettings,
+            playerSettings: playerSettingsRef.current || playerSettings,
+            currentPlayerIndex,
+            countdownTime,
+            totalTurns,
+          });
+
+          const startResult = await startWindowsFfmpegYouTubeLive(
+            windowsLiveConfig,
+            snapshot,
+          );
+
+          if (!startResult?.ok) {
+            const activeYouTubeBroadcastId = activeYouTubeBroadcastIdRef.current;
+            activeYouTubeBroadcastIdRef.current = '';
+
+            if (activeYouTubeBroadcastId) {
+              try {
+                await stopYouTubeLiveSession(activeYouTubeBroadcastId);
+                console.log('[YouTube Live] stopped broadcast after FFmpeg start failed:', activeYouTubeBroadcastId);
+              } catch (youtubeStopError) {
+                console.log('[YouTube Live] stop after FFmpeg start failed:', youtubeStopError);
+              }
+            }
+
+            throw new Error(
+              startResult?.error ||
+                'Không thể bắt đầu livestream local bằng FFmpeg.',
+            );
+          }
+
+          setYoutubeLivePreparing(false);
+          setYoutubeLivePreviewActive(false);
+          setActiveGameplaySessionSync({
+            matchSessionId: matchSessionIdRef.current,
+            webcamFolderName,
+            savedAt: Date.now(),
+            source: 'windows-ffmpeg-oauth-live-start',
+          });
+        } catch (error: any) {
+          console.log('[YouTube Live] Windows FFmpeg OAuth/create/start failed:', {
+            message: error?.message || String(error),
+            hasSession: Boolean(liveResponse?.session),
+          });
+
+          pendingYouTubeNativeStartRef.current = null;
+          activeYouTubeBroadcastIdRef.current = '';
+          setYoutubeLivePreparing(false);
+          setYoutubeLivePreviewActive(false);
+          setIsStarted(false);
+          setYouTubeSourceLock(null);
+
+          try {
+            await stopWindowsFfmpegYouTubeLive('start-failed');
+          } catch {}
+
+          const payload = error?.payload as YouTubeEligibilityResponse | undefined;
+          const fallbackMessage =
+            payload?.message ||
+            error?.message ||
+            'Không thể khởi tạo live YouTube bằng FFmpeg local.';
+
+          try {
+            const eligibility =
+              payload?.checks?.length || payload?.subscriberCount !== undefined
+                ? payload
+                : await getYouTubeLiveEligibility();
+
+            showYouTubeLiveFailure(eligibility, fallbackMessage);
+          } catch (eligibilityError: any) {
+            console.log('[YouTube Live] eligibility failed:', eligibilityError);
+
+            showYouTubeLiveFailure(
+              null,
+              fallbackMessage ||
+                eligibilityError?.message ||
+                'Không thể kiểm tra điều kiện YouTube.',
+            );
+          }
+        }
+      };
+
+      void prepareWindowsFfmpegYouTubeLive();
       return;
     }
 
@@ -2976,6 +3219,9 @@ const GamePlayViewModel = () => {
 
     void prepareYouTubeLive();
   }, [
+    countdownTime,
+    currentPlayerIndex,
+    gameSettings,
     isStarted,
     playerSettings,
     readYouTubeVisibilityFromStorage,
@@ -2985,6 +3231,8 @@ const GamePlayViewModel = () => {
     shouldUseLocalRecordingOnly,
     shouldUseYouTubeLive,
     showYouTubeLiveFailure,
+    totalTurns,
+    webcamFolderName,
   ]);
 
   const onToggleCountDown = useCallback(() => {
@@ -3203,6 +3451,9 @@ const GamePlayViewModel = () => {
           pendingYouTubeNativeStartRef.current = null;
           setYoutubeLivePreparing(false);
           await stopYouTubeNativeLive();
+          if (Platform.OS === 'windows') {
+            await stopWindowsFfmpegYouTubeLive('end-match');
+          }
 
           const activeYouTubeBroadcastId = activeYouTubeBroadcastIdRef.current;
           activeYouTubeBroadcastIdRef.current = '';
