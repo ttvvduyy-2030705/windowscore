@@ -59,8 +59,7 @@ const GameSettings = (props: Props) => {
       <View style={styles.headerGlow}>
         <Pressable
           onPress={viewModel.onCancel}
-          style={styles.headerBackButton}
-          android_ripple={{color: 'rgba(255,255,255,0.08)', borderless: false}}>
+          style={styles.headerBackButton}>
           <View style={styles.headerBackFrame}>
             <View style={styles.headerBackInner}>
   <Image

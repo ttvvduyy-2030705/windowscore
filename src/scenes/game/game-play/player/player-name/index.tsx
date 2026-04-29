@@ -92,7 +92,6 @@ const PlayerName = (props: Props) => {
           autoCorrect={false}
           autoCapitalize="words"
           selectTextOnFocus={props.nameEditable}
-          underlineColorAndroid="transparent"
           selectionColor={'#FF4040'}
           placeholderTextColor={'#8E9099'}
           multiline={false}

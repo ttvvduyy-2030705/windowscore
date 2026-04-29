@@ -29,7 +29,7 @@ const Thumbnails = () => {
       </View>
       <View style={styles.toggleRow}>
         <Text color={'#FFFFFF'} style={styles.toggleLabel}>{i18n.t('showOnLiveStream')}</Text>
-        {typeof viewModel.showOnLiveStream === 'boolean' ? <Switch value={viewModel.showOnLiveStream} onValueChange={viewModel.onToggleShowOnLiveStream} trackColor={{false:'#2A2A2A', true:'#C91D24'}} thumbColor={viewModel.showOnLiveStream ? '#FFFFFF' : '#BDBDBD'} ios_backgroundColor="#2A2A2A" /> : <View />}
+        {typeof viewModel.showOnLiveStream === 'boolean' ? <Switch value={viewModel.showOnLiveStream} onValueChange={viewModel.onToggleShowOnLiveStream} trackColor={{false:'#2A2A2A', true:'#C91D24'}} thumbColor={viewModel.showOnLiveStream ? '#FFFFFF' : '#BDBDBD'} /> : <View />}
       </View>
     </View>
   );

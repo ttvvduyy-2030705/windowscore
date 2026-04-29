@@ -24,8 +24,7 @@ const BrandedHeader = ({title, onBack}: Props) => {
       {onBack ? (
         <Pressable
           onPress={onBack}
-          style={chrome.headerBackButton}
-          android_ripple={{color: 'rgba(255,255,255,0.08)', borderless: false}}>
+          style={chrome.headerBackButton}>
           <View style={chrome.headerBackFrame}>
             <View style={chrome.headerBackInner}>
               <Image

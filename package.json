@@ -3,13 +3,12 @@
   "version": "0.0.1",
   "private": true,
   "scripts": {
-    "android": "react-native run-android",
     "start": "react-native start",
     "windows": "react-native run-windows --arch x64",
     "windows:debug": "react-native run-windows --arch x64 --no-packager",
     "windows:release": "react-native run-windows --arch x64 --release",
     "windows:autolink": "react-native autolink-windows",
-    "clean": "npx react-native clean-project-auto"
+    "clean:windows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"Remove-Item -Recurse -Force .\\windows\\billiardsgrade\\bin,.\\windows\\billiardsgrade\\obj,.\\windows\\x64 -ErrorAction SilentlyContinue\""
   },
   "dependencies": {
     "@openspacelabs/react-native-zoomable-view": "^2.4.2",
@@ -58,8 +57,6 @@
     "@babel/core": "^7.25.2",
     "@babel/runtime": "^7.25.0",
     "@react-native-community/cli": "15.0.1",
-    "@react-native-community/cli-platform-android": "15.0.1",
-    "@react-native-community/cli-platform-ios": "15.0.1",
     "@react-native/eslint-config": "0.75.5",
     "@react-native/metro-config": "0.75.5",
     "babel-plugin-module-resolver": "^5.0.2",

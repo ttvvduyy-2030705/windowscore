@@ -122,8 +122,7 @@ const EditablePlayerNameInput = memo(
               autoCorrect={false}
               autoCapitalize="words"
               selectTextOnFocus={false}
-              underlineColorAndroid="transparent"
-              placeholder={placeholder}
+                  placeholder={placeholder}
               placeholderTextColor={isPool ? '#575757' : '#666666'}
             />
           </View>
@@ -142,7 +141,6 @@ const EditablePlayerNameInput = memo(
         autoCapitalize="words"
         editable={true}
         selectTextOnFocus={true}
-        underlineColorAndroid="transparent"
         placeholder={placeholder}
         placeholderTextColor={isPool ? '#575757' : '#666666'}
       />

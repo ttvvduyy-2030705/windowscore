@@ -55,7 +55,7 @@ class RemoteControl {
       .replace(/[\s\-]+/g, '_');
 
     const aliasMap: {[key: string]: string} = {
-      // Android keycodes / mã phím chính
+      // Remote-control numeric key codes / mã phím chính
       '19': 'UP',
       '20': 'DOWN',
       '21': 'LEFT',

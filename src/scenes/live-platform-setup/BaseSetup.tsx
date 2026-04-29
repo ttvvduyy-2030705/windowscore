@@ -722,8 +722,7 @@ const LivePlatformSetup = (props: Props) => {
       <View style={styles.headerGlow}>
         <Pressable
           onPress={onBack}
-          style={styles.headerBackButton}
-          android_ripple={{color: 'rgba(255,255,255,0.08)', borderless: false}}>
+          style={styles.headerBackButton}>
           <View style={styles.headerBackFrame}>
             <View style={styles.headerBackInner}>
   <AppImage

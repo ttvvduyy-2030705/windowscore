@@ -214,7 +214,7 @@ const buildOverlayParity = (snapshot?: WindowsFfmpegOverlaySnapshot | null) => {
     target: hasTarget,
     turn: hasTurn,
     mode: isCaromSnapshot(snapshot) ? 'carom' : 'pool',
-    androidParityStatus: missingFields.length ? 'partial' : 'same-data-source',
+    windowsOverlayStatus: missingFields.length ? 'partial' : 'same-data-source',
     missingFields,
   };
 };
@@ -225,20 +225,6 @@ const logLiveAuditOnce = () => {
   }
   auditLogged = true;
 
-  console.log('[AndroidLiveAudit]', {
-    files: [
-      'src/services/youtubeNativeLive.ts',
-      'src/scenes/game/game-play/console/webcam/index.tsx',
-      'android/app/src/main/java/com/billiards_management/aplus/score/youtube/YouTubeLiveModule.kt',
-      'android/app/src/main/java/com/billiards_management/aplus/score/youtube/YouTubeLiveEngine.kt',
-      'android/app/src/main/java/com/billiards_management/aplus/score/youtube/YouTubeLiveOverlayBitmapRenderer.kt',
-    ],
-    engine: 'Android native YouTubeLiveModule + RtmpCamera2',
-    overlaySource: 'gameplay-shared-overlay-snapshot captured from offscreen React overlay',
-    startFlow: 'OAuth/backend session -> native RTMP startStream',
-    stopFlow: 'native stopStream + backend stop',
-  });
-
   console.log('[WindowsLiveAudit]', {
     files: [
       'src/services/livestream/WindowsFfmpegLiveEngine.ts',
@@ -247,7 +233,7 @@ const logLiveAuditOnce = () => {
       'src/services/youtubeLiveFlow.ts',
     ],
     engine: 'Windows local FFmpeg DirectShow + YouTube RTMP',
-    overlaySource: 'same gameplay state used by Android overlay snapshot; rendered as FFmpeg drawtext/drawbox plus JSON/HTML debug artifact',
+    overlaySource: 'gameplay playerSettings/gameSettings/countdown snapshot rendered by FFmpeg drawtext/drawbox plus JSON/HTML debug artifact',
     startFlow: 'OAuth/backend session -> FFmpeg local start',
     stopFlow: 'send q to FFmpeg, wait, terminate fallback, backend stop',
     usesNgrok: false,
@@ -256,14 +242,14 @@ const logLiveAuditOnce = () => {
   });
 
   [
-    ['Live entry screen', 'same route selection concept', 'same route selection concept', 'same'],
-    ['Auth / stream key', 'OAuth/backend returns RTMP ingest', 'OAuth/backend returns RTMP ingest', 'same'],
-    ['Camera source', 'Android Camera2/OpenGL preview', 'Windows DirectShow camera device in FFmpeg', 'different'],
-    ['Overlay source of truth', 'gameplay playerSettings/gameSettings snapshot', 'same gameplay playerSettings/gameSettings snapshot', 'fixed'],
-    ['Overlay rendering', 'captured PNG bitmap overlay in native encoder', 'FFmpeg drawbox/drawtext from same snapshot', 'different'],
-    ['Release dependency', 'no Metro/ngrok for stream', 'no Metro/ngrok for stream', 'same'],
-  ].forEach(([item, androidValue, windowsValue, status]) => {
-    console.log('[LiveParityDiff]', {item, androidValue, windowsValue, status});
+    ['Live entry screen', 'Windows live-platform -> live-platform-setup -> gameplay', 'kept'],
+    ['Auth / stream key', 'OAuth/backend returns RTMP ingest for Windows FFmpeg', 'kept'],
+    ['Camera source', 'Windows DirectShow camera device in FFmpeg', 'kept'],
+    ['Overlay source of truth', 'gameplay playerSettings/gameSettings snapshot', 'kept'],
+    ['Overlay rendering', 'FFmpeg drawbox/drawtext from snapshot plus JSON/HTML debug artifact', 'kept'],
+    ['Release dependency', 'no Metro/ngrok for stream', 'kept'],
+  ].forEach(([item, windowsValue, status]) => {
+    console.log('[WindowsLiveDiff]', {item, windowsValue, status});
   });
 };
 

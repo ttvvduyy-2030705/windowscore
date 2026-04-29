@@ -43,7 +43,7 @@ export const getAplusProDeviceInfo = () => {
     platform: Platform.OS,
     brand: String(brand || ''),
     model: String(model || ''),
-    androidVersion: String(Platform.Version || ''),
+    osVersion: String(Platform.Version || ''),
     appVersion: '',
   };
 };

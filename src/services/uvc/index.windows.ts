@@ -10,7 +10,7 @@ export async function listUsbDevices(): Promise<UsbDeviceInfo[]> {
 }
 
 export async function startUvcRecording() {
-  throw new Error('UVC recording is Android-only in this Windows build.');
+  throw new Error('UVC recording is not available in this Windows build.');
 }
 
 export async function stopUvcRecording() {

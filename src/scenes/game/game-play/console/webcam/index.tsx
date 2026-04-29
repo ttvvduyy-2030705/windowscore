@@ -31,7 +31,6 @@ import colors from 'configuration/colors';
 import {keys} from 'configuration/keys';
 
 import WebCamViewModel, {Props} from './WebCamViewModel';
-import YouTubeAndroidLivePreview from './YouTubeAndroidLivePreview';
 import LiveStreamImages from '../../livestream-images';
 import PoolBroadcastScoreboard from 'components/PoolBroadcastScoreboard';
 import CaromBroadcastScoreboard from 'components/CaromBroadcastScoreboard';
@@ -56,6 +55,8 @@ import {createGameplayLayoutRules, createGameplayStyles} from '../../layoutRules
 import {useAplusPro} from 'features/subscription';
 import {LanguageContext} from 'context/language';
 
+const WindowsOnlyUnusedNativeLivePreview = (_props: any) => null;
+
 const BASE_ZOOM_STEPS = [1, 2, 5, 10];
 
 const DEBUG_CAMERA = true;
@@ -64,7 +65,7 @@ const LIVE_OVERLAY_SNAPSHOT_HEIGHT = 1080;
 const LIVE_OVERLAY_SNAPSHOT_MIN_INTERVAL_MS = 450;
 const ENABLE_YOUTUBE_OVERLAY_SNAPSHOT_CAPTURE = true;
 
-// Sample-image sizing ratios for the encoded YouTube overlay only.
+// Encoded live overlay sizing values.
 // Keep gameplay camera/fullscreen/replay metrics untouched.
 const LIVE_OVERLAY_LOGO_WIDTH_RATIO = 0.13;
 const LIVE_OVERLAY_LOGO_HEIGHT_RATIO = 0.085;
@@ -513,10 +514,6 @@ const WebCam = forwardRef<WebCamHandle, WebCamComponentProps>((props, ref) => {
     const applyFullscreenSystemChrome = () => {
       StatusBar.setHidden(true, 'none');
 
-      if (Platform.OS === 'android') {
-        StatusBar.setTranslucent(true);
-        StatusBar.setBackgroundColor('transparent', false);
-      }
     };
 
     applyFullscreenSystemChrome();
@@ -965,10 +962,7 @@ const handleZoomSliderComplete = useCallback(
     viewModel.onSwitchCamera();
   };
 
-  const useYouTubeNativePreview =
-    props.youtubeLivePreviewActive &&
-    Platform.OS === 'android' &&
-    !externalLiveLocked;
+  const useYouTubeNativePreview = false;
   // Native live no longer owns any scoreboard/logo overlay. Keep the same
   // React overlay used by normal camera/fullscreen/replay visible during live.
   const suppressReactMatchOverlayForNativeLive = false;
@@ -1475,7 +1469,7 @@ const handleZoomSliderComplete = useCallback(
 
   const renderVideoBootstrap = (fullscreenMode: boolean) => (
     useYouTubeNativePreview ? (
-      <YouTubeAndroidLivePreview
+      <WindowsOnlyUnusedNativeLivePreview
         controllerRef={youtubeControllerRef}
         mirrorControllerRef={props.cameraRef as any}
         setIsCameraReady={handleCameraReadyChange}
@@ -1512,7 +1506,6 @@ const handleZoomSliderComplete = useCallback(
             : undefined
         }
         cameraScaleMode={cameraScaleMode}
-        androidPreviewViewTypeOverride={undefined}
         suppressCameraFallbackOverlay={false}
         ignoreNavigationFocusLoss={fullscreenMode || props.forceFullscreen === true}
       />

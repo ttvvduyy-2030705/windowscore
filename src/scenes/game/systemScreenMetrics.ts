@@ -1,5 +1,3 @@
-import {NativeModules, Platform} from 'react-native';
-
 export type SystemScreenMetrics = {
   screenWidthDp: number;
   screenHeightDp: number;
@@ -12,18 +10,6 @@ export type SystemScreenMetrics = {
   windowWidthPx: number;
   windowHeightPx: number;
   source: 'native' | 'fallback';
-};
-
-type NativeScreenMetricsModule = {
-  getCurrentMetrics?: () => Promise<Partial<SystemScreenMetrics>>;
-};
-
-const ScreenMetricsModule =
-  NativeModules.ScreenMetricsModule as NativeScreenMetricsModule | undefined;
-
-const clampNumber = (value: unknown, fallback: number) => {
-  const next = Number(value);
-  return Number.isFinite(next) && next > 0 ? next : fallback;
 };
 
 export const buildFallbackSystemScreenMetrics = (
@@ -53,36 +39,5 @@ export const getSystemScreenMetrics = async (
   widthDp: number,
   heightDp: number,
   fontScale: number,
-): Promise<SystemScreenMetrics> => {
-  const fallback = buildFallbackSystemScreenMetrics(widthDp, heightDp, fontScale);
-
-  if (Platform.OS !== 'android' || !ScreenMetricsModule?.getCurrentMetrics) {
-    return fallback;
-  }
-
-  try {
-    const raw = await ScreenMetricsModule.getCurrentMetrics();
-    return {
-      screenWidthDp: clampNumber(raw?.screenWidthDp, fallback.screenWidthDp),
-      screenHeightDp: clampNumber(raw?.screenHeightDp, fallback.screenHeightDp),
-      smallestScreenWidthDp: clampNumber(
-        raw?.smallestScreenWidthDp,
-        fallback.smallestScreenWidthDp,
-      ),
-      densityDpi: clampNumber(raw?.densityDpi, fallback.densityDpi),
-      density: clampNumber(raw?.density, fallback.density),
-      fontScale: clampNumber(raw?.fontScale, fallback.fontScale),
-      orientation:
-        raw?.orientation === 'landscape' || raw?.orientation === 'portrait'
-          ? raw.orientation
-          : fallback.orientation,
-      isTablet:
-        typeof raw?.isTablet === 'boolean' ? raw.isTablet : fallback.isTablet,
-      windowWidthPx: clampNumber(raw?.windowWidthPx, fallback.windowWidthPx),
-      windowHeightPx: clampNumber(raw?.windowHeightPx, fallback.windowHeightPx),
-      source: 'native',
-    };
-  } catch {
-    return fallback;
-  }
-};
+): Promise<SystemScreenMetrics> =>
+  buildFallbackSystemScreenMetrics(widthDp, heightDp, fontScale);

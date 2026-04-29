@@ -1,10 +1,7 @@
 import React, {memo, useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {
   Alert,
-  BackHandler,
-  Keyboard,
   KeyboardAvoidingView,
-  Platform,
   Pressable,
   ScrollView,
   Text as RNText,
@@ -433,10 +430,7 @@ const RestaurantMenuScreen = (props: Props) => {
 
     reinforceFullscreen('cart-visible');
 
-    // React Native Modal on Android creates a separate Window and can bring
-    // the system navigation bar back. The cart now renders as an absolute
-    // in-screen overlay, but we still re-apply fullscreen for keyboard/focus
-    // transitions to keep the restaurant menu immersive.
+    // Keep the restaurant menu immersive during overlay focus transitions.
     const timers = [
       setTimeout(() => reinforceFullscreen('cart-visible-delay-50'), 50),
       setTimeout(() => reinforceFullscreen('cart-visible-delay-250'), 250),
@@ -447,39 +441,7 @@ const RestaurantMenuScreen = (props: Props) => {
     };
   }, [cartModalVisible, reinforceFullscreen]);
 
-  useEffect(() => {
-    if (Platform.OS !== 'android' || !cartModalVisible) {
-      return;
-    }
 
-    const backSubscription = BackHandler.addEventListener('hardwareBackPress', () => {
-      closeCart('android-back');
-      return true;
-    });
-
-    return () => {
-      backSubscription.remove();
-    };
-  }, [cartModalVisible, closeCart]);
-
-  useEffect(() => {
-    if (Platform.OS !== 'android') {
-      return;
-    }
-
-    const keyboardShow = Keyboard.addListener('keyboardDidShow', () => {
-      reinforceFullscreen('keyboard-show');
-    });
-    const keyboardHide = Keyboard.addListener('keyboardDidHide', () => {
-      reinforceFullscreen('keyboard-hide');
-      setTimeout(() => reinforceFullscreen('keyboard-hide-delay'), 120);
-    });
-
-    return () => {
-      keyboardShow.remove();
-      keyboardHide.remove();
-    };
-  }, [reinforceFullscreen]);
 
   const changeQuantity = useCallback((itemId: string, delta: number) => {
     setCart(current => {
@@ -1052,7 +1014,6 @@ const RestaurantMenuScreen = (props: Props) => {
         onLayout={() => reinforceFullscreen('overlay-layout')}>
         <RNView style={styles.cartModalDimLayer} />
         <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
           style={styles.cartModalKeyboardLayer}>
           <RNView
             style={styles.cartModalCard}
