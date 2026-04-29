@@ -1,4 +1,4 @@
-import React, {memo, useCallback, useEffect, useMemo, useRef, useState} from 'react';
+import React, {memo, useCallback, useContext, useEffect, useMemo, useRef, useState} from 'react';
 import {
   DeviceEventEmitter,
   Image as RNImage,
@@ -48,6 +48,7 @@ import PlayBackWebcamViewModel, {
 import createStyles from './styles';
 import useDesignSystem from 'theme/useDesignSystem';
 import VideoListItem from './videoListItem';
+import {LanguageContext} from 'context/language';
 
 const setReplayReturnRequestSync = (
   request:
@@ -159,6 +160,7 @@ const getReplayResumeSnapshotSync = (): ReplayOverlaySnapshot | null => {
 };
 
 const PlayBackWebcam = (props: PlayBackWebcamViewModelProps) => {
+  const {language} = useContext(LanguageContext);
   const viewModel = PlayBackWebcamViewModel(props);
   const {adaptive, design} = useDesignSystem();
   const styles = useMemo(() => createStyles(adaptive, design), [adaptive.styleKey, design]);
@@ -965,7 +967,7 @@ const PlayBackWebcam = (props: PlayBackWebcamViewModelProps) => {
           <View flex={'1'} style={{alignItems: 'center'}}>
             {viewModel.videoFiles.length > 0 ? (
               <>
-                <Text style={styles.selectorTitle}>Chọn đoạn xem lại</Text>
+                <Text style={styles.selectorTitle}>{i18n.t('txtChooseReplaySegment')}</Text>
                 <ScrollView
                   showsVerticalScrollIndicator={false}
                   style={styles.selectorScroll}>
@@ -984,11 +986,11 @@ const PlayBackWebcam = (props: PlayBackWebcamViewModelProps) => {
                   })}
                 </ScrollView>
                 <Button style={styles.rateButton} onPress={cyclePlaybackRate}>
-                  <Text style={styles.rateButtonText}>{`Tốc độ: ${playbackRate}x`}</Text>
+                  <Text style={styles.rateButtonText}>{i18n.t('txtPlaybackSpeed', {rate: playbackRate})}</Text>
                 </Button>
               </>
             ) : (
-              <Text lineHeight={15}>No video!</Text>
+              <Text lineHeight={15}>{i18n.t('txtNoVideo')}</Text>
             )}
           </View>
 

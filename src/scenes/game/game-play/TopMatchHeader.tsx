@@ -1,4 +1,4 @@
-import React, {memo, useMemo} from 'react';
+import React, {memo, useContext, useMemo} from 'react';
 import {StyleSheet, Text as RNText} from 'react-native';
 
 import View from 'components/View';
@@ -18,6 +18,7 @@ import {
 } from 'utils/game';
 import useDesignSystem from 'theme/useDesignSystem';
 import {createGameplayLayoutRules} from './layoutRules';
+import {LanguageContext} from 'context/language';
 
 interface Props {
   title: string;
@@ -53,6 +54,8 @@ const TopMatchHeader = ({
   centerTimeText,
   compactTitleLeft = false,
 }: Props) => {
+  const {language} = useContext(LanguageContext);
+  void language;
   const isAnyPoolMode =
     isPoolGame(gameSettings?.category) ||
     isPool9Game(gameSettings?.category) ||

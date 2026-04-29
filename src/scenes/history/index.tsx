@@ -1,4 +1,4 @@
-import React, {memo, useCallback, useMemo} from 'react';
+import React, {memo, useCallback, useContext, useMemo} from 'react';
 import {FlatList, Pressable} from 'react-native';
 import dayjs from 'dayjs';
 import images from 'assets';
@@ -16,6 +16,7 @@ import HistoryViewModel from './HistoryViewModel';
 import createStyles from './styles';
 import useAdaptiveLayout from 'scenes/game/useAdaptiveLayout';
 import useScreenSystemUI from 'theme/systemUI';
+import {LanguageContext} from 'context/language';
 
 const getTextColor = (hex?: string) => {
   const value = String(hex || '').replace('#', '');
@@ -25,10 +26,11 @@ const getTextColor = (hex?: string) => {
 
 const History = (props: any) => {
   useScreenSystemUI({variant: 'fullscreen', barStyle: 'light-content'});
+  const {language} = useContext(LanguageContext);
   const viewModel = HistoryViewModel();
   const adaptive = useAdaptiveLayout();
   const styles = useMemo(() => createStyles(adaptive), [adaptive.styleKey]);
-  const title = useMemo(() => { const t = i18n.t('history' as never); return t && t !== 'history' ? (t as string) : 'Lịch sử'; }, []);
+  const title = useMemo(() => { const t = i18n.t('txtHistory'); return t && t !== 'history' ? (t as string) : i18n.t('txtHistory') as string; }, [language]);
   const onBack = useCallback(() => { if (typeof props?.goBack === 'function') { props.goBack(); return; } if (typeof props?.navigation?.goBack === 'function') { props.navigation.goBack(); } }, [props]);
 
   const renderPlayer = useCallback((player: Player, index: number) => {
@@ -57,7 +59,7 @@ const History = (props: any) => {
         </View>
       </View>
     </View>
-  ), [adaptive, renderPlayer, viewModel]);
+  ), [adaptive, renderPlayer, viewModel, language]);
 
   return (
     <Container style={styles.screen}>
@@ -86,7 +88,7 @@ const History = (props: any) => {
           <Text color={'#FFFFFF'} style={styles.headerTitle}>{title}</Text>
         </View>
       </View>
-      <FlatList data={viewModel.games} renderItem={renderItem} removeClippedSubviews keyExtractor={(_item,index)=>`history-${index}`} contentContainerStyle={styles.listContent} ListEmptyComponent={<View style={styles.emptyWrap}><Text color={'#FFFFFF'} style={styles.emptyTitle}>Chưa có dữ liệu</Text><Text color={'#888888'} style={styles.emptyText}>Lịch sử trận đấu sẽ xuất hiện tại đây.</Text></View>} />
+      <FlatList data={viewModel.games} renderItem={renderItem} removeClippedSubviews keyExtractor={(_item,index)=>`history-${index}`} contentContainerStyle={styles.listContent} ListEmptyComponent={<View style={styles.emptyWrap}><Text color={'#FFFFFF'} style={styles.emptyTitle}>{i18n.t('txtNoData')}</Text><Text color={'#888888'} style={styles.emptyText}>{i18n.t('txtHistoryEmptyDescription')}</Text></View>} />
     </Container>
   );
 };

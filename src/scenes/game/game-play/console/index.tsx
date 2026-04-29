@@ -1,4 +1,4 @@
-import React, {memo, useEffect, useMemo, useRef} from 'react';
+import React, {memo, useContext, useEffect, useMemo, useRef} from 'react';
 import {
   Image as RNImage,
   StyleSheet,
@@ -27,6 +27,7 @@ import useDesignSystem from 'theme/useDesignSystem';
 import {createGameplayLayoutRules, createGameplayStyles} from '../layoutRules';
 import Pool8BlackBall from '../pool8BlackBall';
 import images from 'assets';
+import {LanguageContext} from 'context/language';
 
 type ActionButtonTone = 'dark' | 'amber' | 'red' | 'green' | 'muted';
 type PoolBallButtonSize = 'large' | 'small';
@@ -567,6 +568,7 @@ const PoolBallButton = ({
 };
 
 const GameConsole = (props: ConsoleViewModelProps) => {
+  const {language} = useContext(LanguageContext);
   const viewModel = ConsoleViewModel(props);
 
   useEffect(() => {
@@ -881,7 +883,7 @@ const GameConsole = (props: ConsoleViewModelProps) => {
           isCarom || isFastMode ? 'Start' : 'Resume',
         )
       : tr('Tạm dừng', 'Pause');
-  }, [props.isStarted, props.isPaused, props.warmUpCount, isCarom, isFastMode]);
+  }, [props.isStarted, props.isPaused, props.warmUpCount, isCarom, isFastMode, language]);
 
   const handleBottomLeft = () => {
     if (!props.isStarted) {
@@ -1183,7 +1185,7 @@ const GameConsole = (props: ConsoleViewModelProps) => {
               <RNText style={[styles.pool8FreeSideCounterAdjustText, useCompactMiddleHoleCounter ? styles.pool8FreeSideCounterAdjustTextCompact : undefined]}>+</RNText>
             </Button>
             <View style={[styles.pool8FreeSideCounterBody, useCompactMiddleHoleCounter ? styles.pool8FreeSideCounterBodyCompact : undefined]}>
-              <RNText style={[styles.pool8FreeSideCounterTitle, useCompactMiddleHoleCounter ? styles.pool8FreeSideCounterTitleCompact : undefined]}>Lỗ giữa</RNText>
+              <RNText style={[styles.pool8FreeSideCounterTitle, useCompactMiddleHoleCounter ? styles.pool8FreeSideCounterTitleCompact : undefined]}>{tr('Lỗ giữa', 'Middle pocket')}</RNText>
               <RNText style={[styles.pool8FreeSideCounterValue, useCompactMiddleHoleCounter ? styles.pool8FreeSideCounterValueCompact : undefined]}>{leftHole10Score}</RNText>
             </View>
             <Button
@@ -1225,7 +1227,7 @@ const GameConsole = (props: ConsoleViewModelProps) => {
               <RNText style={[styles.pool8FreeSideCounterAdjustText, useCompactMiddleHoleCounter ? styles.pool8FreeSideCounterAdjustTextCompact : undefined]}>+</RNText>
             </Button>
             <View style={[styles.pool8FreeSideCounterBody, useCompactMiddleHoleCounter ? styles.pool8FreeSideCounterBodyCompact : undefined]}>
-              <RNText style={[styles.pool8FreeSideCounterTitle, useCompactMiddleHoleCounter ? styles.pool8FreeSideCounterTitleCompact : undefined]}>Lỗ giữa</RNText>
+              <RNText style={[styles.pool8FreeSideCounterTitle, useCompactMiddleHoleCounter ? styles.pool8FreeSideCounterTitleCompact : undefined]}>{tr('Lỗ giữa', 'Middle pocket')}</RNText>
               <RNText style={[styles.pool8FreeSideCounterValue, useCompactMiddleHoleCounter ? styles.pool8FreeSideCounterValueCompact : undefined]}>{rightHole10Score}</RNText>
             </View>
             <Button
@@ -1254,6 +1256,7 @@ const GameConsole = (props: ConsoleViewModelProps) => {
     pool8FreeSetWinnerPlayer,
     pool8SetWinnerPlayer,
     isPool8Temp,
+    language,
   ]);
 
   const timeTextStyle = {

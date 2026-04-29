@@ -14,6 +14,7 @@ import createBrandedScreenChrome from 'scenes/shared/createBrandedScreenChrome';
 import getBrandedScreenMetrics from 'scenes/shared/getBrandedScreenMetrics';
 import {Navigation} from 'types/navigation';
 import {useAplusPro} from 'features/subscription';
+import i18n from 'i18n';
 
 import facebookLogo from './facebook.png';
 import youtubeLogo from './youtube.png';
@@ -93,24 +94,13 @@ const LivePlatform = (props: any) => {
   }, []);
 
   const localized = useMemo(() => {
-    if (language === 'en') {
-      return {
-        title: 'Choose livestream platform',
-        subtitle: 'Choose where to stream, then continue to the match settings.',
-        deviceLabel: 'Save to device',
-        saveBadge: 'Save',
-        switchTitle: 'Stream and save video',
-        switchDescription: 'Turn on to livestream and save the video to device storage at the same time.',
-      };
-    }
-
     return {
-      title: 'Chọn nền tảng livestream',
-      subtitle: 'Chọn nơi phát trực tiếp rồi tiếp tục vào cài đặt trận đấu.',
-      deviceLabel: 'Lưu vào bộ nhớ máy',
-      saveBadge: 'Lưu',
-      switchTitle: 'Vừa live vừa lưu video',
-      switchDescription: 'Bật để livestream và đồng thời lưu video vào bộ nhớ máy.',
+      title: i18n.t('livePlatformTitle'),
+      subtitle: i18n.t('livePlatformSubtitle'),
+      deviceLabel: i18n.t('liveDeviceLabel'),
+      saveBadge: i18n.t('liveSaveBadge'),
+      switchTitle: i18n.t('liveSaveSwitchTitle'),
+      switchDescription: i18n.t('liveSaveSwitchDescription'),
     };
   }, [language]);
 

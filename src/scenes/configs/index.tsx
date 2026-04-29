@@ -1,4 +1,4 @@
-import React, {memo, useCallback, useMemo} from 'react';
+import React, {memo, useCallback, useContext, useMemo} from 'react';
 import {Pressable, ScrollView} from 'react-native';
 
 import images from 'assets';
@@ -18,6 +18,7 @@ import WebcamConfig from './webcam';
 import createStyles from './styles';
 import useAdaptiveLayout from 'scenes/game/useAdaptiveLayout';
 import useScreenSystemUI from 'theme/systemUI';
+import {LanguageContext} from 'context/language';
 
 const getFallbackTitle = () => {
   const translated = i18n.t('configs' as never);
@@ -30,11 +31,12 @@ const getFallbackTitle = () => {
 
 const Configs = (props: any) => {
   useScreenSystemUI({variant: 'fullscreen', barStyle: 'light-content'});
+  const {language} = useContext(LanguageContext);
   const viewModel = ConfigsViewModel();
   const adaptive = useAdaptiveLayout();
   const styles = useMemo(() => createStyles(adaptive), [adaptive.styleKey]);
 
-  const title = useMemo(() => getFallbackTitle(), []);
+  const title = useMemo(() => getFallbackTitle(), [language]);
   const isStacked = !adaptive.isLandscape || adaptive.width < 1180;
 
   const onBack = useCallback(() => {

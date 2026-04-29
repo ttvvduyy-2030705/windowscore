@@ -3,6 +3,7 @@ import {useFocusEffect} from '@react-navigation/native';
 import React, {
   memo,
   useCallback,
+  useContext,
   useEffect,
   useMemo,
   useRef,
@@ -22,6 +23,8 @@ import images from 'assets';
 import AppImage from 'components/Image';
 import Container from 'components/Container';
 import Text from 'components/Text';
+import i18n from 'i18n';
+import {LanguageContext} from 'context/language';
 import {LIVESTREAM_ACCOUNT_STORAGE_KEY} from 'config/livestreamAuth';
 import useAdaptiveLayout from 'scenes/game/useAdaptiveLayout';
 import useScreenSystemUI from 'theme/systemUI';
@@ -226,6 +229,7 @@ const createStyles = (adaptive: ReturnType<typeof useAdaptiveLayout>) => {
 
 const LivePlatformSetup = (props: Props) => {
   useScreenSystemUI({variant: 'fullscreen', barStyle: 'light-content'});
+  const {language} = useContext(LanguageContext);
   const adaptive = useAdaptiveLayout();
   const styles = useMemo(() => createStyles(adaptive), [adaptive.styleKey]);
   const metrics = useMemo(() => getBrandedScreenMetrics(adaptive), [adaptive.styleKey]);
@@ -381,60 +385,60 @@ const LivePlatformSetup = (props: Props) => {
   const accountSectionTitle = useMemo(() => {
     switch (platform) {
       case 'facebook':
-        return 'Đổi tài khoản Facebook';
+        return i18n.t('liveChangeFacebookAccount');
       case 'youtube':
-        return 'Đổi kênh YouTube';
+        return i18n.t('liveChangeYoutubeChannel');
       case 'tiktok':
-        return 'Đổi tài khoản TikTok';
+        return i18n.t('liveChangeTiktokAccount');
       default:
-        return 'Đổi tài khoản livestream';
+        return i18n.t('liveChangeAccount');
     }
-  }, [platform]);
+  }, [platform, language]);
 
   const accountOptionTitle = useMemo(() => {
     switch (platform) {
       case 'facebook':
-        return 'Phát lên trang hoặc hồ sơ Facebook';
+        return i18n.t('liveStreamToFacebook');
       case 'youtube':
-        return 'Phát lên một kênh YouTube';
+        return i18n.t('liveStreamToYoutube');
       case 'tiktok':
-        return 'Phát lên tài khoản TikTok';
+        return i18n.t('liveStreamToTiktok');
       default:
-        return 'Phát lên tài khoản đã chọn';
+        return i18n.t('liveStreamToSelectedAccount');
     }
-  }, [platform]);
+  }, [platform, language]);
 
   const emptyAccountText = useMemo(() => {
     if (isAuthorizing) {
-      return `Đang mở ${platformName} để đăng nhập...`;
+      return i18n.t('liveOpeningLogin', {platform: platformName});
     }
 
     switch (platform) {
       case 'facebook':
-        return 'Chưa đăng nhập Facebook';
+        return i18n.t('liveNotLoggedInFacebook');
       case 'youtube':
-        return 'Chưa đăng nhập YouTube';
+        return i18n.t('liveNotLoggedInYoutube');
       case 'tiktok':
-        return 'Chưa đăng nhập TikTok';
+        return i18n.t('liveNotLoggedInTiktok');
       default:
-        return 'Chưa đăng nhập';
+        return i18n.t('liveNotLoggedIn');
     }
-  }, [isAuthorizing, platform, platformName]);
+  }, [isAuthorizing, platform, platformName, language]);
 
   const continueButtonText = useMemo(() => {
     switch (platform) {
       case 'facebook':
-        return 'TIẾP TỤC VỚI FACEBOOK';
+        return i18n.t('liveContinueWithFacebook');
       case 'youtube':
-        return 'TIẾP TỤC VỚI YOUTUBE';
+        return i18n.t('liveContinueWithYoutube');
       case 'tiktok':
-        return 'TIẾP TỤC VỚI TIKTOK';
+        return i18n.t('liveContinueWithTiktok');
       default:
-        return 'TIẾP TỤC';
+        return i18n.t('liveContinue');
     }
-  }, [platform]);
+  }, [platform, language]);
 
-  const headerTitle = useMemo(() => 'Thiết lập livestream', []);
+  const headerTitle = useMemo(() => i18n.t('liveSetupTitle'), [language]);
 
   const onBack = useCallback(() => {
     if (typeof props?.goBack === 'function') {
@@ -472,9 +476,9 @@ const LivePlatformSetup = (props: Props) => {
       await openPlatformOAuth(platform as LivestreamPlatform);
     } catch (_error) {
       setIsAuthorizing(false);
-      Alert.alert('Lỗi', 'Không thể mở trình duyệt để đăng nhập nền tảng này.');
+      Alert.alert(i18n.t('txtError'), i18n.t('liveLoginOpenError'));
     }
-  }, [isAplusProActive, platform, showLivestreamPaywall]);
+  }, [isAplusProActive, platform, showLivestreamPaywall, language]);
 
   useEffect(() => {
     let mounted = true;
@@ -510,8 +514,8 @@ const LivePlatformSetup = (props: Props) => {
 
       if (payload.status !== 'success') {
         Alert.alert(
-          'Đăng nhập thất bại',
-          payload.errorMessage || 'Không thể kết nối tài khoản lúc này.',
+          i18n.t('liveLoginFailedTitle'),
+          payload.errorMessage || i18n.t('liveLoginFailedMessage'),
         );
         return;
       }
@@ -570,7 +574,7 @@ const LivePlatformSetup = (props: Props) => {
       }
 
       if (shouldShowOAuthSuccessOnce(successKey)) {
-        Alert.alert('Kết nối thành công', `Đã kết nối với ${platformName}.`);
+        Alert.alert(i18n.t('liveConnectSuccessTitle'), i18n.t('liveConnectSuccessMessage', {platform: platformName}));
       } else {
         console.log('[YouTube OAuth] duplicate success alert skipped', {
           accountName: nextAccountName,
@@ -591,7 +595,7 @@ const LivePlatformSetup = (props: Props) => {
       mounted = false;
       subscription.remove();
     };
-  }, [persistLocalState, platform, platformName, setupToken, visibility]);
+  }, [persistLocalState, platform, platformName, setupToken, visibility, language]);
 
   useEffect(() => {
     if (
@@ -622,11 +626,11 @@ const LivePlatformSetup = (props: Props) => {
       autoAuthTriggeredRef.current = false;
       latestOAuthSuccessKeyRef.current = '';
       clearOAuthDedupeCache();
-      Alert.alert('Đã đăng xuất', `Đã gỡ ${platformName} khỏi giao diện này.`);
+      Alert.alert(i18n.t('liveLogoutSuccessTitle'), i18n.t('liveLogoutSuccessMessage', {platform: platformName}));
     } catch (_error) {
-      Alert.alert('Lỗi', 'Không thể đăng xuất lúc này.');
+      Alert.alert(i18n.t('txtError'), i18n.t('liveLogoutError'));
     }
-  }, [persistLocalState, platform, platformName, visibility]);
+  }, [persistLocalState, platform, platformName, visibility, language]);
 
   const onContinue = useCallback(async () => {
     if (!isAplusProActive) {
@@ -636,8 +640,8 @@ const LivePlatformSetup = (props: Props) => {
 
     if (!accountName || accountName.trim().length === 0) {
       Alert.alert(
-        'Chưa đăng nhập',
-        `Bạn cần đăng nhập ${platformName} trước khi tiếp tục.`,
+        i18n.t('liveMustLoginTitle'),
+        i18n.t('liveMustLoginMessage', {platform: platformName}),
       );
       autoAuthTriggeredRef.current = true;
       await startBrowserAuth();
@@ -656,7 +660,7 @@ const LivePlatformSetup = (props: Props) => {
         liveSetupToken: setupToken,
       });
     } catch (_error) {
-      Alert.alert('Lỗi', 'Không thể lưu thiết lập livestream.');
+      Alert.alert(i18n.t('txtError'), i18n.t('liveSaveError'));
     }
   }, [
     accountId,
@@ -671,6 +675,7 @@ const LivePlatformSetup = (props: Props) => {
     showLivestreamPaywall,
     startBrowserAuth,
     visibility,
+    language,
   ]);
 
   const renderRadio = useCallback(
@@ -764,7 +769,7 @@ const LivePlatformSetup = (props: Props) => {
             </Text>
 
             <Text fontSize={ui.subSize} color={'#FFFFFF'} style={styles.mutedText}>
-              Đang chọn:{' '}
+              {i18n.t('liveSelectedAccountPrefix')}{' '}
               {accountName && accountName.trim().length > 0
                 ? accountName
                 : emptyAccountText}
@@ -789,13 +794,13 @@ const LivePlatformSetup = (props: Props) => {
             fontWeight={'bold'}
             color={'#FFFFFF'}
             style={styles.logoutText}>
-            ĐĂNG XUẤT
+            {i18n.t('liveLogout')}
           </Text>
         </TouchableOpacity>
 
         <View style={{marginTop: ui.sectionGap * 1.5}}>
           <Text fontSize={ui.titleSize} color={'#FFFFFF'} style={styles.sectionLabel}>
-            Quyền riêng tư
+            {i18n.t('livePrivacy')}
           </Text>
 
           <TouchableOpacity
@@ -804,7 +809,7 @@ const LivePlatformSetup = (props: Props) => {
             onPress={() => setVisibility('public')}>
             {renderRadio(visibility === 'public')}
             <Text fontSize={ui.bodySize} color={'#FFFFFF'} style={styles.optionLabel}>
-              Công khai
+              {i18n.t('liveVisibilityPublic')}
             </Text>
           </TouchableOpacity>
 
@@ -814,7 +819,7 @@ const LivePlatformSetup = (props: Props) => {
             onPress={() => setVisibility('private')}>
             {renderRadio(visibility === 'private')}
             <Text fontSize={ui.bodySize} color={'#FFFFFF'} style={styles.optionLabel}>
-              Riêng tư
+              {i18n.t('liveVisibilityPrivate')}
             </Text>
           </TouchableOpacity>
 
@@ -824,7 +829,7 @@ const LivePlatformSetup = (props: Props) => {
             onPress={() => setVisibility('unlisted')}>
             {renderRadio(visibility === 'unlisted')}
             <Text fontSize={ui.bodySize} color={'#FFFFFF'} style={styles.optionLabel}>
-              Không công khai
+              {i18n.t('liveVisibilityUnlisted')}
             </Text>
           </TouchableOpacity>
         </View>

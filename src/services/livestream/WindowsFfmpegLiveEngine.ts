@@ -1,6 +1,7 @@
 import {NativeModules, Platform} from 'react-native';
 import RNFS from 'react-native-fs';
 import {Bitrate, Fps, Resolution} from 'types/webcam';
+import i18n from 'i18n';
 
 export const WINDOWS_FFMPEG_CONFIG_STORAGE_KEY = '@APLUS_WINDOWS_FFMPEG_LIVE_CONFIG_V1';
 
@@ -176,8 +177,8 @@ export const getWindowsFfmpegLiveStatus = async () => {
     status: liveState,
     error:
       Platform.OS === 'windows'
-        ? 'WindowsFfmpegLiveModule chưa được đăng ký. Cần native module để spawn ffmpeg.exe trong bản Windows release.'
-        : 'FFmpeg local live chỉ dùng cho Windows.',
+        ? i18n.t('ffmpegModuleMissing') as string
+        : i18n.t('ffmpegWindowsOnly') as string,
   };
 };
 
@@ -199,7 +200,7 @@ export const checkFfmpegAvailable = async (ffmpegPath?: string) => {
       ffmpegPath: ffmpegPath || 'ffmpeg',
       version: '',
       error:
-        'Thiếu WindowsFfmpegLiveModule. JS đã tách khỏi ngrok/backend, nhưng bản Windows cần native module để chạy process ffmpeg.exe.',
+        i18n.t('ffmpegModuleMissing') as string,
     };
   }
 
@@ -443,7 +444,7 @@ export const startWindowsFfmpegYouTubeLive = async (
   snapshot?: WindowsFfmpegOverlaySnapshot | null,
 ) => {
   if (Platform.OS !== 'windows') {
-    return {ok: false, error: 'Windows FFmpeg local live chỉ chạy trên Windows.'};
+    return {ok: false, error: i18n.t('ffmpegWindowsOnly') as string};
   }
 
   const normalizedConfig: WindowsFfmpegLiveConfig = {
@@ -470,7 +471,7 @@ export const startWindowsFfmpegYouTubeLive = async (
   if (!normalizedConfig.streamKey?.trim()) {
     liveState = 'error';
     console.log('[LiveState]', {status: 'error', reason: 'missing-stream-key'});
-    return {ok: false, error: 'Bạn chưa nhập Stream Key YouTube.'};
+    return {ok: false, error: i18n.t('ffmpegStreamKeyMissing') as string};
   }
 
 
@@ -492,7 +493,7 @@ export const startWindowsFfmpegYouTubeLive = async (
       ok: false,
       error:
         ffmpegCheck?.error ||
-        'Không tìm thấy FFmpeg. Hãy cài FFmpeg, thêm vào PATH, hoặc nhập đường dẫn ffmpeg.exe.',
+        i18n.t('ffmpegNotFound') as string,
     };
   }
 
@@ -514,7 +515,7 @@ export const startWindowsFfmpegYouTubeLive = async (
   if (!normalizedConfig.cameraDeviceName?.trim()) {
     liveState = 'error';
     console.log('[LiveState]', {status: 'error', reason: 'missing-camera-device'});
-    return {ok: false, error: 'Không tìm thấy webcam/camera từ FFmpeg. Hãy kiểm tra camera hoặc nhập tên device ở cấu hình nâng cao.'};
+    return {ok: false, error: i18n.t('ffmpegCameraNotFound') as string};
   }
 
   const command = buildFfmpegCommand(normalizedConfig, snapshot);
@@ -523,7 +524,7 @@ export const startWindowsFfmpegYouTubeLive = async (
   if (!nativeModule?.start) {
     liveState = 'error';
     const error =
-      'Thiếu WindowsFfmpegLiveModule.start nên JS không thể spawn ffmpeg.exe trong RN Windows release.';
+      i18n.t('ffmpegStartModuleMissing') as string;
     console.log('[LiveFfmpegProcess]', {
       start: false,
       pid: undefined,

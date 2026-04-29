@@ -1,4 +1,4 @@
-import React, {memo, useEffect, useMemo, useState} from 'react';
+import React, {memo, useContext, useEffect, useMemo, useState} from 'react';
 import {StyleSheet} from 'react-native';
 
 import Container from 'components/Container';
@@ -30,6 +30,7 @@ import useAdaptiveLayout, {AdaptiveLayout} from '../useAdaptiveLayout';
 import useDesignSystem from 'theme/useDesignSystem';
 import useScreenSystemUI, {configureSystemUI} from 'theme/systemUI';
 import {createGameplayLayoutRules} from './layoutRules';
+import {LanguageContext} from 'context/language';
 
 const buildTitle = (category?: string, mode?: string) => {
   return `${i18n.t(category || '').toUpperCase()} - ${i18n
@@ -337,6 +338,8 @@ const createLocalStyles = (a: AdaptiveLayout, design: any, rules: any) =>
   });
 
 const GamePlay = () => {
+  const {language} = useContext(LanguageContext);
+  void language;
   const viewModel = GamePlayViewModel();
   useScreenSystemUI({variant: 'fullscreen', barStyle: 'light-content'});
   const {adaptive, design} = useDesignSystem();
@@ -783,7 +786,7 @@ const GamePlay = () => {
             style={localStyles.youtubeLiveOverlayTitle}
             allowFontScaling={false}
             maxFontSizeMultiplier={1}>
-            {overlay.title || 'Chưa thể live YouTube'}
+            {overlay.title || i18n.t('youtubeLiveEligibilityTitle')}
           </Text>
 
           <Text
@@ -791,8 +794,7 @@ const GamePlay = () => {
             style={localStyles.youtubeLiveOverlayMessage}
             allowFontScaling={false}
             maxFontSizeMultiplier={1}>
-            {overlay.message ||
-              'Tài khoản YouTube hiện chưa đủ điều kiện phát trực tiếp.'}
+            {overlay.message || i18n.t('youtubeLiveEligibilityShortMessage')}
           </Text>
 
           {checks.length > 0 ? (
@@ -841,7 +843,7 @@ const GamePlay = () => {
                 style={localStyles.youtubeLiveButtonText}
                 allowFontScaling={false}
                 maxFontSizeMultiplier={1}>
-                Quay lại thiết lập YouTube
+                {i18n.t('youtubeLiveBackToSetup')}
               </Text>
             </Button>
 
@@ -853,7 +855,7 @@ const GamePlay = () => {
                 style={localStyles.youtubeLiveButtonText}
                 allowFontScaling={false}
                 maxFontSizeMultiplier={1}>
-                Đóng
+                {i18n.t('txtClose')}
               </Text>
             </Button>
           </View>
@@ -891,8 +893,8 @@ const GamePlay = () => {
         onPress={viewModel.onEndWarmUp}>
         <Text color={colors.white} fontSize={warmButtonTextSize}>
           {viewModel.gameBreakEnabled
-            ? 'Kết thúc giải lao'
-            : 'Kết thúc khởi động'}
+            ? i18n.t('txtEndBreak')
+            : i18n.t('txtEndWarmUp')}
         </Text>
       </Button>
     </View>
@@ -954,7 +956,7 @@ const GamePlay = () => {
                 color={colors.white}
                 allowFontScaling={false}
                 maxFontSizeMultiplier={1}>
-                {`${setWinnerOverlayPlayer.name} ${'thắng set này'}`}
+                {`${setWinnerOverlayPlayer.name} ${i18n.t('txtSetWonSuffix')}`}
               </Text>
 
               <Button
@@ -965,7 +967,7 @@ const GamePlay = () => {
                   color={colors.white}
                   allowFontScaling={false}
                   maxFontSizeMultiplier={1}>
-                  {'Ván mới'}
+                  {i18n.t('txtNewRack')}
                 </Text>
               </Button>
             </View>
@@ -988,7 +990,7 @@ const GamePlay = () => {
               ]}
               onPress={viewModel.onPause}>
               <Text color={colors.white} fontSize={warmButtonTextSize}>
-                Tiếp tục
+                {i18n.t('resume')}
               </Text>
             </Button>
 

@@ -2,6 +2,7 @@ import React, {
   forwardRef,
   memo,
   useCallback,
+  useContext,
   useEffect,
   useImperativeHandle,
   useMemo,
@@ -53,6 +54,7 @@ import {updateYouTubeNativeOverlay} from 'services/youtubeNativeLive';
 import useDesignSystem from 'theme/useDesignSystem';
 import {createGameplayLayoutRules, createGameplayStyles} from '../../layoutRules';
 import {useAplusPro} from 'features/subscription';
+import {LanguageContext} from 'context/language';
 
 const BASE_ZOOM_STEPS = [1, 2, 5, 10];
 
@@ -441,6 +443,8 @@ const CaromScoreboardOverlay = memo(({
 });
 
 const WebCam = forwardRef<WebCamHandle, WebCamComponentProps>((props, ref) => {
+  const {language} = useContext(LanguageContext);
+  void language;
   const viewModel = WebCamViewModel(props);
   const {isAplusProActive, showPaywall} = useAplusPro();
   const isCameraPremiumLocked = !isAplusProActive;
@@ -1642,7 +1646,7 @@ const handleZoomSliderComplete = useCallback(
         ]}
         onPress={closeFullscreen}>
         <Text color={colors.white} fontSize={15}>
-          Đóng
+          {i18n.t('txtClose')}
         </Text>
       </Pressable>
     );
@@ -1694,7 +1698,7 @@ const handleZoomSliderComplete = useCallback(
         ) : (
           <RNView style={styles.zoomUnsupportedBadgeVertical}>
             <Text color={colors.white} fontSize={11}>
-              Không hỗ trợ zoom
+              {i18n.t('cameraZoomUnsupported')}
             </Text>
           </RNView>
         )}
@@ -1867,7 +1871,7 @@ const handleZoomSliderComplete = useCallback(
               styles.actionButton,
               !allowRefresh && styles.actionButtonDisabled,
             ]}>
-            <Text color={colors.white} fontSize={14}>↻ Làm mới</Text>
+            <Text color={colors.white} fontSize={14}>↻ {i18n.t('refresh')}</Text>
           </Pressable>
 
           <Pressable
@@ -1882,7 +1886,7 @@ const handleZoomSliderComplete = useCallback(
               styles.switchButton,
               !allowSwitchCamera && styles.actionButtonDisabled,
             ]}>
-            <Text color={colors.white} fontSize={14}>⇄ Chuyển camera</Text>
+            <Text color={colors.white} fontSize={14}>⇄ {i18n.t('switchCamera')}</Text>
           </Pressable>
 
           <Pressable

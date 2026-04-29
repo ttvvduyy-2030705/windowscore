@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
+import {useCallback, useContext, useEffect, useMemo, useRef, useState} from 'react';
 import {useFocusEffect, useNavigation, useRoute} from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {Alert, Platform} from 'react-native';
@@ -9,6 +9,7 @@ import {useRealm} from '@realm/react';
 import {RootState} from 'data/redux/reducers';
 import {gameActions} from 'data/redux/actions/game';
 import i18n from 'i18n';
+import {LanguageContext} from 'context/language';
 import {Camera} from 'react-native-vision-camera';
 import {goBack} from 'utils/navigation';
 import {
@@ -568,6 +569,7 @@ const isReplayResumeSnapshotMatch = (
 };
 
 const GamePlayViewModel = () => {
+  const {language} = useContext(LanguageContext);
   const navigation = useNavigation<any>();
   const route = useRoute<any>();
   const routeParams = (route?.params || {}) as GameplayLiveRouteParams;
@@ -792,7 +794,7 @@ const GamePlayViewModel = () => {
         }
         setYoutubeLiveOverlay({
           visible: true,
-          title: 'Live YouTube lỗi',
+          title: i18n.t('youtubeLiveErrorTitle'),
           message: event.message,
           checks: [],
         });
@@ -803,7 +805,7 @@ const GamePlayViewModel = () => {
       unsubscribe();
       void stopYouTubeNativeLive();
     };
-  }, []);
+  }, [language]);
 
 
 
@@ -1026,8 +1028,8 @@ const GamePlayViewModel = () => {
           setYouTubeSourceLock(null);
           setYoutubeLiveOverlay({
             visible: true,
-            title: 'Live YouTube lỗi',
-            message: error?.message || 'Không thể bắt đầu live YouTube.',
+            title: i18n.t('youtubeLiveErrorTitle'),
+            message: error?.message || i18n.t('youtubeLiveCannotStart'),
             checks: [],
           });
         }
@@ -2697,7 +2699,7 @@ const GamePlayViewModel = () => {
 
       const subscriberCheck: YouTubeEligibilityCheck = {
         key: 'subscribers',
-        label: 'Tối thiểu 50 người đăng ký',
+        label: i18n.t('youtubeLiveSubscriberRequirement'),
         status:
           typeof subscriberCount === 'number'
             ? subscriberCount >= 50
@@ -2708,36 +2710,36 @@ const GamePlayViewModel = () => {
             : 'unknown',
         detail:
           typeof subscriberCount === 'number'
-            ? `Kênh hiện có ${subscriberCount} người đăng ký.`
+            ? i18n.t('youtubeLiveSubscriberCountDetail', {count: subscriberCount})
             : hiddenSubscriberCount
-            ? 'Không đọc được số người đăng ký vì kênh đang ẩn số người đăng ký.'
-            : 'Không đọc được số người đăng ký của kênh.',
+            ? i18n.t('youtubeLiveHiddenSubscriberDetail')
+            : i18n.t('youtubeLiveUnknownSubscriberDetail'),
       };
 
       const liveEnabledCheck: YouTubeEligibilityCheck = {
         key: 'liveEnabled',
-        label: 'Phát trực tiếp đã bật',
+        label: i18n.t('youtubeLiveEnabledRequirement'),
         status:
           liveEnabled === true ? 'pass' : liveEnabled === false ? 'fail' : 'unknown',
         detail:
           liveEnabled === true
-            ? 'Kênh hiện có thể dùng tính năng phát trực tiếp.'
+            ? i18n.t('youtubeLiveEnabledDetail')
             : liveEnabled === false
-            ? liveEnabledReason || 'YouTube báo kênh hiện chưa được bật quyền livestream.'
-            : 'Chưa xác định được trạng thái phát trực tiếp từ YouTube.',
+            ? liveEnabledReason || i18n.t('youtubeLiveDisabledDetail')
+            : i18n.t('youtubeLiveUnknownEnabledDetail'),
       };
 
       return {
         visible: true,
-        title: 'Chưa thể live YouTube',
+        title: i18n.t('youtubeLiveEligibilityTitle'),
         message:
           fallbackMessage ||
           eligibility?.message ||
-          'Để live YouTube, kênh cần từ 50 người đăng ký và tính năng Phát trực tiếp phải dùng được.',
+          i18n.t('youtubeLiveEligibilityDefaultMessage'),
         checks: [subscriberCheck, liveEnabledCheck],
       };
     },
-    [],
+    [language],
   );
 
   const showYouTubeLiveFailure = useCallback(
@@ -2816,16 +2818,16 @@ const GamePlayViewModel = () => {
 
     if (currentSource === 'external' && !hasExternalSource) {
       Alert.alert(
-        'Chưa nhận được webcam USB',
-        'App chưa thấy webcam ngoài. Hãy kiểm tra OTG/nguồn và cắm lại webcam rồi thử lại.',
+        i18n.t('cameraUsbMissingTitle'),
+        i18n.t('cameraUsbMissingMessage'),
       );
       return;
     }
 
     if (!lockedLiveSource) {
       Alert.alert(
-        'Không tìm thấy camera',
-        'Thiết bị hiện không có nguồn camera phù hợp để bắt đầu live.',
+        i18n.t('cameraNotFoundTitle'),
+        i18n.t('cameraNotFoundMessage'),
       );
       return;
     }
@@ -2941,7 +2943,7 @@ const GamePlayViewModel = () => {
 
           liveResponse = await createYouTubeLiveSession({
             title: youtubeTitle,
-            description: `Live score từ trận đấu ${firstPlayerName} vs ${secondPlayerName}`,
+            description: i18n.t("youtubeLiveDescription", {firstPlayerName, secondPlayerName}) as string,
             privacyStatus: selectedLiveVisibility,
             enableAutoStart: true,
             enableAutoStop: true,
@@ -2964,7 +2966,7 @@ const GamePlayViewModel = () => {
           });
 
           if (!ingestion.streamKey) {
-            throw new Error('Backend chưa trả về stream key YouTube.');
+            throw new Error(i18n.t('youtubeBackendMissingStreamKey'));
           }
 
           const liveConfigItems = await AsyncStorage.multiGet([
@@ -3017,7 +3019,7 @@ const GamePlayViewModel = () => {
 
             throw new Error(
               startResult?.error ||
-                'Không thể bắt đầu livestream local bằng FFmpeg.',
+                i18n.t('youtubeFfmpegStartFailed'),
             );
           }
 
@@ -3050,7 +3052,7 @@ const GamePlayViewModel = () => {
           const fallbackMessage =
             payload?.message ||
             error?.message ||
-            'Không thể khởi tạo live YouTube bằng FFmpeg local.';
+            i18n.t('youtubeFfmpegInitFailed');
 
           try {
             const eligibility =
@@ -3066,7 +3068,7 @@ const GamePlayViewModel = () => {
               null,
               fallbackMessage ||
                 eligibilityError?.message ||
-                'Không thể kiểm tra điều kiện YouTube.',
+                i18n.t('youtubeEligibilityCheckFailed'),
             );
           }
         }
@@ -3107,9 +3109,9 @@ const GamePlayViewModel = () => {
       setYouTubeSourceLock(null);
       setYoutubeLiveOverlay({
         visible: true,
-        title: 'Live YouTube chưa sẵn sàng',
+        title: i18n.t('youtubeLiveNotReadyTitle'),
         message:
-          'Thiếu native YouTube live module hoặc preview view manager. Hãy rebuild APK sau khi đăng ký YouTubeLiveModulePackage và YouTubeLivePreviewViewPackage trong MainApplication.',
+          i18n.t('youtubeNativeModuleMissing'),
         checks: [],
       });
       return;
@@ -3141,7 +3143,7 @@ const GamePlayViewModel = () => {
 
         const liveResponse = await createYouTubeLiveSession({
           title: youtubeTitle,
-          description: `Live score từ trận đấu ${firstPlayerName} vs ${secondPlayerName}`,
+          description: i18n.t("youtubeLiveDescription", {firstPlayerName, secondPlayerName}) as string,
           privacyStatus: selectedLiveVisibility,
           enableAutoStart: true,
           enableAutoStop: true,
@@ -3195,7 +3197,7 @@ const GamePlayViewModel = () => {
         const fallbackMessage =
           payload?.message ||
           error?.message ||
-          'Không thể khởi tạo live YouTube.';
+          i18n.t('youtubeLiveCannotStart');
 
         try {
           const eligibility =
@@ -3211,7 +3213,7 @@ const GamePlayViewModel = () => {
             null,
             fallbackMessage ||
               eligibilityError?.message ||
-              'Không thể kiểm tra điều kiện YouTube.',
+              i18n.t('youtubeEligibilityCheckFailed'),
           );
         }
       }
@@ -3344,7 +3346,7 @@ const GamePlayViewModel = () => {
       const replayFiles = await waitForReplayFiles(webcamFolderName, 1, 8000);
 
       if (!recordedPath && replayFiles.length === 0) {
-        Alert.alert(i18n.t('txtwarn'), 'Video xem lại chưa sẵn sàng. Hãy chờ 1 chút rồi mở lại.');
+        Alert.alert(i18n.t('txtwarn'), i18n.t('msgReplayNotReady'));
         return;
       }
 
@@ -3404,7 +3406,7 @@ const GamePlayViewModel = () => {
       });
     } catch (error) {
       console.log('[Replay] open replay failed:', error);
-      Alert.alert(i18n.t('txtError'), 'Không mở được replay. Hãy thử lại sau vài giây.');
+      Alert.alert(i18n.t('txtError'), i18n.t('msgReplayOpenFailed'));
     }
   }, [
     countdownTime,
@@ -3530,15 +3532,15 @@ const GamePlayViewModel = () => {
             Alert.alert(
               i18n.t('txtwarn'),
               totalTime > 0
-                ? 'Video chưa khả dụng. Bạn có muốn thoát trận và không lưu video xem lại không?'
-                : 'Bạn chưa bắt đầu quay. Bạn có muốn thoát trận luôn không?',
+                ? i18n.t('msgVideoNotAvailableExit')
+                : i18n.t('msgNoRecordingExit'),
               [
                 {
                   text: i18n.t('txtCancel'),
                   style: 'cancel',
                 },
                 {
-                  text: 'Thoát không lưu',
+                  text: i18n.t('txtExitWithoutSaving'),
                   style: 'destructive',
                   onPress: () => {
                     goBack();
@@ -4095,6 +4097,7 @@ const GamePlayViewModel = () => {
       isCameraReady,
       isRecording,
       cameraSessionNonce,
+    language,
       //isPreview,
       //setIsPreview,
       //pauseVideoRecording,
@@ -4171,6 +4174,7 @@ const GamePlayViewModel = () => {
     isCameraReady,
     isRecording,
     cameraSessionNonce,
+    language,
     // isPreview,
     // setIsPreview,
     // videoUri,

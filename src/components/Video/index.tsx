@@ -2,6 +2,7 @@ import React, {
   memo,
   forwardRef,
   useCallback,
+  useContext,
   useEffect,
   useMemo,
   useRef,
@@ -50,6 +51,8 @@ import {
   stopYouTubeNativeRecord,
   YouTubeNativeZoomInfo,
 } from 'services/youtubeCameraStream';
+import i18n from 'i18n';
+import {LanguageContext} from 'context/language';
 
 
 const DEBUG_VIDEO = true;
@@ -219,6 +222,8 @@ const getSuccessfulPhoneModeStore = (): Record<string, PhoneCameraConfigMode> =>
 };
 
 const AplusVideo = (props: Props, ref: React.LegacyRef<any>) => {
+  const {language} = useContext(LanguageContext);
+  void language;
   const cameraScaleMode = props.cameraScaleMode || 'cover';
   const viewModel = VideoViewModel(props);
   const isFocused = useIsFocused();
@@ -1459,7 +1464,7 @@ const AplusVideo = (props: Props, ref: React.LegacyRef<any>) => {
     });
 
     const errorSub = addYouTubeCameraStreamListener('preview_error', payload => {
-      const message = String(payload?.message ?? 'Native preview lỗi');
+      const message = String(payload?.message ?? i18n.t('youtubeLiveErrorTitle'));
       setCameraErrorMessage(message);
       props.setIsCameraReady(false);
     });
@@ -1469,7 +1474,7 @@ const AplusVideo = (props: Props, ref: React.LegacyRef<any>) => {
     });
 
     const streamErrorSub = addYouTubeCameraStreamListener('stream_error', payload => {
-      const message = String(payload?.message ?? 'Native stream lỗi');
+      const message = String(payload?.message ?? i18n.t('youtubeLiveErrorTitle'));
       setCameraErrorMessage(message);
     });
 
@@ -1525,7 +1530,7 @@ const AplusVideo = (props: Props, ref: React.LegacyRef<any>) => {
               props.onError?.(e as any);
             }}
           />
-          {!externalStreamReady ? renderFallbackOverlay('Đang chuẩn bị stream camera...') : null}
+          {!externalStreamReady ? renderFallbackOverlay(i18n.t('cameraPreparingStream')) : null}
           {props.overlayContent}
         </View>
       );
@@ -1544,11 +1549,11 @@ const AplusVideo = (props: Props, ref: React.LegacyRef<any>) => {
   }
 
   if (permissionState === 'loading') {
-    return renderFallback('Đang kiểm tra quyền camera...');
+    return renderFallback(i18n.t('cameraCheckingPermission'));
   }
 
   if (permissionState === 'denied') {
-    return renderFallback('Bạn chưa cấp quyền camera cho ứng dụng.');
+    return renderFallback(i18n.t('cameraPermissionDenied'));
   }
 
   if (isYouTubeNativeActive) {
@@ -1574,11 +1579,11 @@ const AplusVideo = (props: Props, ref: React.LegacyRef<any>) => {
   }
 
   if (availableSources.length > 0 && !availableSources.includes(selectedSource)) {
-    return renderFallback('Đang chuẩn bị camera...');
+    return renderFallback(i18n.t('cameraPreparing'));
   }
 
   if (!device) {
-    return renderFallback('Không tìm thấy camera dùng được.');
+    return renderFallback(i18n.t('cameraNoUsable'));
   }
 
   if (cameraErrorMessage) {
@@ -1678,18 +1683,18 @@ const AplusVideo = (props: Props, ref: React.LegacyRef<any>) => {
                 return;
               }
 
-              setCameraErrorMessage('Camera của thiết bị này không nhận được cả cấu hình chuẩn lẫn cấu hình tương thích tối giản. Đã chuyển sang logo fallback.');
+              setCameraErrorMessage(i18n.t('cameraConfigFailedFallback'));
               return;
             }
 
             console.error('[Video] VisionCamera error:', error);
             setCameraErrorMessage(
-              message || 'Không mở được camera trên thiết bị này.',
+              message || i18n.t('cameraOpenFailed'),
             );
           }}
         />
       </RNView>
-      {!phonePreviewReady ? renderFallbackOverlay(cameraErrorMessage || 'Đang chuẩn bị camera...') : null}
+      {!phonePreviewReady ? renderFallbackOverlay(cameraErrorMessage || i18n.t('cameraPreparing')) : null}
     </View>
   );
 };

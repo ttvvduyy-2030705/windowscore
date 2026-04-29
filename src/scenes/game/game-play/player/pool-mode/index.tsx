@@ -1,4 +1,4 @@
-import React, {memo} from 'react';
+import React, {memo, useContext} from 'react';
 
 import Button from 'components/Button';
 import Text from 'components/Text';
@@ -10,6 +10,7 @@ import i18n from 'i18n';
 import {isPoolGame} from 'utils/game';
 import {GameSettings} from 'types/settings';
 import {Player} from 'types/player';
+import {LanguageContext} from 'context/language';
 
 import playerStyles from '../styles';
 import styles from './styles';
@@ -31,6 +32,8 @@ const PoolMode = ({
   onViolate,
   onResetViolate,
 }: Props) => {
+  const {language} = useContext(LanguageContext);
+  void language;
   const adaptive = useAdaptiveLayout();
   const buttonFontSize = adaptive.fs(26, 0.76, 1.04);
 

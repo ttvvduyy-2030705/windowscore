@@ -1,4 +1,4 @@
-import React, {memo, useMemo} from 'react';
+import React, {memo, useContext, useMemo} from 'react';
 import {StyleSheet, TextInput, Text as RNText, Image as RNImage} from 'react-native';
 
 import View from 'components/View';
@@ -14,6 +14,7 @@ import {getCountryFlagImageUri} from '../../settings/player/countries';
 import useDesignSystem from 'theme/useDesignSystem';
 import {createGameplayLayoutRules, createGameplayStyles} from '../layoutRules';
 import Pool8BlackBall from '../pool8BlackBall';
+import {LanguageContext} from 'context/language';
 
 const isEnglish = () => {
   const locale = String(
@@ -89,6 +90,8 @@ const GamePlayer = (
     onPressPool8Ball?: (playerIndex: number) => void;
   },
 ) => {
+  const {language} = useContext(LanguageContext);
+  void language;
   const viewModel = PlayerViewModel(props);
   const isPoolMode = isPoolGame(props.gameSettings?.category);
   const isPool15Mode = isPool15Game(props.gameSettings?.category);

@@ -1,4 +1,4 @@
-import React, {memo, useMemo} from 'react';
+import React, {memo, useContext, useMemo} from 'react';
 import {
   Image,
   StyleProp,
@@ -20,6 +20,8 @@ import {GameSettings} from 'types/settings';
 import {isPool10Game, isPool15Game, isPool9Game} from 'utils/game';
 import {shouldShowMatchOverlay} from 'utils/matchOverlay';
 import useDesignSystem from 'theme/useDesignSystem';
+import i18n from 'i18n';
+import {LanguageContext} from 'context/language';
 
 type Variant = 'camera' | 'fullscreen' | 'playback' | 'live';
 
@@ -249,6 +251,8 @@ const PoolBroadcastScoreboard = ({
   liveVideoWidth = 1920,
   liveVideoHeight = 1080,
 }: PoolBroadcastScoreboardProps) => {
+  const {language} = useContext(LanguageContext);
+  void language;
   const category = gameSettings?.category;
   const isSupportedCategory =
     isPool9Game(category) || isPool10Game(category) || isPool15Game(category);
@@ -339,7 +343,7 @@ const PoolBroadcastScoreboard = ({
         <View style={styles.centerPanelWrap}>
           <View style={styles.centerPanel}>
             <Text style={[styles.centerLabel, {fontSize: metrics.centerLabelSize}]}>
-              MỤC TIÊU
+              {String(i18n.t('goal')).toUpperCase()}
             </Text>
             <Text style={[styles.centerValue, {fontSize: metrics.centerValueSize}]}>
               {goal}
