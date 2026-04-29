@@ -5,6 +5,7 @@
 #include "WindowsCameraRecordingModule.h"
 #include "WindowsVideoStorageModule.h"
 #include "WindowsVideoPlayerViewManager.h"
+#include "WindowsFfmpegLiveModule.h"
 
 using namespace winrt::Microsoft::ReactNative;
 

@@ -4,7 +4,6 @@ import {Bitrate, Fps, Resolution} from 'types/webcam';
 import i18n from 'i18n';
 
 export const WINDOWS_FFMPEG_CONFIG_STORAGE_KEY = '@APLUS_WINDOWS_FFMPEG_LIVE_CONFIG_V1';
-
 export const DEFAULT_YOUTUBE_RTMP_URL = 'rtmp://a.rtmp.youtube.com/live2';
 
 export type WindowsFfmpegLiveState = 'stopped' | 'starting' | 'live' | 'stopping' | 'error';
@@ -79,6 +78,7 @@ type NativeWindowsFfmpegLiveModule = {
 let liveState: WindowsFfmpegLiveState = 'stopped';
 let currentConfig: WindowsFfmpegLiveConfig | null = null;
 let lastOverlayPath = '';
+let auditLogged = false;
 
 const getNativeModule = (): NativeWindowsFfmpegLiveModule | null => {
   const modules = NativeModules as any;
@@ -100,8 +100,11 @@ const escapeDrawText = (value: string) =>
     .replace(/\\/g, '\\\\')
     .replace(/:/g, '\\:')
     .replace(/'/g, "\\'")
+    .replace(/,/g, '\\,')
+    .replace(/%/g, '\\%')
     .replace(/\[/g, '\\[')
-    .replace(/\]/g, '\\]');
+    .replace(/\]/g, '\\]')
+    .replace(/\r?\n/g, ' ');
 
 export const maskStreamKey = (value?: string | null) => {
   const raw = String(value || '').trim();
@@ -125,7 +128,7 @@ const resolveDimensions = (config: WindowsFfmpegLiveConfig) => {
     return {width: config.width, height: config.height};
   }
 
-  if (config.resolution === Resolution.HD) {
+  if (config.resolution === Resolution.HD || config.resolution === '720p') {
     return {width: 1280, height: 720};
   }
 
@@ -159,6 +162,109 @@ export const getWindowsLiveOverlayPaths = () => {
     htmlPath: `${root}/overlay.html`,
     pngPath: `${root}/overlay.png`,
   };
+};
+
+const isCaromSnapshot = (snapshot?: WindowsFfmpegOverlaySnapshot | null) => {
+  const category = String(snapshot?.category || '').toLowerCase();
+  const mode = String(snapshot?.mode || '').toLowerCase();
+  return category.includes('carom') || mode.includes('carom') || mode.includes('libre');
+};
+
+const normalizePlayer = (snapshot: WindowsFfmpegOverlaySnapshot | null | undefined, index: number) => {
+  const player = snapshot?.players?.[index] || {};
+  return {
+    name: String(player.name || `Player ${index + 1}`).trim() || `Player ${index + 1}`,
+    flag: String(player.flag || '').trim(),
+    score: Number(player.score || 0),
+    currentPoint: Number(player.currentPoint || 0),
+    highestRate: Number(player.highestRate || 0),
+    average: Number(player.average || 0),
+  };
+};
+
+const buildOverlayParity = (snapshot?: WindowsFfmpegOverlaySnapshot | null) => {
+  const players = snapshot?.players || [];
+  const hasPlayers = players.length >= 2;
+  const hasFlags = players.slice(0, 2).some(player => Boolean(String(player?.flag || '').trim()));
+  const hasTimer = snapshot?.countdownTime !== undefined && snapshot?.countdownTime !== null;
+  const hasTarget = snapshot?.goal !== undefined && snapshot?.goal !== null;
+  const hasTurn = snapshot?.totalTurns !== undefined && snapshot?.totalTurns !== null;
+  const hasCaromStats = isCaromSnapshot(snapshot)
+    ? players.slice(0, 2).some(player =>
+        Number(player?.currentPoint || 0) !== 0 ||
+        Number(player?.highestRate || 0) !== 0 ||
+        Number(player?.average || 0) !== 0,
+      )
+    : true;
+
+  const missingFields = [
+    hasPlayers ? '' : 'players',
+    hasTimer ? '' : 'timer',
+    hasTarget ? '' : 'target',
+    hasTurn ? '' : 'turn',
+    hasCaromStats ? '' : 'caromStats',
+  ].filter(Boolean);
+
+  return {
+    logo: true,
+    scoreboard: hasPlayers,
+    timer: hasTimer,
+    players: hasPlayers,
+    flags: hasFlags,
+    target: hasTarget,
+    turn: hasTurn,
+    mode: isCaromSnapshot(snapshot) ? 'carom' : 'pool',
+    androidParityStatus: missingFields.length ? 'partial' : 'same-data-source',
+    missingFields,
+  };
+};
+
+const logLiveAuditOnce = () => {
+  if (auditLogged) {
+    return;
+  }
+  auditLogged = true;
+
+  console.log('[AndroidLiveAudit]', {
+    files: [
+      'src/services/youtubeNativeLive.ts',
+      'src/scenes/game/game-play/console/webcam/index.tsx',
+      'android/app/src/main/java/com/billiards_management/aplus/score/youtube/YouTubeLiveModule.kt',
+      'android/app/src/main/java/com/billiards_management/aplus/score/youtube/YouTubeLiveEngine.kt',
+      'android/app/src/main/java/com/billiards_management/aplus/score/youtube/YouTubeLiveOverlayBitmapRenderer.kt',
+    ],
+    engine: 'Android native YouTubeLiveModule + RtmpCamera2',
+    overlaySource: 'gameplay-shared-overlay-snapshot captured from offscreen React overlay',
+    startFlow: 'OAuth/backend session -> native RTMP startStream',
+    stopFlow: 'native stopStream + backend stop',
+  });
+
+  console.log('[WindowsLiveAudit]', {
+    files: [
+      'src/services/livestream/WindowsFfmpegLiveEngine.ts',
+      'windows/billiardsgrade/WindowsFfmpegLiveModule.cpp',
+      'src/scenes/game/game-play/GamePlayViewModel.tsx',
+      'src/services/youtubeLiveFlow.ts',
+    ],
+    engine: 'Windows local FFmpeg DirectShow + YouTube RTMP',
+    overlaySource: 'same gameplay state used by Android overlay snapshot; rendered as FFmpeg drawtext/drawbox plus JSON/HTML debug artifact',
+    startFlow: 'OAuth/backend session -> FFmpeg local start',
+    stopFlow: 'send q to FFmpeg, wait, terminate fallback, backend stop',
+    usesNgrok: false,
+    usesMetro: false,
+    usesFfmpeg: true,
+  });
+
+  [
+    ['Live entry screen', 'same route selection concept', 'same route selection concept', 'same'],
+    ['Auth / stream key', 'OAuth/backend returns RTMP ingest', 'OAuth/backend returns RTMP ingest', 'same'],
+    ['Camera source', 'Android Camera2/OpenGL preview', 'Windows DirectShow camera device in FFmpeg', 'different'],
+    ['Overlay source of truth', 'gameplay playerSettings/gameSettings snapshot', 'same gameplay playerSettings/gameSettings snapshot', 'fixed'],
+    ['Overlay rendering', 'captured PNG bitmap overlay in native encoder', 'FFmpeg drawbox/drawtext from same snapshot', 'different'],
+    ['Release dependency', 'no Metro/ngrok for stream', 'no Metro/ngrok for stream', 'same'],
+  ].forEach(([item, androidValue, windowsValue, status]) => {
+    console.log('[LiveParityDiff]', {item, androidValue, windowsValue, status});
+  });
 };
 
 export const getWindowsFfmpegLiveStatus = async () => {
@@ -199,8 +305,7 @@ export const checkFfmpegAvailable = async (ffmpegPath?: string) => {
       available: false,
       ffmpegPath: ffmpegPath || 'ffmpeg',
       version: '',
-      error:
-        i18n.t('ffmpegModuleMissing') as string,
+      error: i18n.t('ffmpegModuleMissing') as string,
     };
   }
 
@@ -248,6 +353,7 @@ export const listWindowsFfmpegVideoDevices = async (ffmpegPath?: string) => {
       audioDevices: result?.audioDevices || [],
       selectedVideoDevice: '',
       selectedAudioDevice: '',
+      error: result?.error,
     });
     return result;
   } catch (error: any) {
@@ -263,6 +369,91 @@ export const listWindowsFfmpegVideoDevices = async (ffmpegPath?: string) => {
     });
     return result;
   }
+};
+
+const buildPoolOverlayFilter = (
+  snapshot: WindowsFfmpegOverlaySnapshot | null | undefined,
+  width: number,
+  height: number,
+) => {
+  const left = normalizePlayer(snapshot, 0);
+  const right = normalizePlayer(snapshot, 1);
+  const goalText = escapeDrawText(`Mục tiêu ${Number(snapshot?.goal || 0) || '-'}`);
+  const turnText = escapeDrawText(`Lượt ${Number(snapshot?.totalTurns || 0)}`);
+  const timerValue = snapshot?.countdownTime == null
+    ? '--'
+    : `${Math.max(0, Math.ceil(Number(snapshot.countdownTime || 0)))}s`;
+  const timerText = escapeDrawText(timerValue);
+  const leftLabel = escapeDrawText(`${left.flag ? `${left.flag} ` : ''}${left.name}`);
+  const rightLabel = escapeDrawText(`${right.name}${right.flag ? ` ${right.flag}` : ''}`);
+  const scoreText = escapeDrawText(`${left.score}      ${right.score}`);
+  const barHeight = Math.round(height * 0.104);
+  const barY = height - Math.round(height * 0.052) - barHeight;
+  const red = '0xC91D24';
+
+  return [
+    `drawbox=x=0:y=0:w=iw:h=110:color=black@0.48:t=fill`,
+    `drawtext=text='A+Plus':x=48:y=35:fontsize=36:fontcolor=white`,
+    `drawtext=text='BILLIARDS':x=56:y=73:fontsize=14:fontcolor=white@0.9`,
+    `drawbox=x=${Math.round(width * 0.07)}:y=${barY}:w=${Math.round(width * 0.86)}:h=${barHeight}:color=${red}@0.88:t=fill`,
+    `drawbox=x=${Math.round(width * 0.07)}:y=${barY + barHeight - 8}:w=${Math.round(width * 0.86)}:h=8:color=white@0.18:t=fill`,
+    `drawtext=text='${leftLabel}':x=${Math.round(width * 0.09)}:y=${barY + 18}:fontsize=28:fontcolor=white`,
+    `drawtext=text='${rightLabel}':x=w-text_w-${Math.round(width * 0.09)}:y=${barY + 18}:fontsize=28:fontcolor=white`,
+    `drawtext=text='${scoreText}':x=(w-text_w)/2:y=${barY + 2}:fontsize=58:fontcolor=white`,
+    `drawtext=text='${goalText}':x=(w-text_w)/2-${Math.round(width * 0.035)}:y=${barY + 68}:fontsize=18:fontcolor=white`,
+    `drawtext=text='${turnText}':x=(w-text_w)/2+${Math.round(width * 0.045)}:y=${barY + 68}:fontsize=18:fontcolor=white`,
+    `drawtext=text='${timerText}':x=(w-text_w)/2:y=${barY + barHeight + 8}:fontsize=20:fontcolor=white`,
+  ].join(',');
+};
+
+const buildCaromOverlayFilter = (
+  snapshot: WindowsFfmpegOverlaySnapshot | null | undefined,
+  width: number,
+  height: number,
+) => {
+  const left = normalizePlayer(snapshot, 0);
+  const right = normalizePlayer(snapshot, 1);
+  const panelW = Math.round(width * 0.18);
+  const panelH = Math.round(height * 0.16);
+  const panelX = Math.round(width * 0.024);
+  const panelY = height - Math.round(height * 0.04) - panelH;
+  const targetText = escapeDrawText(`Target ${Number(snapshot?.goal || 0) || '-'}`);
+  const turnText = escapeDrawText(`Turn ${Number(snapshot?.totalTurns || 0)}`);
+  const timerText = escapeDrawText(
+    snapshot?.countdownTime == null
+      ? '--'
+      : `${Math.max(0, Math.ceil(Number(snapshot.countdownTime || 0)))}s`,
+  );
+  const leftLine = escapeDrawText(`${left.flag ? `${left.flag} ` : ''}${left.name}  ${left.score}`);
+  const rightLine = escapeDrawText(`${right.flag ? `${right.flag} ` : ''}${right.name}  ${right.score}`);
+  const leftStats = escapeDrawText(`HR ${left.highestRate || left.currentPoint || 0}  AVG ${left.average || 0}`);
+  const rightStats = escapeDrawText(`HR ${right.highestRate || right.currentPoint || 0}  AVG ${right.average || 0}`);
+
+  return [
+    `drawbox=x=0:y=0:w=iw:h=110:color=black@0.48:t=fill`,
+    `drawtext=text='A+Plus':x=48:y=35:fontsize=36:fontcolor=white`,
+    `drawtext=text='BILLIARDS':x=56:y=73:fontsize=14:fontcolor=white@0.9`,
+    `drawbox=x=${panelX}:y=${panelY}:w=${panelW}:h=${panelH}:color=black@0.68:t=fill`,
+    `drawbox=x=${panelX}:y=${panelY}:w=8:h=${panelH}:color=0xC91D24@0.95:t=fill`,
+    `drawtext=text='${leftLine}':x=${panelX + 22}:y=${panelY + 16}:fontsize=24:fontcolor=white`,
+    `drawtext=text='${leftStats}':x=${panelX + 22}:y=${panelY + 46}:fontsize=16:fontcolor=white@0.88`,
+    `drawtext=text='${rightLine}':x=${panelX + 22}:y=${panelY + 78}:fontsize=24:fontcolor=white`,
+    `drawtext=text='${rightStats}':x=${panelX + 22}:y=${panelY + 108}:fontsize=16:fontcolor=white@0.88`,
+    `drawtext=text='${targetText}':x=${panelX + 22}:y=${panelY + panelH - 30}:fontsize=16:fontcolor=white@0.9`,
+    `drawtext=text='${turnText}':x=${panelX + Math.round(panelW * 0.48)}:y=${panelY + panelH - 30}:fontsize=16:fontcolor=white@0.9`,
+    `drawtext=text='${timerText}':x=${panelX + panelW - 70}:y=${panelY + panelH - 30}:fontsize=16:fontcolor=white@0.9`,
+  ].join(',');
+};
+
+const buildOverlayFilter = (
+  snapshot: WindowsFfmpegOverlaySnapshot | null | undefined,
+  width: number,
+  height: number,
+) => {
+  const overlay = isCaromSnapshot(snapshot)
+    ? buildCaromOverlayFilter(snapshot, width, height)
+    : buildPoolOverlayFilter(snapshot, width, height);
+  return `${overlay},format=yuv420p`;
 };
 
 export const buildFfmpegCommand = (
@@ -298,27 +489,7 @@ export const buildFfmpegCommand = (
     args.push('-f', 'lavfi', '-i', 'anullsrc=channel_layout=stereo:sample_rate=44100');
   }
 
-  const players = snapshot?.players || [];
-  const left = players[0] || {};
-  const right = players[1] || {};
-  const leftName = escapeDrawText(left.name || 'Player 1');
-  const rightName = escapeDrawText(right.name || 'Player 2');
-  const scoreText = escapeDrawText(`${Number(left.score || 0)}  -  ${Number(right.score || 0)}`);
-  const timerText = escapeDrawText(
-    snapshot?.countdownTime == null ? '' : `Time ${Math.max(0, Math.ceil(Number(snapshot.countdownTime || 0)))}s`,
-  );
-
-  // Phase 1 fallback: branded drawtext/drawbox overlay generated from the same gameplay state.
-  // The native module can later replace this with overlay.png while keeping this command builder.
-  const overlayFilter =
-    `drawbox=x=0:y=0:w=iw:h=86:color=black@0.62:t=fill,` +
-    `drawbox=x=0:y=86:w=iw:h=4:color=red@0.85:t=fill,` +
-    `drawtext=text='APLUS SCORE':x=40:y=24:fontsize=28:fontcolor=white,` +
-    `drawtext=text='${leftName}':x=340:y=18:fontsize=24:fontcolor=white,` +
-    `drawtext=text='${scoreText}':x=(w-text_w)/2:y=14:fontsize=44:fontcolor=white,` +
-    `drawtext=text='${rightName}':x=w-text_w-340:y=18:fontsize=24:fontcolor=white,` +
-    (timerText ? `drawtext=text='${timerText}':x=(w-text_w)/2:y=62:fontsize=18:fontcolor=white,` : '') +
-    `format=yuv420p`;
+  const overlayFilter = buildOverlayFilter(snapshot, width, height);
 
   args.push(
     '-filter_complex',
@@ -399,13 +570,22 @@ export const updateWindowsFfmpegOverlay = async (
   const payload = {
     ...snapshot,
     updatedAt: Date.now(),
+    source: 'gameplay-shared-overlay-snapshot-data',
+    parity: buildOverlayParity(snapshot),
   };
+
+  const players = snapshot.players || [];
+  const left = normalizePlayer(snapshot, 0);
+  const right = normalizePlayer(snapshot, 1);
+  const timerText = snapshot.countdownTime == null
+    ? '--'
+    : `${Math.max(0, Math.ceil(Number(snapshot.countdownTime || 0)))}s`;
 
   try {
     await RNFS.writeFile(paths.jsonPath, JSON.stringify(payload, null, 2), 'utf8');
     await RNFS.writeFile(
       paths.htmlPath,
-      `<!doctype html><html><head><meta charset="utf-8"><style>body{margin:0;background:transparent;color:white;font-family:Arial,sans-serif}.bar{height:86px;background:rgba(0,0,0,.62);border-bottom:4px solid #c91d24;display:flex;align-items:center;justify-content:space-around}.score{font-size:44px;font-weight:800}.name{font-size:24px;font-weight:700}.brand{font-size:28px;font-weight:900}</style></head><body><div class="bar"><div class="brand">APLUS SCORE</div><div class="name">${snapshot.players?.[0]?.name || 'Player 1'}</div><div class="score">${snapshot.players?.[0]?.score || 0} - ${snapshot.players?.[1]?.score || 0}</div><div class="name">${snapshot.players?.[1]?.name || 'Player 2'}</div></div></body></html>`,
+      `<!doctype html><html><head><meta charset="utf-8"><style>body{margin:0;background:transparent;color:white;font-family:Arial,sans-serif}.top{position:absolute;left:48px;top:28px;font-weight:900;font-size:36px}.score{position:absolute;left:7%;right:7%;bottom:5.2%;height:104px;background:rgba(201,29,36,.88);display:flex;align-items:center;justify-content:space-between;padding:0 42px;box-sizing:border-box}.name{font-size:28px;font-weight:800}.points{font-size:58px;font-weight:900}.meta{position:absolute;left:0;right:0;bottom:18px;text-align:center;font-size:20px}</style></head><body><div class="top">A+Plus</div><div class="score"><div class="name">${left.flag ? `${left.flag} ` : ''}${left.name}</div><div class="points">${left.score} - ${right.score}</div><div class="name">${right.name}${right.flag ? ` ${right.flag}` : ''}</div></div><div class="meta">Target ${snapshot.goal || '-'} · Turn ${snapshot.totalTurns || 0} · ${timerText}</div></body></html>`,
       'utf8',
     );
     lastOverlayPath = paths.jsonPath;
@@ -415,7 +595,7 @@ export const updateWindowsFfmpegOverlay = async (
       overlayPath: paths.jsonPath,
       overlayExists: false,
       overlayUpdatedAt: Date.now(),
-      snapshotScore: snapshot.players?.map(player => player.score),
+      snapshotScore: players.map(player => player.score),
       snapshotMode: snapshot.category,
       error,
     });
@@ -423,16 +603,32 @@ export const updateWindowsFfmpegOverlay = async (
   }
 
   let overlayExists = false;
+  let fileSize = 0;
   try {
     overlayExists = await RNFS.exists(paths.jsonPath);
+    if (overlayExists) {
+      const stat = await RNFS.stat(paths.jsonPath);
+      fileSize = Number(stat.size || 0);
+    }
   } catch (_error) {}
 
+  const parity = buildOverlayParity(snapshot);
+
+  console.log('[WindowsLiveOverlayParity]', parity);
+  console.log('[WindowsLiveOverlayUpdate]', {
+    overlayPath: paths.jsonPath,
+    updatedAt: payload.updatedAt,
+    scoreSnapshot: players.map(player => player.score),
+    timerSnapshot: snapshot.countdownTime,
+    fileExists: overlayExists,
+    fileSize,
+  });
   console.log('[LiveOverlay]', {
     overlayMode: 'drawtext+json/html',
     overlayPath: paths.jsonPath,
     overlayExists,
     overlayUpdatedAt: payload.updatedAt,
-    snapshotScore: snapshot.players?.map(player => player.score),
+    snapshotScore: players.map(player => player.score),
     snapshotMode: snapshot.category,
   });
 
@@ -446,6 +642,8 @@ export const startWindowsFfmpegYouTubeLive = async (
   if (Platform.OS !== 'windows') {
     return {ok: false, error: i18n.t('ffmpegWindowsOnly') as string};
   }
+
+  logLiveAuditOnce();
 
   const normalizedConfig: WindowsFfmpegLiveConfig = {
     platform: 'youtube',
@@ -473,7 +671,6 @@ export const startWindowsFfmpegYouTubeLive = async (
     console.log('[LiveState]', {status: 'error', reason: 'missing-stream-key'});
     return {ok: false, error: i18n.t('ffmpegStreamKeyMissing') as string};
   }
-
 
   await updateWindowsFfmpegOverlay(snapshot || {players: []});
 
@@ -521,10 +718,20 @@ export const startWindowsFfmpegYouTubeLive = async (
   const command = buildFfmpegCommand(normalizedConfig, snapshot);
   const nativeModule = getNativeModule();
 
+  console.log('[WindowsLiveStart]', {
+    mode: 'ffmpeg-local-youtube-rtmp',
+    rtmpUrl: command.rtmpUrl,
+    streamKeyMasked: command.streamKeyMasked,
+    cameraDevice: normalizedConfig.cameraDeviceName,
+    overlayEnabled: normalizedConfig.overlayMode !== 'none',
+    overlayPath: getLastWindowsFfmpegOverlayPath(),
+    ffmpegAvailable: !!ffmpegCheck?.available,
+    commandMasked: command.commandMasked,
+  });
+
   if (!nativeModule?.start) {
     liveState = 'error';
-    const error =
-      i18n.t('ffmpegStartModuleMissing') as string;
+    const error = i18n.t('ffmpegStartModuleMissing') as string;
     console.log('[LiveFfmpegProcess]', {
       start: false,
       pid: undefined,
@@ -603,6 +810,11 @@ export const stopWindowsFfmpegYouTubeLive = async (reason = 'user-stop') => {
       exitCode: undefined,
       error: undefined,
     });
+    console.log('[WindowsLiveStop]', {
+      processStopped: true,
+      cleanupDone: true,
+      error: 'WindowsFfmpegLiveModule.stop missing',
+    });
     console.log('[LiveState]', {status: 'stopped'});
     return {ok: true, stopped: true};
   }
@@ -620,6 +832,11 @@ export const stopWindowsFfmpegYouTubeLive = async (reason = 'user-stop') => {
       exitCode: result?.exitCode,
       error: result?.error,
     });
+    console.log('[WindowsLiveStop]', {
+      processStopped: !!result?.stopped,
+      cleanupDone: true,
+      error: result?.error,
+    });
     console.log('[LiveState]', {status: 'stopped'});
     return {ok: true, stopped: true, exitCode: result?.exitCode};
   } catch (error: any) {
@@ -631,6 +848,11 @@ export const stopWindowsFfmpegYouTubeLive = async (reason = 'user-stop') => {
       status: 'error',
       stopped: false,
       exitCode: undefined,
+      error: error?.message || String(error),
+    });
+    console.log('[WindowsLiveStop]', {
+      processStopped: false,
+      cleanupDone: false,
       error: error?.message || String(error),
     });
     console.log('[LiveState]', {status: 'error'});
@@ -646,13 +868,15 @@ export const toWindowsFfmpegSnapshot = (snapshot: any): WindowsFfmpegOverlaySnap
     currentPlayerIndex: snapshot?.currentPlayerIndex,
     countdownTime: snapshot?.countdownTime,
     totalTurns: snapshot?.totalTurns,
-    goal: snapshot?.goal || snapshot?.gameSettings?.players?.goal?.goal,
+    goal: snapshot?.goal || snapshot?.gameSettings?.players?.goal?.goal || snapshot?.playerSettings?.goal?.goal,
     players: players.map((player: any) => ({
       name: player?.name,
-      flag: player?.flag,
+      flag: typeof player?.flag === 'string'
+        ? player.flag
+        : player?.country?.flag || player?.countryCode || player?.country || '',
       score: Number(player?.totalPoint || 0),
       currentPoint: Number(player?.proMode?.currentPoint || 0),
-      highestRate: Number(player?.proMode?.highestRate || 0),
+      highestRate: Number(player?.proMode?.highestRate || player?.proMode?.highestRun || 0),
       average: Number(player?.proMode?.average || 0),
     })),
   };
@@ -666,17 +890,16 @@ export const createWindowsFfmpegSnapshotFromGameState = (params: {
   totalTurns?: number;
 }) =>
   toWindowsFfmpegSnapshot({
+    gameSettings: params.gameSettings,
     category: params.gameSettings?.category,
     gameMode: params.gameSettings?.mode?.mode,
     currentPlayerIndex: params.currentPlayerIndex,
     countdownTime: params.countdownTime,
     totalTurns: params.totalTurns,
-    goal: params.gameSettings?.players?.goal?.goal,
+    goal: params.gameSettings?.players?.goal?.goal || params.playerSettings?.goal?.goal,
     playerSettings: params.playerSettings,
   });
 
 export const isWindowsFfmpegLocalLiveRunning = () => liveState === 'live' || liveState === 'starting';
-
 export const getCurrentWindowsFfmpegLiveConfig = () => currentConfig;
-
 export const getLastWindowsFfmpegOverlayPath = () => lastOverlayPath;

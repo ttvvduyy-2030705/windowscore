@@ -2887,7 +2887,6 @@ const GamePlayViewModel = () => {
       setYoutubeLivePreviewActive(false);
       setYouTubeNativeCameraLock(false);
       setYouTubeSourceLock(null);
-      setIsStarted(true);
 
       const firstPlayerName =
         playerSettingsRef.current?.playingPlayers?.[0]?.name?.trim() ||
@@ -3025,6 +3024,7 @@ const GamePlayViewModel = () => {
 
           setYoutubeLivePreparing(false);
           setYoutubeLivePreviewActive(false);
+          setIsStarted(true);
           setActiveGameplaySessionSync({
             matchSessionId: matchSessionIdRef.current,
             webcamFolderName,

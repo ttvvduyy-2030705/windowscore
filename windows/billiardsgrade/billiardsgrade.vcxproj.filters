@@ -15,6 +15,7 @@
     <ClCompile Include="WindowsCameraRecordingModule.cpp" />
     <ClCompile Include="WindowsVideoStorageModule.cpp" />
     <ClCompile Include="WindowsVideoPlayerViewManager.cpp" />
+    <ClCompile Include="WindowsFfmpegLiveModule.cpp" />
     <ClCompile Include="AutolinkedNativeModules.g.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -25,6 +26,7 @@
     <ClInclude Include="WindowsCameraRecordingModule.h" />
     <ClInclude Include="WindowsVideoStorageModule.h" />
     <ClInclude Include="WindowsVideoPlayerViewManager.h" />
+    <ClInclude Include="WindowsFfmpegLiveModule.h" />
     <ClInclude Include="AutolinkedNativeModules.g.h" />
   </ItemGroup>
   <ItemGroup>
