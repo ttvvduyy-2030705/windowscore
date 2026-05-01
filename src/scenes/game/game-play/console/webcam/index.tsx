@@ -436,7 +436,7 @@ const CaromScoreboardOverlay = memo(({
       gameSettings={state.gameSettings}
       playerSettings={state.playerSettings}
       variant={liveOutput ? 'live' : fullscreenMode ? 'fullscreen' : 'camera'}
-      bottomOffset={bottomOffset ?? (liveOutput ? LIVE_OVERLAY_CAROM_BOTTOM : fullscreenMode ? 6 : 30)}
+      bottomOffset={bottomOffset ?? (liveOutput ? LIVE_OVERLAY_CAROM_BOTTOM : undefined)}
       liveVideoWidth={liveVideoWidth}
       liveVideoHeight={liveVideoHeight}
     />
@@ -1325,9 +1325,7 @@ const handleZoomSliderComplete = useCallback(
   const poolBottomOffset = 0;
   const caromBottomOffset = liveOutput
     ? LIVE_OVERLAY_CAROM_BOTTOM
-    : fullscreenMode
-      ? undefined
-      : -50;
+    : undefined;
 
   return (
     <>

@@ -102,16 +102,17 @@ const getMetrics = (
     default:
       return compact
         ? {
-            // Camera overlay: anchor closer to the left camera edge and lift it
-            // above the bottom border without distorting the UI.
+            // Camera overlay: pin the Carom scoreboard tight to the normal
+            // camera bottom edge without using a negative offset that can clip
+            // the lower player row.
             left: s(2),
-            bottom: s(28),
+            bottom: s(0),
             width: s(186),
             scale: 0.34,
           }
         : {
             left: s(4),
-            bottom: s(34),
+            bottom: s(0),
             width: s(236),
             scale: 0.42,
           };

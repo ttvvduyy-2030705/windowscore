@@ -25,6 +25,14 @@ const CaromInfo = (props: Props) => {
   const viewModel = CaromInfoViewModel(props);
   const adaptive = useAdaptiveLayout();
   const isLibre = props.gameSettings?.category === 'libre';
+  const countdownBarWidth = adaptive.width * (props.compact ? 0.16 : 0.225);
+  const caromTimerTextOffset = Math.max(
+    adaptive.s(props.compact ? 16 : 26),
+    Math.min(
+      adaptive.width * (props.compact ? 0.014 : 0.018),
+      adaptive.s(props.compact ? 22 : 30),
+    ),
+  );
 
   const getTotalPointFont = useCallback(
     (point: number) => {
@@ -197,7 +205,15 @@ const CaromInfo = (props: Props) => {
           direction={'row'}
           alignItems={'center'}>
           <View
-            style={[styles.countdownWrapper, props.compact ? styles.countdownWrapperCompact : undefined]}
+            style={[
+              styles.countdownWrapper,
+              props.compact ? styles.countdownWrapperCompact : undefined,
+              {
+                transform: [{translateX: caromTimerTextOffset}],
+                zIndex: 2,
+                elevation: 2,
+              },
+            ]}
             paddingHorizontal={props.compact ? '12' : '20'}
             marginLeft={props.compact ? '2' : '5'}>
             <Text fontSize={props.compact ? 16 : 20} color={colors.white}>
@@ -218,7 +234,7 @@ const CaromInfo = (props: Props) => {
               <Countdown
                 originalCountdownTime={props.gameSettings.mode?.countdownTime}
                 currentCountdownTime={props.countdownTime}
-                countdownWidth={adaptive.width * (props.compact ? 0.16 : 0.225)}
+                countdownWidth={countdownBarWidth}
                 heightItem={props.compact ? 12 : 27}
                 marginHorizontal={props.compact ? 1 : 2}
                 direction="right-to-left"
