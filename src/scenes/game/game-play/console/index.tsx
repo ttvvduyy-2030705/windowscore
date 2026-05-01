@@ -705,6 +705,16 @@ const GameConsole = (props: ConsoleViewModelProps) => {
     !hideCaromCamera &&
     !useLargeCaromConsole &&
     (useResponsiveCompact || adaptive.isConstrainedLandscape || isHandheldLandscape || height <= 760);
+  const shouldCapCaromCameraHeight =
+    isCarom &&
+    !hideCaromCamera &&
+    !hideCaromScoreChrome &&
+    !useLargeCaromConsole &&
+    adaptive.isLandscape &&
+    (adaptive.isUltraShortLandscape ||
+      adaptive.isVeryShortLandscape ||
+      height <= 700 ||
+      (height <= 760 && adaptive.aspectRatio >= 1.7));
   const caromExpectedButtonCount = !isCarom
     ? 0
     : (props.isStarted ? 3 : 1) + 3 + 2;
@@ -753,11 +763,7 @@ const GameConsole = (props: ConsoleViewModelProps) => {
   }, [isCarom, useCaromConsoleCompact, useCaromTightLayout, useLargeCaromConsole]);
 
   const caromCameraMaxHeight = useMemo(() => {
-    if (!isCarom || hideCaromScoreChrome) {
-      return null;
-    }
-
-    if (useLargeCaromConsole) {
+    if (!shouldCapCaromCameraHeight) {
       return null;
     }
 
@@ -770,7 +776,7 @@ const GameConsole = (props: ConsoleViewModelProps) => {
     }
 
     return null;
-  }, [hideCaromScoreChrome, isCarom, useCaromConsoleCompact, useCaromTightLayout, useLargeCaromConsole]);
+  }, [shouldCapCaromCameraHeight, useCaromConsoleCompact, useCaromTightLayout]);
 
   useEffect(() => {
     if (!isCarom) {
@@ -806,6 +812,7 @@ const GameConsole = (props: ConsoleViewModelProps) => {
       goalCardMinHeight: caromGoalCardMinHeight,
       actionStackGap: caromActionGap,
       cameraMaxHeight: caromCameraMaxHeight,
+      shouldCapCameraHeight: shouldCapCaromCameraHeight,
       countdownEnabled: !!props.gameSettings?.mode?.countdownTime,
       isStarted: props.isStarted,
     });
@@ -828,6 +835,7 @@ const GameConsole = (props: ConsoleViewModelProps) => {
     isWideTabletPreset,
     props.gameSettings?.mode?.countdownTime,
     props.isStarted,
+    shouldCapCaromCameraHeight,
     shortestSide,
     useCaromCompactButtons,
     useCaromConsoleCompact,
@@ -1107,6 +1115,7 @@ const GameConsole = (props: ConsoleViewModelProps) => {
     caromExpectedButtonCount,
     isCarom,
     props.isStarted,
+    shouldCapCaromCameraHeight,
     useCaromCompactButtons,
     useCaromConsoleCompact,
     useCaromExtraCompactButtons,
@@ -1382,6 +1391,7 @@ const GameConsole = (props: ConsoleViewModelProps) => {
       goalCardMinHeight: caromGoalCardMinHeight,
       actionStackGap: caromActionGap,
       cameraMaxHeight: caromCameraMaxHeight,
+      shouldCapCameraHeight: shouldCapCaromCameraHeight,
       isCaromLargeCandidate,
       useLargeCaromConsole,
       useCaromConsoleCompact,
@@ -1463,7 +1473,10 @@ const GameConsole = (props: ConsoleViewModelProps) => {
               !isCameraFullscreen && useCaromConsoleCompact ? styles.caromCameraCardCompact : undefined,
               !isCameraFullscreen && useLargeCaromConsole ? styles.caromCameraCardLarge : undefined,
               !isCameraFullscreen && hideCaromScoreChrome ? styles.caromCameraCardExpanded : undefined,
-              {minHeight: isCameraFullscreen ? 0 : cameraMinHeight},
+              {
+                minHeight: isCameraFullscreen ? 0 : cameraMinHeight,
+                maxHeight: isCameraFullscreen ? undefined : caromCameraMaxHeight ?? undefined,
+              },
               isCameraFullscreen ? styles.fullscreenCameraCard : undefined,
             ]}
             onLayout={event => {
@@ -2197,7 +2210,6 @@ const createStyles = (adaptive: any, design: any, rules: any) => createGameplayS
   },
   caromCameraCardCompact: {
     borderWidth: 4,
-    maxHeight: 168,
   },
   caromCameraCardExpanded: {
     flex: 1.7,
@@ -2209,8 +2221,7 @@ const createStyles = (adaptive: any, design: any, rules: any) => createGameplayS
     borderWidth: 4,
   },
   caromCameraCardTight: {
-    flex: 0.78,
-    maxHeight: 152,
+    flex: 1,
   },
   caromPhoneCameraCard: {
     minHeight: 178,

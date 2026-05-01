@@ -1,5 +1,11 @@
-import React, {memo, useContext, useMemo} from 'react';
-import {StyleSheet, TextInput, Text as RNText, Image as RNImage} from 'react-native';
+import React, {memo, useCallback, useContext, useMemo, useState} from 'react';
+import {
+  StyleSheet,
+  TextInput,
+  Text as RNText,
+  Image as RNImage,
+  LayoutChangeEvent,
+} from 'react-native';
 
 import View from 'components/View';
 import Button from 'components/Button';
@@ -187,7 +193,8 @@ const GamePlayer = (
     : undefined;
 
   const textColorStyle = {color: primaryTextColor};
-  const inactivePlaceholderColor = inactiveTextColor;
+  const editingNameTextStyle = {color: '#111111'};
+  const editingNamePlaceholderColor = 'rgba(17,17,17,0.55)';
 
   const isMultiPlayerLayout = totalPlayers > 2;
   const hasScoredBalls = Boolean((props.player.scoredBalls || []).length > 0);
@@ -288,6 +295,26 @@ const GamePlayer = (
 
   const showAddTime = extraTimeTurns > 0 && (!isPool15Mode || isPool15OnlyMode);
 
+  const [panelSize, setPanelSize] = useState({width: 0, height: 0});
+  const onPanelLayout = useCallback((event: LayoutChangeEvent) => {
+    const nextWidth = Math.round(Number(event?.nativeEvent?.layout?.width || 0));
+    const nextHeight = Math.round(Number(event?.nativeEvent?.layout?.height || 0));
+
+    if (nextWidth <= 0 || nextHeight <= 0) {
+      return;
+    }
+
+    setPanelSize(previous => {
+      if (
+        Math.abs(previous.width - nextWidth) <= 1 &&
+        Math.abs(previous.height - nextHeight) <= 1
+      ) {
+        return previous;
+      }
+
+      return {width: nextWidth, height: nextHeight};
+    });
+  }, []);
 
   const addTimeButtons = useMemo(() => {
     return Array.from({length: extraTimeTurns}, (_, index) => index);
@@ -372,6 +399,84 @@ const GamePlayer = (
     ? Math.round(46 * fluidScale)
     : Math.round((isPhoneLandscapeTwoPlayer ? 64 : isExtraCompactLayout ? 62 : isCompactLayout ? 70 : isMediumResponsiveLayout ? 88 : 104) * fluidScale);
 
+  const scoreDigitCount = Math.max(
+    1,
+    String(Math.abs(Math.trunc(totalPointValue))).length + (totalPointValue < 0 ? 1 : 0),
+  );
+  const estimatedPanelWidth = Math.max(
+    220,
+    Math.round(
+      adaptive.width *
+        (totalPlayers > 2
+          ? 0.26
+          : isCompactLayout
+          ? 0.27
+          : 0.31),
+    ),
+  );
+  const estimatedPanelHeight = Math.max(320, Math.round(adaptive.height - layoutRules.headerHeight - layoutRules.screenPaddingY * 2));
+  const measuredPanelWidth = panelSize.width > 0 ? panelSize.width : estimatedPanelWidth;
+  const measuredPanelHeight = panelSize.height > 0 ? panelSize.height : estimatedPanelHeight;
+  const scoreLayerHeight = Math.max(80, measuredPanelHeight - scoreTop - scoreBottom);
+  const baseScoreFont = adaptive.fs(
+    isMultiPlayerLayout
+      ? isCaromMode
+        ? isCaromThreePlayerCompactCard
+          ? 180
+          : isFourPlayerScoreLayout
+          ? 195
+          : 260
+        : isFourPlayerScoreLayout
+        ? 190
+        : 240
+      : isCaromMode
+      ? isPhoneLandscapeTwoPlayer
+        ? 375
+        : isExtraCompactLayout
+        ? 350
+        : isCompactLayout
+        ? 425
+        : 575
+      : isPhoneLandscapeTwoPlayer
+      ? 375
+      : isExtraCompactLayout
+      ? 338
+      : isCompactLayout
+      ? 413
+      : isMediumResponsiveLayout
+      ? 495
+      : 575,
+    isCompactLayout ? 0.5 : 0.62,
+    1,
+  );
+  const digitWidthFactor =
+    scoreDigitCount >= 4 ? 0.62 : scoreDigitCount >= 3 ? 0.66 : scoreDigitCount === 2 ? 0.7 : 0.95;
+  const scoreHorizontalFill =
+    scoreDigitCount >= 3
+      ? isCompactLayout
+        ? 0.82
+        : 0.86
+      : isCompactLayout
+      ? 0.88
+      : 0.92;
+  const scoreFontByWidth =
+    (measuredPanelWidth * scoreHorizontalFill) /
+    Math.max(scoreDigitCount * digitWidthFactor, 1);
+  const scoreFontByHeight = scoreLayerHeight * (isMultiPlayerLayout ? 0.82 : isCompactLayout ? 0.86 : 0.9);
+  const scoreReadableFloor = isMultiPlayerLayout ? 58 : isExtraCompactLayout ? 96 : isCompactLayout ? 116 : 150;
+  const playerScoreFontSize = Math.round(
+    Math.max(
+      Math.min(scoreReadableFloor, scoreFontByWidth, scoreFontByHeight),
+      Math.min(baseScoreFont, scoreFontByWidth, scoreFontByHeight),
+    ),
+  );
+  const responsiveScoreTextStyle = {
+    fontSize: playerScoreFontSize,
+    lineHeight: Math.round(playerScoreFontSize * 1.06),
+    maxWidth: '100%' as const,
+    flexShrink: 1,
+  };
+
   const pool8BallTop = Math.round(scoreTop + 4 * fluidScale);
   const pool8BallBottom = Math.max(18, Math.round(scoreBottom + 12 * fluidScale));
   const pool8AddTimeTop = Math.max(82, Math.round(scoreTop - 4 * fluidScale));
@@ -380,6 +485,7 @@ const GamePlayer = (
 
   return (
     <View
+      onLayout={onPanelLayout}
       style={[
         styles.panel,
         !isLargeDisplay && styles.panelScaled,
@@ -447,8 +553,11 @@ const GamePlayer = (
               isCompactLayout && styles.nameInputCompact,
               textColorStyle,
               !isActiveCard && styles.nameTextInactive,
+              styles.nameInputEditing,
+              editingNameTextStyle,
             ]}
-            placeholderTextColor={inactivePlaceholderColor}
+            placeholderTextColor={editingNamePlaceholderColor}
+            selectionColor={'#FF1818'}
           />
         ) : (
           <RNText
@@ -640,12 +749,13 @@ const GamePlayer = (
           <RNText
             numberOfLines={1}
             adjustsFontSizeToFit
-            minimumFontScale={0.22}
+            minimumFontScale={0.42}
             style={[
               styles.scoreText,
               isMediumResponsiveLayout ? styles.scoreTextMedium : undefined,
               scoreTextDynamicStyle,
               libreScoreTextStyle,
+              responsiveScoreTextStyle,
               textColorStyle,
               isPool15OnlyMode && styles.pool8ScoreText,
             ]}
@@ -943,6 +1053,10 @@ const createStyles = (adaptive: any, design: any, rules: any) => createGameplayS
     fontWeight: '900',
     textAlign: 'center',
     paddingVertical: 0,
+  },
+  nameInputEditing: {
+    backgroundColor: '#FFFFFF',
+    color: '#111111',
   },
   nameInputMedium: {},
   nameInputCompact: {},
