@@ -107,17 +107,20 @@ const getVariantMetrics = (
   if (variant === 'live') {
     return {
       wrapperWidth: '86%',
-      barHeight: liveSize(76),
-      bottomGap: Math.round(liveHeight * 0.052),
-      playerNameSize: liveSize(27),
-      playerScoreSize: liveSize(44),
+      barHeight: liveSize(54),
+      bottomGap: 0,
+      playerNameSize: liveSize(24),
+      playerScoreSize: liveSize(36),
       centerLabelSize: liveSize(15),
-      centerValueSize: liveSize(32),
-      timerHeight: liveSize(22),
-      timerTextSize: liveSize(15),
-      flagWidth: liveSize(56),
-      scoreMinWidth: liveSize(92),
-      horizontalPadding: liveSize(18),
+      centerValueSize: liveSize(26),
+      centerWidth: liveSize(132),
+      timerWidth: '44%',
+      timerHeight: liveSize(26),
+      timerTextSize: liveSize(14),
+      flagWidth: liveSize(78),
+      scoreMinWidth: liveSize(86),
+      horizontalPadding: liveSize(16),
+      playerNameGap: liveSize(12),
     };
   }
 
@@ -125,79 +128,94 @@ const getVariantMetrics = (
     return compact
       ? {
           wrapperWidth: '84%',
-          barHeight: s(42),
-          bottomGap: s(12),
-          playerNameSize: fs(14, 0.78, 0.92),
-          playerScoreSize: fs(24, 0.78, 0.94),
-          centerLabelSize: fs(9, 0.76, 0.9),
-          centerValueSize: fs(17, 0.78, 0.94),
-          timerHeight: s(13),
-          timerTextSize: fs(10, 0.78, 0.92),
-          flagWidth: s(28),
-          scoreMinWidth: s(46),
-          horizontalPadding: s(10),
+          barHeight: s(34),
+          bottomGap: 0,
+          playerNameSize: fs(12, 0.78, 0.9),
+          playerScoreSize: fs(20, 0.78, 0.92),
+          centerLabelSize: fs(8, 0.76, 0.9),
+          centerValueSize: fs(15, 0.78, 0.92),
+          centerWidth: s(78),
+          timerWidth: '46%',
+          timerHeight: s(15),
+          timerTextSize: fs(9, 0.78, 0.9),
+          flagWidth: s(50),
+          scoreMinWidth: s(42),
+          horizontalPadding: s(8),
+          playerNameGap: s(8),
         }
       : {
           wrapperWidth: '88%',
-          barHeight: s(48),
-          bottomGap: s(18),
-          playerNameSize: fs(17, 0.8, 0.96),
-          playerScoreSize: fs(27, 0.82, 0.98),
-          centerLabelSize: fs(10, 0.82, 0.96),
-          centerValueSize: fs(20, 0.82, 0.98),
-          timerHeight: s(16),
-          timerTextSize: fs(11, 0.82, 0.96),
-          flagWidth: s(34),
-          scoreMinWidth: s(54),
-          horizontalPadding: s(12),
+          barHeight: s(38),
+          bottomGap: 0,
+          playerNameSize: fs(15, 0.8, 0.94),
+          playerScoreSize: fs(23, 0.82, 0.96),
+          centerLabelSize: fs(9, 0.82, 0.96),
+          centerValueSize: fs(17, 0.82, 0.96),
+          centerWidth: s(92),
+          timerWidth: '44%',
+          timerHeight: s(18),
+          timerTextSize: fs(10, 0.82, 0.96),
+          flagWidth: s(58),
+          scoreMinWidth: s(50),
+          horizontalPadding: s(10),
+          playerNameGap: s(10),
         };
   }
 
   if (variant === 'playback') {
     return {
       wrapperWidth: compact ? '86%' : '90%',
-      barHeight: compact ? s(44) : s(50),
-      bottomGap: compact ? s(52) : s(62),
-      playerNameSize: compact ? fs(15, 0.78, 0.92) : fs(17, 0.82, 0.98),
-      playerScoreSize: compact ? fs(24, 0.78, 0.94) : fs(28, 0.82, 0.98),
-      centerLabelSize: compact ? fs(9, 0.76, 0.9) : fs(10, 0.82, 0.96),
-      centerValueSize: compact ? fs(18, 0.78, 0.94) : fs(21, 0.82, 0.98),
-      timerHeight: compact ? s(14) : s(16),
-      timerTextSize: compact ? fs(10, 0.78, 0.92) : fs(11, 0.82, 0.96),
-      flagWidth: compact ? s(29) : s(34),
-      scoreMinWidth: compact ? s(48) : s(56),
-      horizontalPadding: compact ? s(10) : s(12),
+      barHeight: compact ? s(34) : s(40),
+      bottomGap: 0,
+      playerNameSize: compact ? fs(12, 0.78, 0.9) : fs(15, 0.82, 0.96),
+      playerScoreSize: compact ? fs(20, 0.78, 0.92) : fs(24, 0.82, 0.96),
+      centerLabelSize: compact ? fs(8, 0.76, 0.9) : fs(9, 0.82, 0.96),
+      centerValueSize: compact ? fs(15, 0.78, 0.92) : fs(18, 0.82, 0.96),
+      centerWidth: compact ? s(82) : s(96),
+      timerWidth: compact ? '46%' : '44%',
+      timerHeight: compact ? s(16) : s(19),
+      timerTextSize: compact ? fs(9, 0.78, 0.9) : fs(10, 0.82, 0.96),
+      flagWidth: compact ? s(50) : s(62),
+      scoreMinWidth: compact ? s(42) : s(52),
+      horizontalPadding: compact ? s(8) : s(10),
+      playerNameGap: compact ? s(8) : s(10),
     };
   }
 
   return compact
     ? {
         wrapperWidth: '78%',
-        barHeight: s(30),
-        bottomGap: s(4),
-        playerNameSize: fs(10, 0.74, 0.86),
-        playerScoreSize: fs(15, 0.74, 0.88),
-        centerLabelSize: fs(7, 0.72, 0.84),
-        centerValueSize: fs(12, 0.74, 0.86),
-        timerHeight: s(10),
-        timerTextSize: fs(8, 0.74, 0.86),
-        flagWidth: s(20),
-        scoreMinWidth: s(32),
-        horizontalPadding: s(6),
+        barHeight: s(24),
+        bottomGap: 0,
+        playerNameSize: fs(8.5, 0.74, 0.86),
+        playerScoreSize: fs(12.5, 0.74, 0.88),
+        centerLabelSize: fs(6.5, 0.72, 0.84),
+        centerValueSize: fs(10.5, 0.74, 0.86),
+        centerWidth: s(58),
+        timerWidth: '48%',
+        timerHeight: s(9),
+        timerTextSize: fs(7, 0.74, 0.86),
+        flagWidth: s(36),
+        scoreMinWidth: s(28),
+        horizontalPadding: s(5),
+        playerNameGap: s(5),
       }
     : {
         wrapperWidth: '88%',
-        barHeight: s(36),
-        bottomGap: s(10),
-        playerNameSize: fs(13, 0.8, 0.92),
-        playerScoreSize: fs(20, 0.8, 0.94),
-        centerLabelSize: fs(8, 0.8, 0.92),
-        centerValueSize: fs(15, 0.8, 0.94),
-        timerHeight: s(12),
-        timerTextSize: fs(9, 0.8, 0.92),
-        flagWidth: s(24),
-        scoreMinWidth: s(40),
-        horizontalPadding: s(8),
+        barHeight: s(28),
+        bottomGap: 0,
+        playerNameSize: fs(11, 0.8, 0.9),
+        playerScoreSize: fs(16, 0.8, 0.92),
+        centerLabelSize: fs(7.5, 0.8, 0.9),
+        centerValueSize: fs(13, 0.8, 0.92),
+        centerWidth: s(68),
+        timerWidth: '46%',
+        timerHeight: s(10),
+        timerTextSize: fs(8, 0.8, 0.9),
+        flagWidth: s(42),
+        scoreMinWidth: s(34),
+        horizontalPadding: s(6),
+        playerNameGap: s(6),
       };
 };
 
@@ -326,7 +344,10 @@ const PoolBroadcastScoreboard = ({
             styles.playerPanel,
             styles.playerPanelLeft,
             currentPlayerIndex === 0 && styles.activePlayerPanel,
-            {paddingHorizontal: metrics.horizontalPadding},
+            {
+              paddingLeft: metrics.horizontalPadding + metrics.playerNameGap,
+              paddingRight: metrics.horizontalPadding,
+            },
           ]}>
           <Text
             style={[playerNameStyle, styles.playerNameLeft]}
@@ -340,12 +361,24 @@ const PoolBroadcastScoreboard = ({
           </View>
         </LinearGradient>
 
-        <View style={styles.centerPanelWrap}>
+        <View
+          style={[
+            styles.centerPanelWrap,
+            {width: metrics.centerWidth, minWidth: metrics.centerWidth},
+          ]}>
           <View style={styles.centerPanel}>
-            <Text style={[styles.centerLabel, {fontSize: metrics.centerLabelSize}]}>
-              {String(i18n.t('goal')).toUpperCase()}
+            <Text
+              style={[styles.centerLabel, {fontSize: metrics.centerLabelSize}]}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.82}>
+              {String(i18n.t('goal'))}
             </Text>
-            <Text style={[styles.centerValue, {fontSize: metrics.centerValueSize}]}>
+            <Text
+              style={[styles.centerValue, {fontSize: metrics.centerValueSize}]}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.8}>
               {goal}
             </Text>
           </View>
@@ -359,7 +392,10 @@ const PoolBroadcastScoreboard = ({
             styles.playerPanel,
             styles.playerPanelRight,
             currentPlayerIndex === 1 && styles.activePlayerPanel,
-            {paddingHorizontal: metrics.horizontalPadding},
+            {
+              paddingLeft: metrics.horizontalPadding,
+              paddingRight: metrics.horizontalPadding + metrics.playerNameGap,
+            },
           ]}>
           <View style={[styles.scoreBox, {minWidth: metrics.scoreMinWidth}]}>
             <Text style={playerScoreStyle}>
@@ -381,7 +417,11 @@ const PoolBroadcastScoreboard = ({
         />
       </View>
 
-      <View style={[styles.timerTrack, {height: metrics.timerHeight}]}>
+      <View
+        style={[
+          styles.timerTrack,
+          {height: metrics.timerHeight, width: metrics.timerWidth as any},
+        ]}>
         <View
           style={[
             styles.timerFill,
@@ -470,11 +510,11 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   playerNameLeft: {
-    textAlign: 'left',
+    textAlign: 'center',
     marginRight: 8,
   },
   playerNameRight: {
-    textAlign: 'right',
+    textAlign: 'center',
     marginLeft: 8,
   },
   scoreBox: {
@@ -490,28 +530,31 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
   centerPanelWrap: {
-    width: 82,
-    minWidth: 82,
+    flexShrink: 0,
   },
   centerPanel: {
     flex: 1,
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 10,
+    paddingHorizontal: 6,
     backgroundColor: '#161616',
   },
   centerLabel: {
     color: '#E6E6E6',
     fontWeight: '800',
-    letterSpacing: 0.5,
+    letterSpacing: 0.2,
+    includeFontPadding: false,
+    marginRight: 5,
   },
   centerValue: {
     color: '#FFFFFF',
     fontWeight: '900',
-    marginTop: -2,
+    includeFontPadding: false,
   },
   timerTrack: {
-    marginTop: 6,
+    alignSelf: 'center',
+    marginTop: 5,
     borderRadius: 999,
     overflow: 'hidden',
     backgroundColor: 'rgba(0,0,0,0.82)',

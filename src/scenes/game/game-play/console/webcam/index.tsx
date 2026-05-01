@@ -73,7 +73,7 @@ const LIVE_OVERLAY_LOGO_MARGIN_X_RATIO = 0.025;
 const LIVE_OVERLAY_LOGO_MARGIN_TOP_RATIO = 0.03;
 const LIVE_OVERLAY_LOGO_MARGIN_BOTTOM_RATIO = 0.04;
 const LIVE_OVERLAY_POOL_WIDTH_RATIO = 0.86;
-const LIVE_OVERLAY_POOL_BOTTOM_RATIO = 0.052;
+const LIVE_OVERLAY_POOL_BOTTOM_RATIO = 0;
 const LIVE_OVERLAY_POOL_HEIGHT_RATIO = 0.096;
 const LIVE_OVERLAY_CAROM_SAMPLE_WIDTH_RATIO = 0.28;
 const LIVE_OVERLAY_CAROM_ONLY_WIDTH_SCALE = 0.5;
@@ -398,7 +398,7 @@ const PoolScoreboardOverlay = memo(({
       gameSettings={state.gameSettings}
       playerSettings={state.playerSettings}
       variant={liveOutput ? 'live' : fullscreenMode ? 'fullscreen' : 'camera'}
-      bottomOffset={bottomOffset ?? (liveOutput ? LIVE_OVERLAY_POOL_BOTTOM : fullscreenMode ? 18 : 14)}
+      bottomOffset={bottomOffset ?? 0}
       liveVideoWidth={liveVideoWidth}
       liveVideoHeight={liveVideoHeight}
     />
@@ -1322,11 +1322,7 @@ const handleZoomSliderComplete = useCallback(
   }
 
   const liveOutput = !!options?.liveOutput;
-  const poolBottomOffset = liveOutput
-    ? LIVE_OVERLAY_POOL_BOTTOM
-    : fullscreenMode
-      ? fullscreenScoreboardBottom
-      : 10;
+  const poolBottomOffset = 0;
   const caromBottomOffset = liveOutput
     ? LIVE_OVERLAY_CAROM_BOTTOM
     : fullscreenMode
@@ -1581,10 +1577,7 @@ const handleZoomSliderComplete = useCallback(
       adaptive.height - fullscreenChromeOffsets.bottom - fullscreenZoomRailHeight - adaptive.s(18),
     ),
   );
-  const fullscreenScoreboardBottom = Math.max(
-    fullscreenChromeOffsets.bottom + adaptive.s(10),
-    adaptive.s(26),
-  );
+  const fullscreenScoreboardBottom = 0;
 
   const renderFullscreenBranding = () => {
     const source = images.logoFilled || images.logo;
@@ -1711,7 +1704,7 @@ const handleZoomSliderComplete = useCallback(
             {
               left: Math.max(overlaySafeInsets.left + adaptive.s(10), adaptive.s(10)),
               right: Math.max(overlaySafeInsets.right + adaptive.s(56), adaptive.s(60)),
-              bottom: Math.max(overlaySafeInsets.bottom + adaptive.s(12), adaptive.s(12)),
+              bottom: 0,
             },
           ]}>
           <PoolScoreboardOverlay

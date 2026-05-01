@@ -917,7 +917,7 @@ const PlayBackWebcam = (props: PlayBackWebcamViewModelProps) => {
           currentPlayerIndex={playbackScoreboardProps.currentPlayerIndex}
           countdownTime={playbackScoreboardProps.countdownTime}
           variant={'playback'}
-          bottomOffset={PLAYBACK_NATIVE_CONTROLS_BOTTOM_INSET}
+          bottomOffset={0}
         />
       );
     }
