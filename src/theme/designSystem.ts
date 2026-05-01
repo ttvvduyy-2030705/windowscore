@@ -12,6 +12,7 @@ export type DesignSystemAdaptiveLike = {
   width?: number;
   height?: number;
   layoutPreset?: ResponsivePreset;
+  breakpoint?: 'compact' | 'medium' | 'large' | 'xlarge';
   isLandscape?: boolean;
   widthClass?: 'compact' | 'medium' | 'expanded';
   s?: (value: number) => number;
@@ -101,8 +102,9 @@ export const createDesignSystem = (
   });
 
   const layoutPreset = adaptive.layoutPreset || metrics.layoutPreset;
+  const breakpoint = adaptive.breakpoint || metrics.breakpoint;
   const widthClass = adaptive.widthClass || metrics.widthClass;
-  const compact = layoutPreset === 'phone' || widthClass === 'compact';
+  const compact = layoutPreset === 'phone' || widthClass === 'compact' || breakpoint === 'compact';
   const stacked = !adaptive.isLandscape && layoutPreset !== 'tv';
 
   const s =
@@ -184,8 +186,8 @@ export const createDesignSystem = (
       stacked,
       sectionGap: s(compact ? 12 : 16),
       panelGap: s(compact ? 10 : 14),
-      screenPaddingX: s(compact ? 12 : 16),
-      screenPaddingY: s(compact ? 10 : 12),
+      screenPaddingX: s(compact ? (breakpoint === 'compact' ? 8 : 12) : 16),
+      screenPaddingY: s(compact ? (breakpoint === 'compact' ? 6 : 10) : 12),
     },
     safeArea: {
       top: Math.max(insets.top, 0),

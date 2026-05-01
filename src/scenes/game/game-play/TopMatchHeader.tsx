@@ -66,9 +66,13 @@ const TopMatchHeader = ({
   const {adaptive, design} = useDesignSystem();
   const layoutRules = useMemo(() => createGameplayLayoutRules(adaptive, design), [adaptive.styleKey]);
   const isHandheldLandscape =
+    adaptive.isLandscape && adaptive.systemMetrics.smallestScreenWidthDp < 600;
+  const isCompactDesktopLandscape =
     adaptive.isLandscape &&
-    (adaptive.systemMetrics.smallestScreenWidthDp < 600 ||
-      adaptive.isConstrainedLandscape);
+    !isHandheldLandscape &&
+    adaptive.layoutPreset !== 'tv' &&
+    adaptive.width < 1600 &&
+    adaptive.height <= 900;
 
   const useBalancedHeader = compactTitleLeft || !!centerTimeText;
   const showProModeToggle = !isAnyPoolMode && totalPlayers <= 2;
@@ -77,18 +81,38 @@ const TopMatchHeader = ({
   const dynamicStyles = useMemo(() => {
     const headerHeight = layoutRules.headerHeight;
 
-    const logoWidth = isHandheldLandscape ? adaptive.s(60) : adaptive.s(98);
-    const logoHeight = isHandheldLandscape ? adaptive.s(24) : adaptive.s(40);
-    const soundButtonSize = isHandheldLandscape ? adaptive.s(28) : adaptive.s(36);
-    const soundButtonGap = isHandheldLandscape ? adaptive.s(8) : adaptive.s(12);
-    const leftSlotWidth = isHandheldLandscape
-      ? adaptive.s(170)
-      : adaptive.s(300);
+    const logoWidth = isHandheldLandscape
+      ? adaptive.s(60)
+      : isCompactDesktopLandscape
+        ? adaptive.s(84)
+        : adaptive.s(98);
+    const logoHeight = isHandheldLandscape
+      ? adaptive.s(24)
+      : isCompactDesktopLandscape
+        ? adaptive.s(34)
+        : adaptive.s(40);
+    const soundButtonSize = isHandheldLandscape
+      ? adaptive.s(28)
+      : isCompactDesktopLandscape
+        ? adaptive.s(32)
+        : adaptive.s(36);
+    const soundButtonGap = isHandheldLandscape
+      ? adaptive.s(8)
+      : isCompactDesktopLandscape
+        ? adaptive.s(10)
+        : adaptive.s(12);
     const rightSlotWidth = isHandheldLandscape
       ? adaptive.s(isAnyPoolMode ? 230 : 300)
-      : adaptive.s(isAnyPoolMode ? 330 : 420);
+      : isCompactDesktopLandscape
+        ? adaptive.s(isAnyPoolMode ? 280 : 360)
+        : adaptive.s(isAnyPoolMode ? 330 : 420);
+    const leftSlotWidth = isHandheldLandscape
+      ? adaptive.s(170)
+      : isCompactDesktopLandscape
+        ? adaptive.s(260)
+        : Math.max(adaptive.s(330), rightSlotWidth);
     const switchGroupWidth = Math.max(
-      adaptive.s(isAnyPoolMode ? 170 : 320),
+      adaptive.s(isCompactDesktopLandscape ? (isAnyPoolMode ? 150 : 280) : isAnyPoolMode ? 170 : 320),
       rightSlotWidth - soundButtonSize - soundButtonGap,
     );
 
@@ -98,7 +122,11 @@ const TopMatchHeader = ({
           ? adaptive.s(Math.max(40, headerHeight - 6))
           : headerHeight,
         borderRadius: isHandheldLandscape ? design.radius.lg : layoutRules.panelRadius,
-        paddingHorizontal: isHandheldLandscape ? design.spacing.sm : design.spacing.lg,
+        paddingHorizontal: isHandheldLandscape
+          ? design.spacing.sm
+          : isCompactDesktopLandscape
+            ? design.spacing.md
+            : design.spacing.lg,
         paddingVertical: useSingleLineSwitchRow
           ? adaptive.s(4)
           : isHandheldLandscape
@@ -116,35 +144,59 @@ const TopMatchHeader = ({
         height: logoHeight,
       },
       balancedTitleWrap: {
-        marginLeft: isHandheldLandscape ? adaptive.s(8) : adaptive.s(12),
-        paddingRight: isHandheldLandscape ? adaptive.s(10) : adaptive.s(14),
+        marginLeft: isHandheldLandscape
+          ? adaptive.s(8)
+          : isCompactDesktopLandscape
+            ? adaptive.s(10)
+            : adaptive.s(12),
+        paddingRight: isHandheldLandscape
+          ? adaptive.s(10)
+          : isCompactDesktopLandscape
+            ? adaptive.s(12)
+            : adaptive.s(14),
       },
       balancedTitleText: {
         fontSize: isHandheldLandscape
           ? adaptive.fs(13, 0.8, 0.9)
-          : adaptive.fs(18, 0.84, 0.94),
+          : isCompactDesktopLandscape
+            ? adaptive.fs(15, 0.82, 0.92)
+            : adaptive.fs(18, 0.84, 0.94),
         lineHeight: isHandheldLandscape
           ? adaptive.fs(15, 0.8, 0.9)
-          : adaptive.fs(22, 0.84, 0.94),
+          : isCompactDesktopLandscape
+            ? adaptive.fs(18, 0.82, 0.92)
+            : adaptive.fs(22, 0.84, 0.94),
       },
       centerTimeSlot: {
-        paddingHorizontal: isHandheldLandscape ? adaptive.s(10) : adaptive.s(16),
+        paddingHorizontal: isHandheldLandscape
+          ? adaptive.s(10)
+          : isCompactDesktopLandscape
+            ? adaptive.s(12)
+            : adaptive.s(16),
       },
       centerTimeText: {
         fontSize: isHandheldLandscape
           ? adaptive.fs(24, 0.78, 0.96)
-          : adaptive.fs(38, 0.9, 1.04),
+          : isCompactDesktopLandscape
+            ? adaptive.fs(32, 0.86, 1)
+            : adaptive.fs(38, 0.9, 1.04),
         lineHeight: isHandheldLandscape
           ? adaptive.fs(28, 0.78, 0.96)
-          : adaptive.fs(42, 0.9, 1.04),
+          : isCompactDesktopLandscape
+            ? adaptive.fs(36, 0.86, 1)
+            : adaptive.fs(42, 0.9, 1.04),
       },
       titleText: {
         fontSize: isHandheldLandscape
           ? adaptive.fs(24, 0.68, 0.9)
-          : adaptive.fs(35, 0.82, 1.02),
+          : isCompactDesktopLandscape
+            ? adaptive.fs(30, 0.78, 0.96)
+            : adaptive.fs(35, 0.82, 1.02),
         lineHeight: isHandheldLandscape
           ? adaptive.fs(28, 0.68, 0.9)
-          : adaptive.fs(40, 0.82, 1.02),
+          : isCompactDesktopLandscape
+            ? adaptive.fs(34, 0.78, 0.96)
+            : adaptive.fs(40, 0.82, 1.02),
       },
       logoSlot: {
         width: leftSlotWidth,
@@ -160,7 +212,9 @@ const TopMatchHeader = ({
           ? adaptive.s(18)
           : isHandheldLandscape
             ? adaptive.s(20)
-            : adaptive.s(30),
+            : isCompactDesktopLandscape
+              ? adaptive.s(24)
+              : adaptive.s(30),
       },
       switchLine: {
         flexDirection: 'row',
@@ -182,7 +236,9 @@ const TopMatchHeader = ({
           ? adaptive.fs(9, 0.74, 0.86)
           : isHandheldLandscape
             ? adaptive.fs(10, 0.76, 0.9)
-            : adaptive.fs(14, 0.86, 1),
+            : isCompactDesktopLandscape
+              ? adaptive.fs(12, 0.82, 0.94)
+              : adaptive.fs(14, 0.86, 1),
       },
       soundButton: {
         width: soundButtonSize,
@@ -190,11 +246,32 @@ const TopMatchHeader = ({
         marginLeft: soundButtonGap,
       },
       soundIcon: {
-        width: isHandheldLandscape ? adaptive.s(18) : adaptive.s(22),
-        height: isHandheldLandscape ? adaptive.s(18) : adaptive.s(22),
+        width: isHandheldLandscape
+          ? adaptive.s(18)
+          : isCompactDesktopLandscape
+            ? adaptive.s(20)
+            : adaptive.s(22),
+        height: isHandheldLandscape
+          ? adaptive.s(18)
+          : isCompactDesktopLandscape
+            ? adaptive.s(20)
+            : adaptive.s(22),
       },
     };
-  }, [adaptive, isAnyPoolMode, isHandheldLandscape, useSingleLineSwitchRow]);
+  }, [
+    adaptive,
+    design.radius.lg,
+    design.spacing.lg,
+    design.spacing.md,
+    design.spacing.sm,
+    design.spacing.xs,
+    isAnyPoolMode,
+    isCompactDesktopLandscape,
+    isHandheldLandscape,
+    layoutRules.headerHeight,
+    layoutRules.panelRadius,
+    useSingleLineSwitchRow,
+  ]);
 
   return (
     <View style={[styles.header, dynamicStyles.header]}>
@@ -291,7 +368,11 @@ const TopMatchHeader = ({
             <>
               {showProModeToggle ? (
                 <View style={[styles.switchRow, dynamicStyles.switchRow]}>
-                  <RNText style={[styles.switchLabel, dynamicStyles.switchLabel]}>
+                  <RNText
+                    numberOfLines={1}
+                    adjustsFontSizeToFit
+                    minimumFontScale={0.78}
+                    style={[styles.switchLabel, dynamicStyles.switchLabel]}>
                     {localeText('Chuyên nghiệp', 'Pro mode')}
                   </RNText>
                   <Switch
@@ -302,7 +383,11 @@ const TopMatchHeader = ({
               ) : null}
 
               <View style={[styles.switchRow, dynamicStyles.switchRow]}>
-                <RNText style={[styles.switchLabel, dynamicStyles.switchLabel]}>
+                <RNText
+                  numberOfLines={1}
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.78}
+                  style={[styles.switchLabel, dynamicStyles.switchLabel]}>
                   {localeText('Điều khiển', 'Remote')}
                 </RNText>
                 <Switch

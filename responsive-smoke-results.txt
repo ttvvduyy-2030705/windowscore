@@ -1,0 +1,14 @@
+Responsive smoke test based on src/utils/responsive.ts rules after patch
+
+1366 x 768  -> breakpoint=compact, layoutPreset=wideTablet, scale≈0.796, compact/constrained landscape=true
+1440 x 900  -> breakpoint=medium,  layoutPreset=wideTablet, scale=1.000, compact/constrained landscape=false
+1536 x 864  -> breakpoint=medium,  layoutPreset=wideTablet, scale=1.000, compact/constrained landscape=true
+1600 x 900  -> breakpoint=medium,  layoutPreset=wideTablet, scale=1.000, compact/constrained landscape=true
+1920 x 1080 -> breakpoint=large,   layoutPreset=tv,         scale=1.160, keeps existing 24 inch / Full HD large-screen behavior
+2560 x 1440 -> breakpoint=xlarge,  layoutPreset=tv,         scale=1.160, keeps existing 27 inch / 2K large-screen behavior
+3840 x 2160 -> breakpoint=xlarge,  layoutPreset=tv,         scale=1.160, capped so UI does not become oversized on 4K
+
+Notes:
+- 24/27 inch behavior is intentionally preserved by keeping the tv scale cap at 1.16, same as the original responsive system.
+- Laptop-like sizes below 1920px width are no longer treated as tv just because width >= 1440.
+- Compact laptop screens get smaller spacing/header/control/camera gaps without changing gameplay/camera/video/livestream logic.

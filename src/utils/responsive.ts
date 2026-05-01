@@ -6,6 +6,14 @@ const BASE_ASPECT = BASE_WIDTH / BASE_HEIGHT;
 
 export type ResponsiveWidthClass = 'compact' | 'medium' | 'expanded';
 export type ResponsivePreset = 'phone' | 'tablet' | 'wideTablet' | 'tv';
+export type ResponsiveBreakpointName = 'compact' | 'medium' | 'large' | 'xlarge';
+
+export const RESPONSIVE_BREAKPOINTS = {
+  compact: {maxWidth: 1439, maxHeight: 820},
+  medium: {maxWidth: 1919, maxHeight: 1000},
+  large: {minWidth: 1920, minHeight: 1000},
+  xlarge: {minWidth: 2560, minHeight: 1200},
+} as const;
 
 export type ResponsiveMetrics = {
   width: number;
@@ -16,6 +24,7 @@ export type ResponsiveMetrics = {
   isLandscape: boolean;
   smallestDp: number;
   widthClass: ResponsiveWidthClass;
+  breakpoint: ResponsiveBreakpointName;
   layoutPreset: ResponsivePreset;
   scaleX: number;
   scaleY: number;
@@ -27,6 +36,8 @@ export type ResponsiveMetrics = {
   isVeryShortLandscape: boolean;
   isUltraShortLandscape: boolean;
   isConstrainedLandscape: boolean;
+  isLaptopLikeLandscape: boolean;
+  isLargeDesktop: boolean;
 };
 
 export type ResponsiveHelperOptions = {
@@ -73,25 +84,53 @@ export const getResponsiveMetrics = (params?: {
     : shortSide;
 
   const widthClass: ResponsiveWidthClass =
-    width < 600 ? 'compact' : width < 960 ? 'medium' : 'expanded';
+    width < 960 ? 'compact' : width < 1440 ? 'medium' : 'expanded';
+
+  const isLargeDesktop =
+    isLandscape &&
+    width >= RESPONSIVE_BREAKPOINTS.large.minWidth &&
+    height >= RESPONSIVE_BREAKPOINTS.large.minHeight &&
+    smallestDp >= 900;
+  const isCompactDesktopLandscape =
+    isLandscape &&
+    !isLargeDesktop &&
+    (width < 1440 || (width < 1600 && height <= RESPONSIVE_BREAKPOINTS.compact.maxHeight));
+  const isMediumDesktopLandscape =
+    isLandscape && !isLargeDesktop && width < RESPONSIVE_BREAKPOINTS.large.minWidth && height <= RESPONSIVE_BREAKPOINTS.medium.maxHeight;
+  const isLaptopLikeLandscape = isLandscape && !isLargeDesktop && (height <= 1000 || width < 1920);
+
+  const breakpoint: ResponsiveBreakpointName =
+    width >= RESPONSIVE_BREAKPOINTS.xlarge.minWidth && height >= RESPONSIVE_BREAKPOINTS.xlarge.minHeight
+      ? 'xlarge'
+      : isLargeDesktop
+        ? 'large'
+        : isCompactDesktopLandscape
+          ? 'compact'
+          : 'medium';
 
   const isTablet = smallestDp >= 600;
-  const isTv = smallestDp >= 960 || width >= 1440;
+  const isTv = isLargeDesktop;
   const isConstrainedLandscape =
-    isLandscape && (smallestDp < 600 || height <= 700 || aspectRatio >= 1.72);
+    isLandscape &&
+    !isLargeDesktop &&
+    (smallestDp < 600 ||
+      isCompactDesktopLandscape ||
+      height <= 760 ||
+      (width < RESPONSIVE_BREAKPOINTS.large.minWidth && aspectRatio >= 1.9));
 
   let layoutPreset: ResponsivePreset = 'phone';
   if (isTv) {
     layoutPreset = 'tv';
-  } else if (isTablet && isLandscape && !isConstrainedLandscape && aspectRatio >= 1.42) {
+  } else if (isTablet && isLandscape && aspectRatio >= 1.35) {
     layoutPreset = 'wideTablet';
   } else if (isTablet && !isConstrainedLandscape) {
     layoutPreset = 'tablet';
   }
 
-  const isShortLandscape = isLandscape && height <= (isConstrainedLandscape ? 640 : 760);
-  const isVeryShortLandscape = isLandscape && height <= (isConstrainedLandscape ? 560 : 680);
-  const isUltraShortLandscape = isLandscape && height <= (isConstrainedLandscape ? 500 : 560);
+  const laptopShortThreshold = isCompactDesktopLandscape ? 820 : isMediumDesktopLandscape ? 760 : 700;
+  const isShortLandscape = isLandscape && height <= laptopShortThreshold;
+  const isVeryShortLandscape = isLandscape && height <= (isCompactDesktopLandscape ? 760 : isMediumDesktopLandscape ? 700 : 620);
+  const isUltraShortLandscape = isLandscape && height <= (isCompactDesktopLandscape ? 680 : 560);
 
   const widthFactor = width / BASE_WIDTH;
   const heightFactor = height / BASE_HEIGHT;
@@ -112,9 +151,19 @@ export const getResponsiveMetrics = (params?: {
         ? (isConstrainedLandscape ? 0.08 : 0.04)
         : 0;
 
-  const minScale = layoutPreset === 'tv' ? 0.92 : isConstrainedLandscape ? 0.56 : layoutPreset === 'phone' ? 0.72 : 0.82;
-  const maxScale = layoutPreset === 'tv' ? 1.16 : isConstrainedLandscape ? 0.96 : 1.04;
-  const scale = clamp(baseScale - aspectPenalty - shortPenalty, minScale, maxScale);
+  const laptopPenalty = isLandscape
+    ? isCompactDesktopLandscape
+      ? 0.08
+      : width <= 1600 && height <= 900
+        ? 0.05
+        : isLaptopLikeLandscape
+          ? 0.03
+          : 0
+    : 0;
+
+  const minScale = layoutPreset === 'tv' ? 0.92 : isConstrainedLandscape ? 0.66 : layoutPreset === 'phone' ? 0.72 : 0.78;
+  const maxScale = layoutPreset === 'tv' ? 1.16 : isLaptopLikeLandscape ? 1 : isConstrainedLandscape ? 0.96 : 1.04;
+  const scale = clamp(baseScale - aspectPenalty - shortPenalty - laptopPenalty, minScale, maxScale);
 
   const normalizedFontScale = clamp(fontScale, 1, 1.15);
   const textScale = clamp(
@@ -132,6 +181,7 @@ export const getResponsiveMetrics = (params?: {
     isLandscape,
     smallestDp,
     widthClass,
+    breakpoint,
     layoutPreset,
     scaleX: clamp(widthFactor, 0.72, 1.16),
     scaleY: clamp(heightFactor, 0.72, 1.12),
@@ -143,6 +193,8 @@ export const getResponsiveMetrics = (params?: {
     isVeryShortLandscape,
     isUltraShortLandscape,
     isConstrainedLandscape,
+    isLaptopLikeLandscape,
+    isLargeDesktop,
   };
 };
 

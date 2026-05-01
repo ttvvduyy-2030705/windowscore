@@ -92,11 +92,11 @@ const createLocalStyles = (a: AdaptiveLayout, design: any, rules: any) =>
       minHeight: 0,
     },
     tabletPlayerSlot: {
-      flex: 0.92,
+      flex: rules.playerConsoleRatio.side,
       minWidth: 0,
     },
     tabletConsoleSlot: {
-      flex: 1.12,
+      flex: rules.playerConsoleRatio.center,
       minWidth: 0,
     },
     multiPlayerSideColumn: {
@@ -386,7 +386,11 @@ const GamePlay = () => {
     adaptive.isLandscape && adaptive.layoutPreset === 'wideTablet';
   const isCompactLandscape =
     adaptive.isLandscape &&
-    (adaptive.height <= 720 || adaptive.aspectRatio >= 1.65 || adaptive.widthClass === 'compact');
+    (adaptive.breakpoint === 'compact' ||
+      adaptive.width < 1440 ||
+      adaptive.height <= 760 ||
+      adaptive.widthClass === 'compact' ||
+      (adaptive.width < 1920 && adaptive.aspectRatio >= 1.9));
   const useCompactTwoPlayerLayout =
     isCompactLandscape || adaptive.shortSide < 430 || adaptive.height <= 700;
   const useTightTwoPlayerLayout =

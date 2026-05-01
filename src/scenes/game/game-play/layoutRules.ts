@@ -194,7 +194,16 @@ export const createGameplayLayoutRules = (
 ): GameplayLayoutRules => {
   const compactLandscape =
     adaptive.isLandscape &&
-    (adaptive.height <= 720 || adaptive.isConstrainedLandscape || adaptive.widthClass === 'compact');
+    (adaptive.breakpoint === 'compact' ||
+      adaptive.width < 1440 ||
+      adaptive.height <= 760 ||
+      adaptive.isConstrainedLandscape ||
+      adaptive.widthClass === 'compact');
+  const mediumLaptopLandscape =
+    adaptive.isLandscape &&
+    adaptive.breakpoint === 'medium' &&
+    adaptive.layoutPreset !== 'tv' &&
+    adaptive.height <= 900;
 
   const compactScreen =
     compactLandscape || adaptive.shortSide <= 430 || adaptive.layoutPreset === 'phone';
@@ -202,22 +211,22 @@ export const createGameplayLayoutRules = (
   return {
     screenPaddingX: Math.max(design.layout.screenPaddingX, adaptive.s(compactScreen ? 8 : 12)),
     screenPaddingY: Math.max(design.layout.screenPaddingY, adaptive.s(compactLandscape ? 6 : 10)),
-    blockGap: adaptive.s(compactLandscape ? 8 : adaptive.layoutPreset === 'tv' ? 16 : 12),
-    panelGap: adaptive.s(compactLandscape ? 6 : 10),
+    blockGap: adaptive.s(compactLandscape ? 8 : mediumLaptopLandscape ? 10 : adaptive.layoutPreset === 'tv' ? 16 : 12),
+    panelGap: adaptive.s(compactLandscape ? 6 : mediumLaptopLandscape ? 8 : 10),
     panelRadius: adaptive.s(compactScreen ? 20 : adaptive.layoutPreset === 'tv' ? 32 : 28),
     panelBorderWidth: Math.max(design.border.thin, adaptive.s(1.2)),
-    headerHeight: adaptive.s(compactLandscape ? 48 : adaptive.layoutPreset === 'tv' ? 78 : 68),
+    headerHeight: adaptive.s(compactLandscape ? 48 : mediumLaptopLandscape ? 58 : adaptive.layoutPreset === 'tv' ? 78 : 68),
     controlHeights: {
       compact: adaptive.s(compactLandscape ? 42 : 48),
       regular: adaptive.s(compactLandscape ? 48 : 56),
       prominent: adaptive.s(compactLandscape ? 56 : adaptive.layoutPreset === 'tv' ? 84 : 72),
     },
     playerConsoleRatio: {
-      side: compactLandscape ? 0.96 : adaptive.layoutPreset === 'wideTablet' ? 0.94 : 1,
-      center: compactLandscape ? 1.12 : adaptive.layoutPreset === 'wideTablet' ? 1.08 : 1.02,
+      side: compactLandscape ? 0.78 : mediumLaptopLandscape ? 0.88 : adaptive.layoutPreset === 'wideTablet' ? 0.94 : 1,
+      center: compactLandscape ? 1.42 : mediumLaptopLandscape ? 1.24 : adaptive.layoutPreset === 'wideTablet' ? 1.1 : 1.02,
     },
     camera: {
-      stageMinHeight: adaptive.s(compactLandscape ? 176 : adaptive.layoutPreset === 'tv' ? 320 : 228),
+      stageMinHeight: adaptive.s(compactLandscape ? 168 : mediumLaptopLandscape ? 204 : adaptive.layoutPreset === 'tv' ? 320 : 228),
       fullscreenRailWidth: adaptive.s(compactLandscape ? 56 : 64),
       overlayInset: adaptive.s(compactLandscape ? 10 : 12),
       cardRadius: adaptive.s(compactLandscape ? 16 : 20),

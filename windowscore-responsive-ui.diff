@@ -1,0 +1,683 @@
+--- a/src/utils/responsive.ts
++++ b/src/utils/responsive.ts
+@@ -6,6 +6,14 @@
+ 
+ export type ResponsiveWidthClass = 'compact' | 'medium' | 'expanded';
+ export type ResponsivePreset = 'phone' | 'tablet' | 'wideTablet' | 'tv';
++export type ResponsiveBreakpointName = 'compact' | 'medium' | 'large' | 'xlarge';
++
++export const RESPONSIVE_BREAKPOINTS = {
++  compact: {maxWidth: 1439, maxHeight: 820},
++  medium: {maxWidth: 1919, maxHeight: 1000},
++  large: {minWidth: 1920, minHeight: 1000},
++  xlarge: {minWidth: 2560, minHeight: 1200},
++} as const;
+ 
+ export type ResponsiveMetrics = {
+   width: number;
+@@ -16,6 +24,7 @@
+   isLandscape: boolean;
+   smallestDp: number;
+   widthClass: ResponsiveWidthClass;
++  breakpoint: ResponsiveBreakpointName;
+   layoutPreset: ResponsivePreset;
+   scaleX: number;
+   scaleY: number;
+@@ -27,6 +36,8 @@
+   isVeryShortLandscape: boolean;
+   isUltraShortLandscape: boolean;
+   isConstrainedLandscape: boolean;
++  isLaptopLikeLandscape: boolean;
++  isLargeDesktop: boolean;
+ };
+ 
+ export type ResponsiveHelperOptions = {
+@@ -73,25 +84,50 @@
+     : shortSide;
+ 
+   const widthClass: ResponsiveWidthClass =
+-    width < 600 ? 'compact' : width < 960 ? 'medium' : 'expanded';
++    width < 960 ? 'compact' : width < 1440 ? 'medium' : 'expanded';
++
++  const isCompactDesktopLandscape =
++    isLandscape && width <= RESPONSIVE_BREAKPOINTS.compact.maxWidth && height <= RESPONSIVE_BREAKPOINTS.compact.maxHeight;
++  const isMediumDesktopLandscape =
++    isLandscape && width < RESPONSIVE_BREAKPOINTS.large.minWidth && height <= RESPONSIVE_BREAKPOINTS.medium.maxHeight;
++  const isLargeDesktop =
++    isLandscape &&
++    width >= RESPONSIVE_BREAKPOINTS.large.minWidth &&
++    height >= RESPONSIVE_BREAKPOINTS.large.minHeight &&
++    smallestDp >= 900;
++  const isLaptopLikeLandscape = isLandscape && !isLargeDesktop && (height <= 1000 || width < 1920);
++
++  const breakpoint: ResponsiveBreakpointName =
++    width >= RESPONSIVE_BREAKPOINTS.xlarge.minWidth && height >= RESPONSIVE_BREAKPOINTS.xlarge.minHeight
++      ? 'xlarge'
++      : isLargeDesktop
++        ? 'large'
++        : isCompactDesktopLandscape
++          ? 'compact'
++          : 'medium';
+ 
+   const isTablet = smallestDp >= 600;
+-  const isTv = smallestDp >= 960 || width >= 1440;
++  const isTv = isLargeDesktop;
+   const isConstrainedLandscape =
+-    isLandscape && (smallestDp < 600 || height <= 700 || aspectRatio >= 1.72);
++    isLandscape &&
++    (smallestDp < 600 ||
++      isCompactDesktopLandscape ||
++      height <= 760 ||
++      aspectRatio >= 1.76);
+ 
+   let layoutPreset: ResponsivePreset = 'phone';
+   if (isTv) {
+     layoutPreset = 'tv';
+-  } else if (isTablet && isLandscape && !isConstrainedLandscape && aspectRatio >= 1.42) {
++  } else if (isTablet && isLandscape && aspectRatio >= 1.35) {
+     layoutPreset = 'wideTablet';
+   } else if (isTablet && !isConstrainedLandscape) {
+     layoutPreset = 'tablet';
+   }
+ 
+-  const isShortLandscape = isLandscape && height <= (isConstrainedLandscape ? 640 : 760);
+-  const isVeryShortLandscape = isLandscape && height <= (isConstrainedLandscape ? 560 : 680);
+-  const isUltraShortLandscape = isLandscape && height <= (isConstrainedLandscape ? 500 : 560);
++  const laptopShortThreshold = isCompactDesktopLandscape ? 820 : isMediumDesktopLandscape ? 760 : 700;
++  const isShortLandscape = isLandscape && height <= laptopShortThreshold;
++  const isVeryShortLandscape = isLandscape && height <= (isCompactDesktopLandscape ? 760 : isMediumDesktopLandscape ? 700 : 620);
++  const isUltraShortLandscape = isLandscape && height <= (isCompactDesktopLandscape ? 680 : 560);
+ 
+   const widthFactor = width / BASE_WIDTH;
+   const heightFactor = height / BASE_HEIGHT;
+@@ -112,9 +148,19 @@
+         ? (isConstrainedLandscape ? 0.08 : 0.04)
+         : 0;
+ 
+-  const minScale = layoutPreset === 'tv' ? 0.92 : isConstrainedLandscape ? 0.56 : layoutPreset === 'phone' ? 0.72 : 0.82;
+-  const maxScale = layoutPreset === 'tv' ? 1.16 : isConstrainedLandscape ? 0.96 : 1.04;
+-  const scale = clamp(baseScale - aspectPenalty - shortPenalty, minScale, maxScale);
++  const laptopPenalty = isLandscape
++    ? isCompactDesktopLandscape
++      ? 0.08
++      : width <= 1600 && height <= 900
++        ? 0.05
++        : isLaptopLikeLandscape
++          ? 0.03
++          : 0
++    : 0;
++
++  const minScale = layoutPreset === 'tv' ? 0.92 : isConstrainedLandscape ? 0.66 : layoutPreset === 'phone' ? 0.72 : 0.78;
++  const maxScale = layoutPreset === 'tv' ? 1.16 : isLaptopLikeLandscape ? 1 : isConstrainedLandscape ? 0.96 : 1.04;
++  const scale = clamp(baseScale - aspectPenalty - shortPenalty - laptopPenalty, minScale, maxScale);
+ 
+   const normalizedFontScale = clamp(fontScale, 1, 1.15);
+   const textScale = clamp(
+@@ -132,6 +178,7 @@
+     isLandscape,
+     smallestDp,
+     widthClass,
++    breakpoint,
+     layoutPreset,
+     scaleX: clamp(widthFactor, 0.72, 1.16),
+     scaleY: clamp(heightFactor, 0.72, 1.12),
+@@ -143,6 +190,8 @@
+     isVeryShortLandscape,
+     isUltraShortLandscape,
+     isConstrainedLandscape,
++    isLaptopLikeLandscape,
++    isLargeDesktop,
+   };
+ };
+ 
+--- a/src/scenes/game/useAdaptiveLayout.ts
++++ b/src/scenes/game/useAdaptiveLayout.ts
+@@ -9,6 +9,7 @@
+ import {
+   fontScale,
+   getResponsiveMetrics,
++  ResponsiveBreakpointName,
+   ResponsivePreset,
+   ResponsiveWidthClass,
+   scale,
+@@ -16,6 +17,7 @@
+ 
+ export type WidthClass = ResponsiveWidthClass;
+ export type LayoutPreset = ResponsivePreset;
++export type LayoutBreakpoint = ResponsiveBreakpointName;
+ 
+ export type AdaptiveLayout = {
+   width: number;
+@@ -29,6 +31,7 @@
+   isUltraShortLandscape: boolean;
+   isConstrainedLandscape: boolean;
+   widthClass: WidthClass;
++  breakpoint: LayoutBreakpoint;
+   layoutPreset: LayoutPreset;
+   scale: number;
+   sizeScale: number;
+@@ -90,11 +93,12 @@
+       isUltraShortLandscape: metrics.isUltraShortLandscape,
+       isConstrainedLandscape: metrics.isConstrainedLandscape,
+       widthClass: metrics.widthClass,
++      breakpoint: metrics.breakpoint,
+       layoutPreset: metrics.layoutPreset,
+       scale: metrics.scale,
+       sizeScale: metrics.sizeScale,
+       textScale: metrics.textScale,
+-      styleKey: `${Math.round(metrics.width)}x${Math.round(metrics.height)}-${metrics.layoutPreset}-${metrics.widthClass}-${Math.round(metrics.scale * 1000)}`,
++      styleKey: `${Math.round(metrics.width)}x${Math.round(metrics.height)}-${metrics.breakpoint}-${metrics.layoutPreset}-${metrics.widthClass}-${Math.round(metrics.scale * 1000)}`,
+       systemMetrics,
+       s,
+       fs,
+--- a/src/theme/designSystem.ts
++++ b/src/theme/designSystem.ts
+@@ -12,6 +12,7 @@
+   width?: number;
+   height?: number;
+   layoutPreset?: ResponsivePreset;
++  breakpoint?: 'compact' | 'medium' | 'large' | 'xlarge';
+   isLandscape?: boolean;
+   widthClass?: 'compact' | 'medium' | 'expanded';
+   s?: (value: number) => number;
+@@ -101,8 +102,9 @@
+   });
+ 
+   const layoutPreset = adaptive.layoutPreset || metrics.layoutPreset;
++  const breakpoint = adaptive.breakpoint || metrics.breakpoint;
+   const widthClass = adaptive.widthClass || metrics.widthClass;
+-  const compact = layoutPreset === 'phone' || widthClass === 'compact';
++  const compact = layoutPreset === 'phone' || widthClass === 'compact' || breakpoint === 'compact';
+   const stacked = !adaptive.isLandscape && layoutPreset !== 'tv';
+ 
+   const s =
+@@ -184,8 +186,8 @@
+       stacked,
+       sectionGap: s(compact ? 12 : 16),
+       panelGap: s(compact ? 10 : 14),
+-      screenPaddingX: s(compact ? 12 : 16),
+-      screenPaddingY: s(compact ? 10 : 12),
++      screenPaddingX: s(compact ? (breakpoint === 'compact' ? 8 : 12) : 16),
++      screenPaddingY: s(compact ? (breakpoint === 'compact' ? 6 : 10) : 12),
+     },
+     safeArea: {
+       top: Math.max(insets.top, 0),
+--- a/src/scenes/game/game-play/layoutRules.ts
++++ b/src/scenes/game/game-play/layoutRules.ts
+@@ -194,7 +194,15 @@
+ ): GameplayLayoutRules => {
+   const compactLandscape =
+     adaptive.isLandscape &&
+-    (adaptive.height <= 720 || adaptive.isConstrainedLandscape || adaptive.widthClass === 'compact');
++    (adaptive.breakpoint === 'compact' ||
++      adaptive.height <= 720 ||
++      adaptive.isConstrainedLandscape ||
++      adaptive.widthClass === 'compact');
++  const mediumLaptopLandscape =
++    adaptive.isLandscape &&
++    adaptive.breakpoint === 'medium' &&
++    adaptive.layoutPreset !== 'tv' &&
++    adaptive.height <= 900;
+ 
+   const compactScreen =
+     compactLandscape || adaptive.shortSide <= 430 || adaptive.layoutPreset === 'phone';
+@@ -202,11 +210,11 @@
+   return {
+     screenPaddingX: Math.max(design.layout.screenPaddingX, adaptive.s(compactScreen ? 8 : 12)),
+     screenPaddingY: Math.max(design.layout.screenPaddingY, adaptive.s(compactLandscape ? 6 : 10)),
+-    blockGap: adaptive.s(compactLandscape ? 8 : adaptive.layoutPreset === 'tv' ? 16 : 12),
+-    panelGap: adaptive.s(compactLandscape ? 6 : 10),
++    blockGap: adaptive.s(compactLandscape ? 8 : mediumLaptopLandscape ? 10 : adaptive.layoutPreset === 'tv' ? 16 : 12),
++    panelGap: adaptive.s(compactLandscape ? 6 : mediumLaptopLandscape ? 8 : 10),
+     panelRadius: adaptive.s(compactScreen ? 20 : adaptive.layoutPreset === 'tv' ? 32 : 28),
+     panelBorderWidth: Math.max(design.border.thin, adaptive.s(1.2)),
+-    headerHeight: adaptive.s(compactLandscape ? 48 : adaptive.layoutPreset === 'tv' ? 78 : 68),
++    headerHeight: adaptive.s(compactLandscape ? 48 : mediumLaptopLandscape ? 58 : adaptive.layoutPreset === 'tv' ? 78 : 68),
+     controlHeights: {
+       compact: adaptive.s(compactLandscape ? 42 : 48),
+       regular: adaptive.s(compactLandscape ? 48 : 56),
+@@ -217,7 +225,7 @@
+       center: compactLandscape ? 1.12 : adaptive.layoutPreset === 'wideTablet' ? 1.08 : 1.02,
+     },
+     camera: {
+-      stageMinHeight: adaptive.s(compactLandscape ? 176 : adaptive.layoutPreset === 'tv' ? 320 : 228),
++      stageMinHeight: adaptive.s(compactLandscape ? 168 : mediumLaptopLandscape ? 204 : adaptive.layoutPreset === 'tv' ? 320 : 228),
+       fullscreenRailWidth: adaptive.s(compactLandscape ? 56 : 64),
+       overlayInset: adaptive.s(compactLandscape ? 10 : 12),
+       cardRadius: adaptive.s(compactLandscape ? 16 : 20),
+--- a/src/scenes/game/game-play/TopMatchHeader.tsx
++++ b/src/scenes/game/game-play/TopMatchHeader.tsx
+@@ -68,7 +68,13 @@
+   const isHandheldLandscape =
+     adaptive.isLandscape &&
+     (adaptive.systemMetrics.smallestScreenWidthDp < 600 ||
++      adaptive.breakpoint === 'compact' ||
+       adaptive.isConstrainedLandscape);
++  const isCompactDesktopLandscape =
++    adaptive.isLandscape &&
++    !isHandheldLandscape &&
++    adaptive.layoutPreset !== 'tv' &&
++    (adaptive.breakpoint === 'medium' || (adaptive.width <= 1600 && adaptive.height <= 900));
+ 
+   const useBalancedHeader = compactTitleLeft || !!centerTimeText;
+   const showProModeToggle = !isAnyPoolMode && totalPlayers <= 2;
+@@ -77,18 +83,38 @@
+   const dynamicStyles = useMemo(() => {
+     const headerHeight = layoutRules.headerHeight;
+ 
+-    const logoWidth = isHandheldLandscape ? adaptive.s(60) : adaptive.s(98);
+-    const logoHeight = isHandheldLandscape ? adaptive.s(24) : adaptive.s(40);
+-    const soundButtonSize = isHandheldLandscape ? adaptive.s(28) : adaptive.s(36);
+-    const soundButtonGap = isHandheldLandscape ? adaptive.s(8) : adaptive.s(12);
++    const logoWidth = isHandheldLandscape
++      ? adaptive.s(60)
++      : isCompactDesktopLandscape
++        ? adaptive.s(84)
++        : adaptive.s(98);
++    const logoHeight = isHandheldLandscape
++      ? adaptive.s(24)
++      : isCompactDesktopLandscape
++        ? adaptive.s(34)
++        : adaptive.s(40);
++    const soundButtonSize = isHandheldLandscape
++      ? adaptive.s(28)
++      : isCompactDesktopLandscape
++        ? adaptive.s(32)
++        : adaptive.s(36);
++    const soundButtonGap = isHandheldLandscape
++      ? adaptive.s(8)
++      : isCompactDesktopLandscape
++        ? adaptive.s(10)
++        : adaptive.s(12);
+     const leftSlotWidth = isHandheldLandscape
+       ? adaptive.s(170)
+-      : adaptive.s(300);
++      : isCompactDesktopLandscape
++        ? adaptive.s(230)
++        : adaptive.s(300);
+     const rightSlotWidth = isHandheldLandscape
+       ? adaptive.s(isAnyPoolMode ? 230 : 300)
+-      : adaptive.s(isAnyPoolMode ? 330 : 420);
++      : isCompactDesktopLandscape
++        ? adaptive.s(isAnyPoolMode ? 280 : 360)
++        : adaptive.s(isAnyPoolMode ? 330 : 420);
+     const switchGroupWidth = Math.max(
+-      adaptive.s(isAnyPoolMode ? 170 : 320),
++      adaptive.s(isCompactDesktopLandscape ? (isAnyPoolMode ? 150 : 280) : isAnyPoolMode ? 170 : 320),
+       rightSlotWidth - soundButtonSize - soundButtonGap,
+     );
+ 
+@@ -98,7 +124,11 @@
+           ? adaptive.s(Math.max(40, headerHeight - 6))
+           : headerHeight,
+         borderRadius: isHandheldLandscape ? design.radius.lg : layoutRules.panelRadius,
+-        paddingHorizontal: isHandheldLandscape ? design.spacing.sm : design.spacing.lg,
++        paddingHorizontal: isHandheldLandscape
++          ? design.spacing.sm
++          : isCompactDesktopLandscape
++            ? design.spacing.md
++            : design.spacing.lg,
+         paddingVertical: useSingleLineSwitchRow
+           ? adaptive.s(4)
+           : isHandheldLandscape
+@@ -116,35 +146,59 @@
+         height: logoHeight,
+       },
+       balancedTitleWrap: {
+-        marginLeft: isHandheldLandscape ? adaptive.s(8) : adaptive.s(12),
+-        paddingRight: isHandheldLandscape ? adaptive.s(10) : adaptive.s(14),
++        marginLeft: isHandheldLandscape
++          ? adaptive.s(8)
++          : isCompactDesktopLandscape
++            ? adaptive.s(10)
++            : adaptive.s(12),
++        paddingRight: isHandheldLandscape
++          ? adaptive.s(10)
++          : isCompactDesktopLandscape
++            ? adaptive.s(12)
++            : adaptive.s(14),
+       },
+       balancedTitleText: {
+         fontSize: isHandheldLandscape
+           ? adaptive.fs(13, 0.8, 0.9)
+-          : adaptive.fs(18, 0.84, 0.94),
++          : isCompactDesktopLandscape
++            ? adaptive.fs(15, 0.82, 0.92)
++            : adaptive.fs(18, 0.84, 0.94),
+         lineHeight: isHandheldLandscape
+           ? adaptive.fs(15, 0.8, 0.9)
+-          : adaptive.fs(22, 0.84, 0.94),
++          : isCompactDesktopLandscape
++            ? adaptive.fs(18, 0.82, 0.92)
++            : adaptive.fs(22, 0.84, 0.94),
+       },
+       centerTimeSlot: {
+-        paddingHorizontal: isHandheldLandscape ? adaptive.s(10) : adaptive.s(16),
++        paddingHorizontal: isHandheldLandscape
++          ? adaptive.s(10)
++          : isCompactDesktopLandscape
++            ? adaptive.s(12)
++            : adaptive.s(16),
+       },
+       centerTimeText: {
+         fontSize: isHandheldLandscape
+           ? adaptive.fs(24, 0.78, 0.96)
+-          : adaptive.fs(38, 0.9, 1.04),
++          : isCompactDesktopLandscape
++            ? adaptive.fs(32, 0.86, 1)
++            : adaptive.fs(38, 0.9, 1.04),
+         lineHeight: isHandheldLandscape
+           ? adaptive.fs(28, 0.78, 0.96)
+-          : adaptive.fs(42, 0.9, 1.04),
++          : isCompactDesktopLandscape
++            ? adaptive.fs(36, 0.86, 1)
++            : adaptive.fs(42, 0.9, 1.04),
+       },
+       titleText: {
+         fontSize: isHandheldLandscape
+           ? adaptive.fs(24, 0.68, 0.9)
+-          : adaptive.fs(35, 0.82, 1.02),
++          : isCompactDesktopLandscape
++            ? adaptive.fs(30, 0.78, 0.96)
++            : adaptive.fs(35, 0.82, 1.02),
+         lineHeight: isHandheldLandscape
+           ? adaptive.fs(28, 0.68, 0.9)
+-          : adaptive.fs(40, 0.82, 1.02),
++          : isCompactDesktopLandscape
++            ? adaptive.fs(34, 0.78, 0.96)
++            : adaptive.fs(40, 0.82, 1.02),
+       },
+       logoSlot: {
+         width: leftSlotWidth,
+@@ -160,7 +214,9 @@
+           ? adaptive.s(18)
+           : isHandheldLandscape
+             ? adaptive.s(20)
+-            : adaptive.s(30),
++            : isCompactDesktopLandscape
++              ? adaptive.s(24)
++              : adaptive.s(30),
+       },
+       switchLine: {
+         flexDirection: 'row',
+@@ -182,7 +238,9 @@
+           ? adaptive.fs(9, 0.74, 0.86)
+           : isHandheldLandscape
+             ? adaptive.fs(10, 0.76, 0.9)
+-            : adaptive.fs(14, 0.86, 1),
++            : isCompactDesktopLandscape
++              ? adaptive.fs(12, 0.82, 0.94)
++              : adaptive.fs(14, 0.86, 1),
+       },
+       soundButton: {
+         width: soundButtonSize,
+@@ -190,11 +248,32 @@
+         marginLeft: soundButtonGap,
+       },
+       soundIcon: {
+-        width: isHandheldLandscape ? adaptive.s(18) : adaptive.s(22),
+-        height: isHandheldLandscape ? adaptive.s(18) : adaptive.s(22),
++        width: isHandheldLandscape
++          ? adaptive.s(18)
++          : isCompactDesktopLandscape
++            ? adaptive.s(20)
++            : adaptive.s(22),
++        height: isHandheldLandscape
++          ? adaptive.s(18)
++          : isCompactDesktopLandscape
++            ? adaptive.s(20)
++            : adaptive.s(22),
+       },
+     };
+-  }, [adaptive, isAnyPoolMode, isHandheldLandscape, useSingleLineSwitchRow]);
++  }, [
++    adaptive,
++    design.radius.lg,
++    design.spacing.lg,
++    design.spacing.md,
++    design.spacing.sm,
++    design.spacing.xs,
++    isAnyPoolMode,
++    isCompactDesktopLandscape,
++    isHandheldLandscape,
++    layoutRules.headerHeight,
++    layoutRules.panelRadius,
++    useSingleLineSwitchRow,
++  ]);
+ 
+   return (
+     <View style={[styles.header, dynamicStyles.header]}>
+@@ -291,7 +370,11 @@
+             <>
+               {showProModeToggle ? (
+                 <View style={[styles.switchRow, dynamicStyles.switchRow]}>
+-                  <RNText style={[styles.switchLabel, dynamicStyles.switchLabel]}>
++                  <RNText
++                    numberOfLines={1}
++                    adjustsFontSizeToFit
++                    minimumFontScale={0.78}
++                    style={[styles.switchLabel, dynamicStyles.switchLabel]}>
+                     {localeText('Chuyên nghiệp', 'Pro mode')}
+                   </RNText>
+                   <Switch
+@@ -302,7 +385,11 @@
+               ) : null}
+ 
+               <View style={[styles.switchRow, dynamicStyles.switchRow]}>
+-                <RNText style={[styles.switchLabel, dynamicStyles.switchLabel]}>
++                <RNText
++                  numberOfLines={1}
++                  adjustsFontSizeToFit
++                  minimumFontScale={0.78}
++                  style={[styles.switchLabel, dynamicStyles.switchLabel]}>
+                   {localeText('Điều khiển', 'Remote')}
+                 </RNText>
+                 <Switch
+--- a/src/scenes/game/game-play/index.tsx
++++ b/src/scenes/game/game-play/index.tsx
+@@ -386,7 +386,10 @@
+     adaptive.isLandscape && adaptive.layoutPreset === 'wideTablet';
+   const isCompactLandscape =
+     adaptive.isLandscape &&
+-    (adaptive.height <= 720 || adaptive.aspectRatio >= 1.65 || adaptive.widthClass === 'compact');
++    (adaptive.breakpoint === 'compact' ||
++      adaptive.height <= 720 ||
++      adaptive.aspectRatio >= 1.65 ||
++      adaptive.widthClass === 'compact');
+   const useCompactTwoPlayerLayout =
+     isCompactLandscape || adaptive.shortSide < 430 || adaptive.height <= 700;
+   const useTightTwoPlayerLayout =
+--- a/src/scenes/game/game-play/console/index.tsx
++++ b/src/scenes/game/game-play/console/index.tsx
+@@ -69,7 +69,7 @@
+ const clamp = (value: number, min: number, max: number) =>
+   Math.max(min, Math.min(max, value));
+ 
+-const DEBUG_CAROM_LAYOUT = true;
++const DEBUG_CAROM_LAYOUT = false;
+ const debugCaromLayout = (...args: any[]) => {
+   if (DEBUG_CAROM_LAYOUT) {
+     console.log(...args);
+@@ -608,19 +608,28 @@
+   const isLandscape = adaptive.isLandscape;
+   const isLargeDisplay = adaptive.layoutPreset === 'tv';
+   const isHandheldLandscape =
+-    isLandscape && adaptive.systemMetrics.smallestScreenWidthDp < 600;
++    isLandscape &&
++    (adaptive.systemMetrics.smallestScreenWidthDp < 600 ||
++      adaptive.breakpoint === 'compact' ||
++      adaptive.isConstrainedLandscape);
+   const isMediumLandscape =
+     isLandscape &&
+     !isLargeDisplay &&
+-    (adaptive.layoutPreset === 'tablet' || adaptive.layoutPreset === 'wideTablet');
++    (adaptive.breakpoint === 'medium' ||
++      adaptive.layoutPreset === 'tablet' ||
++      adaptive.layoutPreset === 'wideTablet');
+   const isCompactLandscape =
+     isLandscape &&
+-    (adaptive.widthClass === 'compact' || adaptive.isShortLandscape || height <= 760);
++    (adaptive.breakpoint === 'compact' ||
++      adaptive.widthClass === 'compact' ||
++      adaptive.isShortLandscape ||
++      height <= 760);
+   const isShortLandscape = adaptive.isShortLandscape;
+   const isVeryShortLandscape = adaptive.isVeryShortLandscape;
+   const useResponsiveCompact =
+     !isLargeDisplay &&
+-    (adaptive.isConstrainedLandscape ||
++    (adaptive.breakpoint === 'compact' ||
++      adaptive.isConstrainedLandscape ||
+       isCompactLandscape ||
+       shortestSide <= 520 ||
+       (isHandheldLandscape && height <= 900) ||
+@@ -628,9 +637,11 @@
+   const useTightLandscapeLayout = isMediumLandscape || useResponsiveCompact;
+   const useExtraCompact =
+     !isLargeDisplay &&
+-    (adaptive.isVeryShortLandscape ||
++    (adaptive.isUltraShortLandscape ||
++      adaptive.isVeryShortLandscape ||
+       shortestSide <= 460 ||
+       height <= 680 ||
++      (adaptive.breakpoint === 'compact' && height <= 720) ||
+       (isHandheldLandscape && height <= 620) ||
+       adaptive.aspectRatio >= 1.9);
+   const useCompactMiddleHoleCounter = useExtraCompact || useResponsiveCompact;
+@@ -1666,12 +1677,16 @@
+             isCameraFullscreen ? styles.hiddenWhenFullscreen : undefined,
+             useResponsiveCompact ? styles.phoneMetaInlineRow : undefined,
+             usePoolBroadcastLayout ? styles.poolMetaInlineRow : undefined,
++            usePoolBroadcastLayout && useResponsiveCompact
++              ? styles.poolCompactMetaInlineRow
++              : undefined,
+           ]}>
+           <View
+             style={[
+               styles.metaInlineCard,
+               useResponsiveCompact ? styles.phoneMetaInlineCard : undefined,
+               styles.poolMetaInlineCard,
++              useResponsiveCompact ? styles.poolCompactMetaInlineCard : undefined,
+             ]}>
+             <View style={styles.metaInlineCombinedRow}>
+               <RNText
+@@ -1706,6 +1721,7 @@
+               styles.metaInlineCard,
+               useResponsiveCompact ? styles.phoneMetaInlineCard : undefined,
+               styles.poolMetaInlineCard,
++              useResponsiveCompact ? styles.poolCompactMetaInlineCard : undefined,
+             ]}>
+             <View style={styles.metaInlineCombinedRow}>
+               <RNText
+@@ -1849,6 +1865,9 @@
+               : undefined,
+             useResponsiveCompact ? styles.phoneActionStack : undefined,
+             usePoolBroadcastLayout ? styles.poolActionStack : undefined,
++            usePoolBroadcastLayout && useResponsiveCompact
++              ? styles.poolCompactActionStack
++              : undefined,
+           ]}>
+           {cameraUtilityRows}
+           {mainActionRow}
+@@ -2003,6 +2022,9 @@
+   poolMetaInlineRow: {
+     gap: 10,
+   },
++  poolCompactMetaInlineRow: {
++    gap: 5,
++  },
+   metaInlineCard: {
+     flex: 1,
+     minHeight: 54,
+@@ -2026,6 +2048,12 @@
+     borderRadius: 14,
+     paddingHorizontal: 12,
+     paddingVertical: 7,
++  },
++  poolCompactMetaInlineCard: {
++    minHeight: 46,
++    borderRadius: 12,
++    paddingHorizontal: 8,
++    paddingVertical: 5,
+   },
+   metaInlineTextRow: {
+     flexDirection: 'row',
+@@ -2216,6 +2244,10 @@
+     gap: 12,
+     paddingTop: 6,
+   },
++  poolCompactActionStack: {
++    gap: 4,
++    paddingTop: 2,
++  },
+   caromActionStack: {
+     gap: 8,
+     flexShrink: 0,
+--- a/src/scenes/shared/getBrandedScreenMetrics.ts
++++ b/src/scenes/shared/getBrandedScreenMetrics.ts
+@@ -11,6 +11,7 @@
+   width?: number;
+   height?: number;
+   widthClass?: 'compact' | 'medium' | 'expanded';
++  breakpoint?: 'compact' | 'medium' | 'large' | 'xlarge';
+   isShortLandscape?: boolean;
+ };
+ 
+@@ -60,6 +61,7 @@
+       layoutPreset,
+       isLandscape,
+       widthClass: adaptive.widthClass,
++      breakpoint: adaptive.breakpoint,
+       s,
+       fs,
+     },
+@@ -68,7 +70,11 @@
+   const isPhone = layoutPreset === 'phone';
+   const compactLandscape =
+     isLandscape &&
+-    (adaptive.isShortLandscape || height <= 760 || width <= 1180);
++    (adaptive.breakpoint === 'compact' ||
++      adaptive.isShortLandscape ||
++      (height <= 820 && width <= 1440) ||
++      height <= 760 ||
++      width <= 1180);
+ 
+   return {
+     s,
+@@ -84,7 +90,7 @@
+     headerRadius: design.radius.xl,
+     headerSidePadding: design.spacing.md,
+     headerTitlePadding: compactLandscape
+-      ? s(118)
++      ? s(104)
+       : layoutPreset === 'tv'
+         ? s(176)
+         : layoutPreset === 'wideTablet'
+--- a/src/scenes/home/styles.tsx
++++ b/src/scenes/home/styles.tsx
+@@ -9,8 +9,14 @@
+ 
+ const createStyles = (design: DesignSystem, metrics: Metrics) => {
+   const {spacing, font, radius, icon, safeArea} = design;
+-  const topPadding = safeArea.top + spacing.lg;
+-  const horizontalPadding = spacing.xl;
++  const compactLandscape = metrics.width <= 1440 && metrics.height <= 820;
++  const mediumLaptop = metrics.width < 1920 && metrics.height <= 900;
++  const topPadding = safeArea.top + (compactLandscape ? spacing.md : spacing.lg);
++  const horizontalPadding = compactLandscape
++    ? design.layout.screenPaddingX
++    : mediumLaptop
++      ? spacing.lg
++      : spacing.xl;
+ 
+   return StyleSheet.create({
+     screen: {
+@@ -18,7 +24,7 @@
+       backgroundColor: '#000000',
+       paddingHorizontal: horizontalPadding,
+       paddingTop: topPadding,
+-      paddingBottom: safeArea.bottom + spacing.lg,
++      paddingBottom: safeArea.bottom + (compactLandscape ? spacing.md : spacing.lg),
+     },
+ 
+     topRow: {

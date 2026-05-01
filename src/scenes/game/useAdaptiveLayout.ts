@@ -9,6 +9,7 @@ import {
 import {
   fontScale,
   getResponsiveMetrics,
+  ResponsiveBreakpointName,
   ResponsivePreset,
   ResponsiveWidthClass,
   scale,
@@ -16,6 +17,7 @@ import {
 
 export type WidthClass = ResponsiveWidthClass;
 export type LayoutPreset = ResponsivePreset;
+export type LayoutBreakpoint = ResponsiveBreakpointName;
 
 export type AdaptiveLayout = {
   width: number;
@@ -29,6 +31,7 @@ export type AdaptiveLayout = {
   isUltraShortLandscape: boolean;
   isConstrainedLandscape: boolean;
   widthClass: WidthClass;
+  breakpoint: LayoutBreakpoint;
   layoutPreset: LayoutPreset;
   scale: number;
   sizeScale: number;
@@ -90,11 +93,12 @@ export const useAdaptiveLayout = (): AdaptiveLayout => {
       isUltraShortLandscape: metrics.isUltraShortLandscape,
       isConstrainedLandscape: metrics.isConstrainedLandscape,
       widthClass: metrics.widthClass,
+      breakpoint: metrics.breakpoint,
       layoutPreset: metrics.layoutPreset,
       scale: metrics.scale,
       sizeScale: metrics.sizeScale,
       textScale: metrics.textScale,
-      styleKey: `${Math.round(metrics.width)}x${Math.round(metrics.height)}-${metrics.layoutPreset}-${metrics.widthClass}-${Math.round(metrics.scale * 1000)}`,
+      styleKey: `${Math.round(metrics.width)}x${Math.round(metrics.height)}-${metrics.breakpoint}-${metrics.layoutPreset}-${metrics.widthClass}-${Math.round(metrics.scale * 1000)}`,
       systemMetrics,
       s,
       fs,

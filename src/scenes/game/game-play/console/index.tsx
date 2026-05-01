@@ -69,7 +69,7 @@ const getPoolBall = (number: BallType) => {
 const clamp = (value: number, min: number, max: number) =>
   Math.max(min, Math.min(max, value));
 
-const DEBUG_CAROM_LAYOUT = true;
+const DEBUG_CAROM_LAYOUT = false;
 const debugCaromLayout = (...args: any[]) => {
   if (DEBUG_CAROM_LAYOUT) {
     console.log(...args);
@@ -612,15 +612,21 @@ const GameConsole = (props: ConsoleViewModelProps) => {
   const isMediumLandscape =
     isLandscape &&
     !isLargeDisplay &&
-    (adaptive.layoutPreset === 'tablet' || adaptive.layoutPreset === 'wideTablet');
+    (adaptive.breakpoint === 'medium' ||
+      adaptive.layoutPreset === 'tablet' ||
+      adaptive.layoutPreset === 'wideTablet');
   const isCompactLandscape =
     isLandscape &&
-    (adaptive.widthClass === 'compact' || adaptive.isShortLandscape || height <= 760);
+    (adaptive.breakpoint === 'compact' ||
+      adaptive.widthClass === 'compact' ||
+      adaptive.isShortLandscape ||
+      height <= 760);
   const isShortLandscape = adaptive.isShortLandscape;
   const isVeryShortLandscape = adaptive.isVeryShortLandscape;
   const useResponsiveCompact =
     !isLargeDisplay &&
-    (adaptive.isConstrainedLandscape ||
+    (adaptive.breakpoint === 'compact' ||
+      adaptive.isConstrainedLandscape ||
       isCompactLandscape ||
       shortestSide <= 520 ||
       (isHandheldLandscape && height <= 900) ||
@@ -628,9 +634,11 @@ const GameConsole = (props: ConsoleViewModelProps) => {
   const useTightLandscapeLayout = isMediumLandscape || useResponsiveCompact;
   const useExtraCompact =
     !isLargeDisplay &&
-    (adaptive.isVeryShortLandscape ||
+    (adaptive.isUltraShortLandscape ||
+      adaptive.isVeryShortLandscape ||
       shortestSide <= 460 ||
       height <= 680 ||
+      (adaptive.breakpoint === 'compact' && height <= 720) ||
       (isHandheldLandscape && height <= 620) ||
       adaptive.aspectRatio >= 1.9);
   const useCompactMiddleHoleCounter = useExtraCompact || useResponsiveCompact;
@@ -1666,12 +1674,16 @@ const GameConsole = (props: ConsoleViewModelProps) => {
             isCameraFullscreen ? styles.hiddenWhenFullscreen : undefined,
             useResponsiveCompact ? styles.phoneMetaInlineRow : undefined,
             usePoolBroadcastLayout ? styles.poolMetaInlineRow : undefined,
+            usePoolBroadcastLayout && useResponsiveCompact
+              ? styles.poolCompactMetaInlineRow
+              : undefined,
           ]}>
           <View
             style={[
               styles.metaInlineCard,
               useResponsiveCompact ? styles.phoneMetaInlineCard : undefined,
               styles.poolMetaInlineCard,
+              useResponsiveCompact ? styles.poolCompactMetaInlineCard : undefined,
             ]}>
             <View style={styles.metaInlineCombinedRow}>
               <RNText
@@ -1706,6 +1718,7 @@ const GameConsole = (props: ConsoleViewModelProps) => {
               styles.metaInlineCard,
               useResponsiveCompact ? styles.phoneMetaInlineCard : undefined,
               styles.poolMetaInlineCard,
+              useResponsiveCompact ? styles.poolCompactMetaInlineCard : undefined,
             ]}>
             <View style={styles.metaInlineCombinedRow}>
               <RNText
@@ -1849,6 +1862,9 @@ const GameConsole = (props: ConsoleViewModelProps) => {
               : undefined,
             useResponsiveCompact ? styles.phoneActionStack : undefined,
             usePoolBroadcastLayout ? styles.poolActionStack : undefined,
+            usePoolBroadcastLayout && useResponsiveCompact
+              ? styles.poolCompactActionStack
+              : undefined,
           ]}>
           {cameraUtilityRows}
           {mainActionRow}
@@ -2003,6 +2019,9 @@ const createStyles = (adaptive: any, design: any, rules: any) => createGameplayS
   poolMetaInlineRow: {
     gap: 10,
   },
+  poolCompactMetaInlineRow: {
+    gap: 5,
+  },
   metaInlineCard: {
     flex: 1,
     minHeight: 54,
@@ -2026,6 +2045,12 @@ const createStyles = (adaptive: any, design: any, rules: any) => createGameplayS
     borderRadius: 14,
     paddingHorizontal: 12,
     paddingVertical: 7,
+  },
+  poolCompactMetaInlineCard: {
+    minHeight: 46,
+    borderRadius: 12,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
   },
   metaInlineTextRow: {
     flexDirection: 'row',
@@ -2215,6 +2240,10 @@ const createStyles = (adaptive: any, design: any, rules: any) => createGameplayS
   poolActionStack: {
     gap: 12,
     paddingTop: 6,
+  },
+  poolCompactActionStack: {
+    gap: 4,
+    paddingTop: 2,
   },
   caromActionStack: {
     gap: 8,

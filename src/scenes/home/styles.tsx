@@ -9,8 +9,14 @@ type Metrics = {
 
 const createStyles = (design: DesignSystem, metrics: Metrics) => {
   const {spacing, font, radius, icon, safeArea} = design;
-  const topPadding = safeArea.top + spacing.lg;
-  const horizontalPadding = spacing.xl;
+  const compactLandscape = metrics.width <= 1440 && metrics.height <= 820;
+  const mediumLaptop = metrics.width < 1920 && metrics.height <= 900;
+  const topPadding = safeArea.top + (compactLandscape ? spacing.md : spacing.lg);
+  const horizontalPadding = compactLandscape
+    ? design.layout.screenPaddingX
+    : mediumLaptop
+      ? spacing.lg
+      : spacing.xl;
 
   return StyleSheet.create({
     screen: {
@@ -18,7 +24,7 @@ const createStyles = (design: DesignSystem, metrics: Metrics) => {
       backgroundColor: '#000000',
       paddingHorizontal: horizontalPadding,
       paddingTop: topPadding,
-      paddingBottom: safeArea.bottom + spacing.lg,
+      paddingBottom: safeArea.bottom + (compactLandscape ? spacing.md : spacing.lg),
     },
 
     topRow: {

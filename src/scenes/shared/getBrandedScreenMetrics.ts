@@ -11,6 +11,7 @@ type AdaptiveLike = {
   width?: number;
   height?: number;
   widthClass?: 'compact' | 'medium' | 'expanded';
+  breakpoint?: 'compact' | 'medium' | 'large' | 'xlarge';
   isShortLandscape?: boolean;
 };
 
@@ -60,6 +61,7 @@ export const getBrandedScreenMetrics = (
       layoutPreset,
       isLandscape,
       widthClass: adaptive.widthClass,
+      breakpoint: adaptive.breakpoint,
       s,
       fs,
     },
@@ -68,7 +70,11 @@ export const getBrandedScreenMetrics = (
   const isPhone = layoutPreset === 'phone';
   const compactLandscape =
     isLandscape &&
-    (adaptive.isShortLandscape || height <= 760 || width <= 1180);
+    (adaptive.breakpoint === 'compact' ||
+      adaptive.isShortLandscape ||
+      (height <= 820 && width <= 1440) ||
+      height <= 760 ||
+      width <= 1180);
 
   return {
     s,
@@ -84,7 +90,7 @@ export const getBrandedScreenMetrics = (
     headerRadius: design.radius.xl,
     headerSidePadding: design.spacing.md,
     headerTitlePadding: compactLandscape
-      ? s(118)
+      ? s(104)
       : layoutPreset === 'tv'
         ? s(176)
         : layoutPreset === 'wideTablet'
