@@ -43,6 +43,30 @@ const shouldUseCompactMetrics = (variant: Variant, adaptive?: any) => {
   return baseCompact;
 };
 
+const getWindowsScaledBottomCorrection = (
+  variant: Variant,
+  scale: number,
+  adaptive?: any,
+) => {
+  if (Platform.OS !== 'windows' || variant === 'live') {
+    return 0;
+  }
+
+  const s = adaptive?.s || ((value: number) => value);
+  const safeScale = Math.max(0.1, Math.min(1, Number(scale) || 1));
+
+  // The Carom scoreboard is rendered once at its natural size, then scaled
+  // down for camera/fullscreen/replay. On React Native Windows the scaled
+  // pixels shrink visually, but the unscaled layout box still reserves its
+  // original height. With bottom: 0 that reserved space makes the visible
+  // scoreboard float above the camera edge. This correction removes that
+  // visual gap without changing the scoreboard size or stretching it.
+  const baseCorrection =
+    variant === 'camera' ? 58 : variant === 'playback' ? 54 : 50;
+
+  return Math.round(s(baseCorrection) * (1 - safeScale));
+};
+
 const getMetrics = (
   variant: Variant,
   compact = false,
@@ -74,13 +98,13 @@ const getMetrics = (
       return compact
         ? {
             left: s(4),
-            bottom: s(4),
+            bottom: 0,
             width: s(280),
             scale: 0.46,
           }
         : {
             left: s(6),
-            bottom: s(6),
+            bottom: 0,
             width: s(360),
             scale: 0.56,
           };
@@ -88,13 +112,13 @@ const getMetrics = (
       return compact
         ? {
             left: s(10),
-            bottom: s(52),
+            bottom: 0,
             width: s(360),
             scale: 0.5,
           }
         : {
             left: s(12),
-            bottom: s(58),
+            bottom: 0,
             width: s(470),
             scale: 0.58,
           };
@@ -102,9 +126,8 @@ const getMetrics = (
     default:
       return compact
         ? {
-            // Camera overlay: pin the Carom scoreboard tight to the normal
-            // camera bottom edge without using a negative offset that can clip
-            // the lower player row.
+            // Camera overlay keeps its own size; the final visual bottom
+            // alignment is handled once in getWindowsScaledBottomCorrection.
             left: s(2),
             bottom: s(0),
             width: s(186),
@@ -150,6 +173,12 @@ const CaromBroadcastScoreboard = ({
     Platform.OS === 'windows'
       ? -Math.round((scaleRootWidth - metrics.width) / 2)
       : 0;
+  const visualBottomCorrection = getWindowsScaledBottomCorrection(
+    variant,
+    metrics.scale,
+    adaptive,
+  );
+  const bottomValue = (bottomOffset ?? metrics.bottom) - visualBottomCorrection;
 
   if (
     !isCaromGame(category) ||
@@ -166,7 +195,7 @@ const CaromBroadcastScoreboard = ({
         styles.wrapper,
         {
           left: metrics.left,
-          bottom: bottomOffset ?? metrics.bottom,
+          bottom: bottomValue,
           width: metrics.width,
         },
         style,

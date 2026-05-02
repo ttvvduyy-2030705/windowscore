@@ -26,13 +26,10 @@ const CaromInfo = (props: Props) => {
   const adaptive = useAdaptiveLayout();
   const isLibre = props.gameSettings?.category === 'libre';
   const countdownBarWidth = adaptive.width * (props.compact ? 0.16 : 0.225);
-  const caromTimerTextOffset = Math.max(
-    adaptive.s(props.compact ? 16 : 26),
-    Math.min(
-      adaptive.width * (props.compact ? 0.014 : 0.018),
-      adaptive.s(props.compact ? 22 : 30),
-    ),
-  );
+  // Keep the green countdown bar fixed and move only the timer text
+  // closer to the bar. This avoids stretching or shifting the bar itself
+  // in camera/fullscreen/replay overlays.
+  const caromTimerTextOffset = adaptive.s(props.compact ? 36 : 48);
 
   const getTotalPointFont = useCallback(
     (point: number) => {
