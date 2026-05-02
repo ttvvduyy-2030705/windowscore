@@ -300,13 +300,37 @@ const PoolBroadcastScoreboard = ({
   const bottomValue = bottomOffset ?? metrics.bottomGap;
 
   const playerNameStyle = useMemo(
-    () => [styles.playerName, {fontSize: metrics.playerNameSize}],
+    () => [
+      styles.playerName,
+      {
+        fontSize: metrics.playerNameSize,
+        lineHeight: Math.round(metrics.playerNameSize * 1.16),
+      },
+    ],
     [metrics.playerNameSize],
   );
 
   const playerScoreStyle = useMemo(
-    () => [styles.playerScore, {fontSize: metrics.playerScoreSize}],
-    [metrics.playerScoreSize],
+  () => [
+    styles.playerScore,
+    {
+      fontSize: metrics.playerScoreSize,
+      lineHeight: Math.round(metrics.playerScoreSize * 1.04),
+      transform: [{translateY: -1}],
+    },
+  ],
+  [metrics.playerScoreSize],
+);
+
+  const scoreBoxStyle = useMemo(
+    () => [
+      styles.scoreBox,
+      {
+        minWidth: metrics.scoreMinWidth,
+        minHeight: Math.max(12, metrics.barHeight - 2),
+      },
+    ],
+    [metrics.barHeight, metrics.scoreMinWidth],
   );
 
   if (
@@ -354,8 +378,8 @@ const PoolBroadcastScoreboard = ({
             numberOfLines={1}>
             {leftPlayer?.name?.trim() || 'Player 1'}
           </Text>
-          <View style={[styles.scoreBox, {minWidth: metrics.scoreMinWidth}]}>
-            <Text style={playerScoreStyle}>
+          <View style={scoreBoxStyle}>
+            <Text style={playerScoreStyle} numberOfLines={1}>
               {safeNumber(leftPlayer?.totalPoint, 0)}
             </Text>
           </View>
@@ -397,8 +421,8 @@ const PoolBroadcastScoreboard = ({
               paddingRight: metrics.horizontalPadding + metrics.playerNameGap,
             },
           ]}>
-          <View style={[styles.scoreBox, {minWidth: metrics.scoreMinWidth}]}>
-            <Text style={playerScoreStyle}>
+          <View style={scoreBoxStyle}>
+            <Text style={playerScoreStyle} numberOfLines={1}>
               {safeNumber(rightPlayer?.totalPoint, 0)}
             </Text>
           </View>
@@ -487,11 +511,17 @@ const styles = StyleSheet.create({
     opacity: 0.55,
   },
   playerPanel: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    minWidth: 0,
-  },
+  flex: 1,
+  flexDirection: 'row',
+  alignItems: 'center',
+  minWidth: 0,
+
+  // Giữ sẵn border cho cả 2 bên để 2 ô điểm có cùng chiều cao layout.
+  borderTopWidth: 2,
+  borderBottomWidth: 2,
+  borderTopColor: 'transparent',
+  borderBottomColor: 'transparent',
+},
   playerPanelLeft: {
     justifyContent: 'space-between',
   },
@@ -499,15 +529,15 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   activePlayerPanel: {
-    borderTopWidth: 2,
-    borderTopColor: '#FF5B57',
-    borderBottomWidth: 2,
-    borderBottomColor: '#FF5B57',
-  },
+  borderTopColor: '#FF5B57',
+  borderBottomColor: '#FF5B57',
+},
   playerName: {
     flex: 1,
     color: '#FFFFFF',
     fontWeight: '800',
+    includeFontPadding: false,
+    textAlignVertical: 'center',
   },
   playerNameLeft: {
     textAlign: 'center',
@@ -518,16 +548,20 @@ const styles = StyleSheet.create({
     marginLeft: 8,
   },
   scoreBox: {
+    alignSelf: 'stretch',
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 8,
-    paddingVertical: 4,
+    paddingVertical: 0,
     backgroundColor: 'rgba(0,0,0,0.28)',
     borderRadius: 6,
   },
   playerScore: {
     color: '#FFFFFF',
     fontWeight: '900',
+    includeFontPadding: false,
+    textAlign: 'center',
+    textAlignVertical: 'center',
   },
   centerPanelWrap: {
     flexShrink: 0,
@@ -545,12 +579,14 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     letterSpacing: 0.2,
     includeFontPadding: false,
+    textAlignVertical: 'center',
     marginRight: 5,
   },
   centerValue: {
     color: '#FFFFFF',
     fontWeight: '900',
     includeFontPadding: false,
+    textAlignVertical: 'center',
   },
   timerTrack: {
     alignSelf: 'center',
@@ -570,6 +606,8 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontWeight: '800',
     textAlign: 'center',
+    includeFontPadding: false,
+    textAlignVertical: 'center',
   },
 });
 

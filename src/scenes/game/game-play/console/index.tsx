@@ -3,6 +3,7 @@ import {
   Image as RNImage,
   StyleSheet,
   Text as RNText,
+  View as RNView,
 } from 'react-native';
 
 import View from 'components/View';
@@ -146,24 +147,24 @@ const ActionButtonContent = ({
   }
 
   return (
-    <View direction={"row"} style={styles.actionButtonLabelRow}>
+    <RNView style={styles.actionButtonLabelRow}>
       <RNImage
         source={icon}
         resizeMode="contain"
         fadeDuration={0}
-        style={iconStyle}
+        style={[iconStyle, styles.actionButtonIconAligned]}
       />
       <RNText
         allowFontScaling={false}
         maxFontSizeMultiplier={1}
-        style={textStyle}
+        style={[textStyle, styles.actionButtonTextAligned]}
         numberOfLines={1}
         adjustsFontSizeToFit={!!adjustsFontSizeToFit}
         minimumFontScale={0.78}
         ellipsizeMode="tail">
         {label}
       </RNText>
-    </View>
+    </RNView>
   );
 };
 
@@ -348,7 +349,7 @@ const DualButton = ({
           buttonToneStyle(rightTone),
         ]}>
         {rightIcon ? (
-          <View direction={"row"} style={styles.dualButtonLabelRow}>
+          <RNView style={styles.dualButtonLabelRow}>
             <RNImage
               source={rightIcon}
               resizeMode="contain"
@@ -359,6 +360,7 @@ const DualButton = ({
                 compact ? styles.compactDualButtonIcon : undefined,
                 extraCompact ? styles.extraCompactDualButtonIcon : undefined,
                 tight ? styles.tightDualButtonIcon : undefined,
+                styles.actionButtonIconAligned,
               ]}
             />
             <RNText
@@ -370,6 +372,7 @@ const DualButton = ({
                 compact ? styles.compactDualButtonText : undefined,
                 extraCompact ? styles.extraCompactDualButtonText : undefined,
                 tight ? styles.tightDualButtonText : undefined,
+                styles.actionButtonTextAligned,
               ]}
               numberOfLines={1}
               adjustsFontSizeToFit={!!tight || !!compact || !!extraCompact}
@@ -377,7 +380,7 @@ const DualButton = ({
               ellipsizeMode="tail">
               {rightLabel}
             </RNText>
-          </View>
+          </RNView>
         ) : (
           <RNText
             allowFontScaling={false}
@@ -2310,8 +2313,11 @@ const createStyles = (adaptive: any, design: any, rules: any) => createGameplayS
   smallActionText: {
     color: '#FFFFFF',
     fontSize: 18,
+    lineHeight: 21,
     fontWeight: '700',
     textAlign: 'center',
+    includeFontPadding: false,
+    textAlignVertical: 'center',
   },
   compactSmallActionText: {
     fontSize: 15,
@@ -2360,8 +2366,11 @@ const createStyles = (adaptive: any, design: any, rules: any) => createGameplayS
   wideButtonText: {
     color: '#FFFFFF',
     fontSize: 20,
+    lineHeight: 23,
     fontWeight: '800',
     textAlign: 'center',
+    includeFontPadding: false,
+    textAlignVertical: 'center',
   },
   compactWideButtonText: {
     fontSize: 16,
@@ -2418,16 +2427,27 @@ const createStyles = (adaptive: any, design: any, rules: any) => createGameplayS
     paddingHorizontal: 14,
   },
   actionButtonLabelRow: {
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 6,
     maxWidth: '100%',
+    minWidth: 0,
   },
   actionButtonIcon: {
     width: 18,
     height: 18,
     flexShrink: 0,
     backgroundColor: 'transparent',
+  },
+  actionButtonIconAligned: {
+  alignSelf: 'center',
+  transform: [{translateY: 4}],
+},
+  actionButtonTextAligned: {
+    flexShrink: 1,
+    includeFontPadding: false,
+    textAlignVertical: 'center',
   },
   compactActionButtonIcon: {
     width: 15,
@@ -2446,10 +2466,12 @@ const createStyles = (adaptive: any, design: any, rules: any) => createGameplayS
     height: 26,
   },
   dualButtonLabelRow: {
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 6,
     maxWidth: '100%',
+    minWidth: 0,
   },
   dualButtonIcon: {
     width: 20,
@@ -2476,8 +2498,11 @@ const createStyles = (adaptive: any, design: any, rules: any) => createGameplayS
   dualButtonText: {
     color: '#FFFFFF',
     fontSize: 20,
+    lineHeight: 23,
     fontWeight: '800',
     textAlign: 'center',
+    includeFontPadding: false,
+    textAlignVertical: 'center',
   },
   compactDualButtonText: {
     fontSize: 16,
@@ -2536,8 +2561,11 @@ const createStyles = (adaptive: any, design: any, rules: any) => createGameplayS
   tripleButtonText: {
     color: '#FFFFFF',
     fontSize: 19,
+    lineHeight: 22,
     fontWeight: '800',
     textAlign: 'center',
+    includeFontPadding: false,
+    textAlignVertical: 'center',
   },
   compactTripleButtonText: {
     fontSize: 15,

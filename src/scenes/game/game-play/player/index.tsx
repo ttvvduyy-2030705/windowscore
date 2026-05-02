@@ -418,6 +418,15 @@ const GamePlayer = (
   const measuredPanelWidth = panelSize.width > 0 ? panelSize.width : estimatedPanelWidth;
   const measuredPanelHeight = panelSize.height > 0 ? panelSize.height : estimatedPanelHeight;
   const scoreLayerHeight = Math.max(80, measuredPanelHeight - scoreTop - scoreBottom);
+  const scoreLayerAvailableWidth = isPool15OnlyMode
+    ? Math.max(
+        86,
+        Math.round(
+          measuredPanelWidth * (isCompactLayout ? 0.42 : 0.46) -
+            (isCompactLayout ? 18 : 28),
+        ),
+      )
+    : measuredPanelWidth;
   const baseScoreFont = adaptive.fs(
     isMultiPlayerLayout
       ? isCaromMode
@@ -449,21 +458,49 @@ const GamePlayer = (
     isCompactLayout ? 0.5 : 0.62,
     1,
   );
-  const digitWidthFactor =
-    scoreDigitCount >= 4 ? 0.62 : scoreDigitCount >= 3 ? 0.66 : scoreDigitCount === 2 ? 0.7 : 0.95;
-  const scoreHorizontalFill =
-    scoreDigitCount >= 3
-      ? isCompactLayout
-        ? 0.82
-        : 0.86
-      : isCompactLayout
-      ? 0.88
-      : 0.92;
+  const digitWidthFactor = isPool15OnlyMode
+    ? scoreDigitCount >= 3
+      ? 0.64
+      : scoreDigitCount === 2
+      ? 0.68
+      : 0.72
+    : scoreDigitCount >= 4
+    ? 0.62
+    : scoreDigitCount >= 3
+    ? 0.66
+    : scoreDigitCount === 2
+    ? 0.7
+    : 0.95;
+  const scoreHorizontalFill = isPool15OnlyMode
+    ? isCompactLayout
+      ? 0.84
+      : 0.88
+    : scoreDigitCount >= 3
+    ? isCompactLayout
+      ? 0.82
+      : 0.86
+    : isCompactLayout
+    ? 0.88
+    : 0.92;
   const scoreFontByWidth =
-    (measuredPanelWidth * scoreHorizontalFill) /
+    (scoreLayerAvailableWidth * scoreHorizontalFill) /
     Math.max(scoreDigitCount * digitWidthFactor, 1);
-  const scoreFontByHeight = scoreLayerHeight * (isMultiPlayerLayout ? 0.82 : isCompactLayout ? 0.86 : 0.9);
-  const scoreReadableFloor = isMultiPlayerLayout ? 58 : isExtraCompactLayout ? 96 : isCompactLayout ? 116 : 150;
+  const scoreFontByHeight =
+    scoreLayerHeight *
+    (isPool15OnlyMode ? 0.72 : isMultiPlayerLayout ? 0.82 : isCompactLayout ? 0.86 : 0.9);
+  const scoreReadableFloor = isPool15OnlyMode
+    ? isExtraCompactLayout
+      ? 72
+      : isCompactLayout
+      ? 86
+      : 108
+    : isMultiPlayerLayout
+    ? 58
+    : isExtraCompactLayout
+    ? 96
+    : isCompactLayout
+    ? 116
+    : 150;
   const playerScoreFontSize = Math.round(
     Math.max(
       Math.min(scoreReadableFloor, scoreFontByWidth, scoreFontByHeight),
@@ -755,9 +792,9 @@ const GamePlayer = (
               isMediumResponsiveLayout ? styles.scoreTextMedium : undefined,
               scoreTextDynamicStyle,
               libreScoreTextStyle,
-              responsiveScoreTextStyle,
               textColorStyle,
               isPool15OnlyMode && styles.pool8ScoreText,
+              responsiveScoreTextStyle,
             ]}
             allowFontScaling={false}
             maxFontSizeMultiplier={1}>
