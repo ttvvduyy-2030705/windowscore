@@ -139,7 +139,7 @@ const ActionButtonContent = ({
         style={textStyle}
         numberOfLines={1}
         adjustsFontSizeToFit={!!adjustsFontSizeToFit}
-        minimumFontScale={0.78}
+        minimumFontScale={0.64}
         ellipsizeMode="tail">
         {label}
       </RNText>
@@ -160,7 +160,7 @@ const ActionButtonContent = ({
         style={[textStyle, styles.actionButtonTextAligned]}
         numberOfLines={1}
         adjustsFontSizeToFit={!!adjustsFontSizeToFit}
-        minimumFontScale={0.78}
+        minimumFontScale={0.64}
         ellipsizeMode="tail">
         {label}
       </RNText>
@@ -211,8 +211,8 @@ const SmallActionButton = ({
     tight ? styles.tightSmallActionText : undefined,
   ]}
   numberOfLines={1}
-  adjustsFontSizeToFit={!!tight || !!compact || !!extraCompact}
-  minimumFontScale={0.78}
+  adjustsFontSizeToFit={!!poolCompact || !!tight || !!compact || !!extraCompact}
+  minimumFontScale={0.64}
   ellipsizeMode="tail">
   {label}
 </RNText>
@@ -267,7 +267,7 @@ const WideActionButton = ({
           extraCompact ? styles.extraCompactActionButtonIcon : undefined,
           tight ? styles.tightActionButtonIcon : undefined,
         ]}
-        adjustsFontSizeToFit={!!tight || !!compact || !!extraCompact}
+        adjustsFontSizeToFit={!!poolCompact || !!tight || !!compact || !!extraCompact}
       />
     </Button>
   );
@@ -334,7 +334,7 @@ const DualButton = ({
             extraCompact ? styles.extraCompactDualButtonIcon : undefined,
             tight ? styles.tightDualButtonIcon : undefined,
           ]}
-          adjustsFontSizeToFit={!!tight || !!compact || !!extraCompact}
+          adjustsFontSizeToFit={!!poolCompact || !!tight || !!compact || !!extraCompact}
         />
       </Button>
 
@@ -375,8 +375,8 @@ const DualButton = ({
                 styles.actionButtonTextAligned,
               ]}
               numberOfLines={1}
-              adjustsFontSizeToFit={!!tight || !!compact || !!extraCompact}
-              minimumFontScale={0.78}
+              adjustsFontSizeToFit={!!poolCompact || !!tight || !!compact || !!extraCompact}
+              minimumFontScale={0.64}
               ellipsizeMode="tail">
               {rightLabel}
             </RNText>
@@ -393,8 +393,8 @@ const DualButton = ({
               tight ? styles.tightDualButtonText : undefined,
             ]}
             numberOfLines={1}
-            adjustsFontSizeToFit={!!tight || !!compact || !!extraCompact}
-            minimumFontScale={0.78}
+            adjustsFontSizeToFit={!!poolCompact || !!tight || !!compact || !!extraCompact}
+            minimumFontScale={0.64}
             ellipsizeMode="tail">
             {rightLabel}
           </RNText>
@@ -453,7 +453,7 @@ const TripleButton = ({
     extraCompact ? styles.extraCompactActionButtonIcon : undefined,
     tight ? styles.tightActionButtonIcon : undefined,
   ];
-  const fitText = !!tight || !!compact || !!extraCompact;
+  const fitText = !!poolCompact || !!tight || !!compact || !!extraCompact;
 
   return (
     <View
@@ -1893,7 +1893,46 @@ const GameConsole = (props: ConsoleViewModelProps) => {
   );
 };
 
-const createStyles = (adaptive: any, design: any, rules: any) => createGameplayStyles(adaptive, {
+const createStyles = (adaptive: any, design: any, rules: any) => {
+  const isPoolButtonTextCompact =
+    adaptive.isLandscape &&
+    (adaptive.width < 1440 ||
+      adaptive.height <= 860 ||
+      adaptive.isConstrainedLandscape ||
+      adaptive.widthClass === 'compact' ||
+      adaptive.breakpoint === 'compact');
+  const isPoolButtonTextTight =
+    adaptive.isLandscape &&
+    (adaptive.width < 1220 ||
+      adaptive.height <= 760 ||
+      adaptive.isVeryShortLandscape ||
+      adaptive.isUltraShortLandscape ||
+      adaptive.aspectRatio >= 1.85);
+
+  const poolMainButtonFontSize = isPoolButtonTextTight
+    ? 18
+    : isPoolButtonTextCompact
+      ? 21
+      : 24;
+  const poolUtilityButtonFontSize = isPoolButtonTextTight
+    ? 16
+    : isPoolButtonTextCompact
+      ? 18
+      : 20;
+  const poolMainButtonLineHeight = poolMainButtonFontSize + 3;
+  const poolUtilityButtonLineHeight = poolUtilityButtonFontSize + 3;
+  const poolMainButtonIconSize = isPoolButtonTextTight
+    ? 18
+    : isPoolButtonTextCompact
+      ? 21
+      : 23;
+  const poolUtilityButtonIconSize = isPoolButtonTextTight
+    ? 16
+    : isPoolButtonTextCompact
+      ? 18
+      : 20;
+
+  return createGameplayStyles(adaptive, {
   wrapper: {
     width: '100%',
     flex: 1,
@@ -2330,9 +2369,10 @@ const createStyles = (adaptive: any, design: any, rules: any) => createGameplayS
     lineHeight: 14,
   },
   poolSmallActionText: {
-    fontSize: 28,
+    fontSize: poolUtilityButtonFontSize,
     fontWeight: '900',
-    lineHeight: 31,
+    lineHeight: poolUtilityButtonLineHeight,
+    letterSpacing: -0.15,
   },
   wideButton: {
     width: '100%',
@@ -2374,18 +2414,21 @@ const createStyles = (adaptive: any, design: any, rules: any) => createGameplayS
   },
   compactWideButtonText: {
     fontSize: 16,
+    lineHeight: 18,
   },
   extraCompactWideButtonText: {
     fontSize: 14,
-  },
-  tightWideButtonText: {
-    fontSize: 14,
     lineHeight: 16,
   },
+  tightWideButtonText: {
+    fontSize: 13,
+    lineHeight: 15,
+  },
   poolWideButtonText: {
-    fontSize: 31,
+    fontSize: poolMainButtonFontSize,
     fontWeight: '900',
-    lineHeight: 34,
+    lineHeight: poolMainButtonLineHeight,
+    letterSpacing: -0.2,
   },
   dualButtonRow: {
     width: '100%',
@@ -2427,12 +2470,14 @@ const createStyles = (adaptive: any, design: any, rules: any) => createGameplayS
     paddingHorizontal: 14,
   },
   actionButtonLabelRow: {
+    width: '100%',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 6,
+    gap: 5,
     maxWidth: '100%',
     minWidth: 0,
+    overflow: 'hidden',
   },
   actionButtonIcon: {
     width: 18,
@@ -2441,9 +2486,9 @@ const createStyles = (adaptive: any, design: any, rules: any) => createGameplayS
     backgroundColor: 'transparent',
   },
   actionButtonIconAligned: {
-  alignSelf: 'center',
-  transform: [{translateY: 4}],
-},
+    alignSelf: 'center',
+    transform: [{translateY: 1}],
+  },
   actionButtonTextAligned: {
     flexShrink: 1,
     includeFontPadding: false,
@@ -2462,16 +2507,18 @@ const createStyles = (adaptive: any, design: any, rules: any) => createGameplayS
     height: 12,
   },
   poolActionButtonIcon: {
-    width: 26,
-    height: 26,
+    width: poolUtilityButtonIconSize,
+    height: poolUtilityButtonIconSize,
   },
   dualButtonLabelRow: {
+    width: '100%',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 6,
+    gap: 5,
     maxWidth: '100%',
     minWidth: 0,
+    overflow: 'hidden',
   },
   dualButtonIcon: {
     width: 20,
@@ -2492,8 +2539,8 @@ const createStyles = (adaptive: any, design: any, rules: any) => createGameplayS
     height: 14,
   },
   poolDualButtonIcon: {
-    width: 28,
-    height: 28,
+    width: poolMainButtonIconSize,
+    height: poolMainButtonIconSize,
   },
   dualButtonText: {
     color: '#FFFFFF',
@@ -2506,18 +2553,21 @@ const createStyles = (adaptive: any, design: any, rules: any) => createGameplayS
   },
   compactDualButtonText: {
     fontSize: 16,
+    lineHeight: 18,
   },
   extraCompactDualButtonText: {
     fontSize: 14,
+    lineHeight: 16,
   },
   tightDualButtonText: {
     fontSize: 13,
     lineHeight: 15,
   },
   poolDualButtonText: {
-    fontSize: 31,
+    fontSize: poolMainButtonFontSize,
     fontWeight: '900',
-    lineHeight: 34,
+    lineHeight: poolMainButtonLineHeight,
+    letterSpacing: -0.2,
   },
   tripleButtonRow: {
     width: '100%',
@@ -2569,18 +2619,21 @@ const createStyles = (adaptive: any, design: any, rules: any) => createGameplayS
   },
   compactTripleButtonText: {
     fontSize: 15,
+    lineHeight: 17,
   },
   extraCompactTripleButtonText: {
     fontSize: 13,
+    lineHeight: 15,
   },
   tightTripleButtonText: {
     fontSize: 12,
     lineHeight: 14,
   },
   poolTripleButtonText: {
-    fontSize: 28,
+    fontSize: poolUtilityButtonFontSize,
     fontWeight: '900',
-    lineHeight: 31,
+    lineHeight: poolUtilityButtonLineHeight,
+    letterSpacing: -0.15,
   },
   disabledButton: {
     opacity: 0.5,
@@ -2891,6 +2944,7 @@ const createStyles = (adaptive: any, design: any, rules: any) => createGameplayS
     fontWeight: '900',
     textAlign: 'center',
   },
-});
+  });
+};
 
 export default memo(GameConsole);

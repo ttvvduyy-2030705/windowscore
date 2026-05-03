@@ -322,6 +322,14 @@ const PoolBroadcastScoreboard = ({
   [metrics.playerScoreSize],
 );
 
+const centerGoalTextStyle = useMemo(
+  () => ({
+    fontSize: metrics.centerLabelSize * 1.5,
+    lineHeight: Math.round(metrics.centerLabelSize * 1.14),
+  }),
+  [metrics.centerLabelSize],
+);
+
   const scoreBoxStyle = useMemo(
     () => [
       styles.scoreBox,
@@ -391,21 +399,21 @@ const PoolBroadcastScoreboard = ({
             {width: metrics.centerWidth, minWidth: metrics.centerWidth},
           ]}>
           <View style={styles.centerPanel}>
-            <Text
-              style={[styles.centerLabel, {fontSize: metrics.centerLabelSize}]}
-              numberOfLines={1}
-              adjustsFontSizeToFit
-              minimumFontScale={0.82}>
-              {String(i18n.t('goal'))}
-            </Text>
-            <Text
-              style={[styles.centerValue, {fontSize: metrics.centerValueSize}]}
-              numberOfLines={1}
-              adjustsFontSizeToFit
-              minimumFontScale={0.8}>
-              {goal}
-            </Text>
-          </View>
+  <Text
+    style={[styles.centerLabel, centerGoalTextStyle]}
+    numberOfLines={1}
+    adjustsFontSizeToFit
+    minimumFontScale={0.8}>
+    {String(i18n.t('goal'))}
+  </Text>
+  <Text
+    style={[styles.centerValue, centerGoalTextStyle]}
+    numberOfLines={1}
+    adjustsFontSizeToFit
+    minimumFontScale={0.8}>
+    {goal}
+  </Text>
+</View>
         </View>
 
         <LinearGradient
@@ -575,19 +583,20 @@ const styles = StyleSheet.create({
     backgroundColor: '#161616',
   },
   centerLabel: {
-    color: '#E6E6E6',
-    fontWeight: '800',
-    letterSpacing: 0.2,
-    includeFontPadding: false,
-    textAlignVertical: 'center',
-    marginRight: 5,
-  },
-  centerValue: {
-    color: '#FFFFFF',
-    fontWeight: '900',
-    includeFontPadding: false,
-    textAlignVertical: 'center',
-  },
+  color: '#FFFFFF',
+  fontWeight: '900',
+  letterSpacing: 0.1,
+  includeFontPadding: false,
+  textAlignVertical: 'center',
+  marginRight: 3,
+},
+centerValue: {
+  color: '#FFFFFF',
+  fontWeight: '900',
+  letterSpacing: 0.1,
+  includeFontPadding: false,
+  textAlignVertical: 'center',
+},
   timerTrack: {
     alignSelf: 'center',
     marginTop: 5,
