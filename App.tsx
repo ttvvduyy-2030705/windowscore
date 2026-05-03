@@ -146,7 +146,7 @@ const App = (): React.JSX.Element => {
                   onChangeCurrentLanguage,
                 }}>
                 {isLoading ? (
-                  <Container>
+                  <Container style={styles.bootLoadingScreen}>
                     <View flex={'1'} alignItems={'center'} justify={'center'}>
                       <Loading isLoading />
                     </View>
@@ -166,6 +166,9 @@ const App = (): React.JSX.Element => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+  },
+  bootLoadingScreen: {
+    backgroundColor: '#000000',
   },
 });
 

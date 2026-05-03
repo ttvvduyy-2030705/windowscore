@@ -41,7 +41,13 @@ const Loading = (props: LoadingProps) => {
     return <ActivityIndicator color={colors.primary} size={size} />;
   }
 
-  return <Image source={images.default} style={imageStyle} />;
+  return (
+    <Image
+      source={images.logoSmall}
+      style={imageStyle}
+      resizeMode={'contain'}
+    />
+  );
 };
 
 export default memo(Loading);

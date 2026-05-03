@@ -4,21 +4,18 @@ import {responsiveDimension} from 'utils/helper';
 const styles = StyleSheet.create({
   loading: {
     alignSelf: 'center',
-    paddingVertical: 1,
-    width: responsiveDimension(140),
-    height: responsiveDimension(140),
+    width: responsiveDimension(320),
+    height: responsiveDimension(138),
   },
   loading_small: {
     alignSelf: 'center',
-    paddingVertical: 1,
-    width: responsiveDimension(50),
-    height: responsiveDimension(50),
+    width: responsiveDimension(150),
+    height: responsiveDimension(64),
   },
   loading_large: {
     alignSelf: 'center',
-    paddingVertical: 1,
-    width: responsiveDimension(200),
-    height: responsiveDimension(200),
+    width: responsiveDimension(440),
+    height: responsiveDimension(188),
   },
 });
 

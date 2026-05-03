@@ -127,7 +127,7 @@ const withWrapper = (SceneName: string, Scene: FunctionComponent) => {
 
     if (!isReady) {
       return (
-        <Container isLoading={true} loadingBackgroundColor={configColors.white}>
+        <Container isLoading={true} loadingBackgroundColor={configColors.black}>
           <View />
         </Container>
       );

@@ -30,7 +30,7 @@ const Container = (props: ContainerProps) => {
   const {
     children,
     isLoading,
-    loadingBackgroundColor = colors.white,
+    loadingBackgroundColor = colors.black,
     style,
     safeAreaDisabled,
     safeAreaEdges = DEFAULT_SAFE_AREA_EDGES,

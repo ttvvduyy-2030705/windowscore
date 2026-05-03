@@ -1,7 +1,7 @@
 import 'react-native-get-random-values';
 
 import React, {useCallback, useEffect, useState} from 'react';
-import {StyleSheet} from 'react-native';
+import {StyleSheet, View as RNView} from 'react-native';
 import {GestureHandlerRootView} from 'react-native-gesture-handler';
 import {Provider} from 'react-redux';
 import {PersistGate} from 'redux-persist/integration/react';
@@ -31,7 +31,7 @@ const logWindowsBuildInfoOnce = () => {
   // Build info is diagnostic information only. Keep it on console.log so React Native
   // does not show fake warning component stacks during startup.
   console.log('[Build Info] app started');
-  console.log('[Build Info] live-fix-build=20260419-0226-route-props-create-flow');
+  console.log('[Build Info] live-fix-build=20260504-black-logo-loading-screen');
   console.log(`[Build Info] apiBaseUrl=${LIVESTREAM_AUTH_BASE_URL}`);
   console.log(`[Build Info] package=${DeviceInfo.getBundleId()}`);
   console.log(`[Build Info] versionName=${DeviceInfo.getVersion()}`);
@@ -88,7 +88,13 @@ const AppWindows = (): React.JSX.Element => {
                   language: currentLanguage,
                   onChangeCurrentLanguage,
                 }}>
-                {isLoading ? <Loading /> : <StackScreens />}
+                {isLoading ? (
+                  <RNView style={styles.bootLoadingScreen}>
+                    <Loading isLoading />
+                  </RNView>
+                ) : (
+                  <StackScreens />
+                )}
               </LanguageContext.Provider>
             </NavigationContainer>
           </PersistGate>
@@ -101,6 +107,12 @@ const AppWindows = (): React.JSX.Element => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+  },
+  bootLoadingScreen: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#000000',
   },
 });
 

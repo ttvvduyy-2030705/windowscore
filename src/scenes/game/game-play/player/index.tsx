@@ -651,6 +651,7 @@ const GamePlayer = (
         <Button
           style={[
             styles.stepButton,
+            isCaromMode && styles.stepButtonCaromOutline,
             isMediumResponsiveLayout ? styles.stepButtonMedium : undefined,
             isCompactLayout && styles.stepButtonCompact,
             dynamicStepButtonStyle,
@@ -676,6 +677,7 @@ const GamePlayer = (
         <Button
           style={[
             styles.stepButton,
+            isCaromMode && styles.stepButtonCaromOutline,
             isMediumResponsiveLayout ? styles.stepButtonMedium : undefined,
             isCompactLayout && styles.stepButtonCompact,
             dynamicStepButtonStyle,
@@ -1178,6 +1180,10 @@ const createStyles = (adaptive: any, design: any, rules: any) => createGameplayS
     backgroundColor: '#FFFFFF',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  stepButtonCaromOutline: {
+    borderWidth: 2,
+    borderColor: '#000000',
   },
   stepButtonMedium: {
     minHeight: 40,
