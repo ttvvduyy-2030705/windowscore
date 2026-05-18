@@ -13,6 +13,7 @@ export type MatchOverlayNativePlayer = {
   currentPoint: number;
   color: string;
   highestRate: number;
+  secondHighestRate: number;
   average: number;
 };
 

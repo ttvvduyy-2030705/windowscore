@@ -12,6 +12,7 @@ export type PlayerGoal = {
 
 export type PlayerProMode = {
   highestRate: number;
+  secondHighestRate?: number;
   average: number;
   currentPoint: number;
   extraTimeTurns: GameExtraTimeTurns;

@@ -38,6 +38,11 @@ const formatAverage = (value?: number) => {
   return Number.isFinite(numeric) ? numeric.toFixed(2) : '0.00';
 };
 
+const getSafeRunPoint = (value?: number) => {
+  const numeric = Number(value ?? 0);
+  return Number.isFinite(numeric) ? numeric : 0;
+};
+
 const PlayerViewModel = (props: Props) => {
   const {requireAplusPro} = useAplusPro();
   const [nameEditable, setNameEditable] = useState(false);
@@ -46,7 +51,8 @@ const PlayerViewModel = (props: Props) => {
     Number(props.player.proMode?.currentPoint || 0),
   );
 
-  const highestRate = Number(props.player.proMode?.highestRate || 0);
+  const highestRate = getSafeRunPoint(props.player.proMode?.highestRate);
+  const secondHighestRate = getSafeRunPoint(props.player.proMode?.secondHighestRate);
   const averagePoint = formatAverage(Number(props.player.proMode?.average || 0));
 
   useEffect(() => {
@@ -189,6 +195,7 @@ const PlayerViewModel = (props: Props) => {
     return {
       showProMode,
       highestRate,
+      secondHighestRate,
       averagePoint,
       totalPointInTurn,
       nameEditable,
@@ -206,6 +213,7 @@ const PlayerViewModel = (props: Props) => {
   }, [
     showProMode,
     highestRate,
+    secondHighestRate,
     averagePoint,
     totalPointInTurn,
     nameEditable,

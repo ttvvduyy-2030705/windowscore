@@ -339,7 +339,16 @@ const GameSettingsViewModel = (props: Props) => {
 
   const onStart = useCallback(() => {
     const _playingPlayers = playerSettings.playingPlayers.map(player => {
-      return {...player, proMode: gameSettingsMode};
+      return {
+        ...player,
+        proMode: {
+          ...gameSettingsMode,
+          highestRate: 0,
+          secondHighestRate: 0,
+          average: 0,
+          currentPoint: 0,
+        },
+      };
     });
 
     clearSettingsDraft();

@@ -210,6 +210,189 @@ const createLocalStyles = (a: AdaptiveLayout, design: any, rules: any) =>
       fontWeight: '700',
       textAlign: 'center',
     },
+    caromWinnerOverlayBackdrop: {
+      position: 'absolute',
+      top: 0,
+      right: 0,
+      bottom: 0,
+      left: 0,
+      zIndex: 260,
+      elevation: 48,
+      backgroundColor: 'rgba(0, 0, 0, 0.76)',
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingHorizontal: a.s(24),
+      paddingVertical: a.s(24),
+    },
+    caromWinnerOverlayCard: {
+      width: '100%',
+      maxWidth: a.s(980),
+      borderRadius: a.s(28),
+      borderWidth: 1.4,
+      borderColor: 'rgba(255, 56, 56, 0.88)',
+      backgroundColor: 'rgba(10, 10, 12, 0.98)',
+      paddingHorizontal: a.s(26),
+      paddingVertical: a.s(24),
+      shadowColor: '#FF2D2D',
+      shadowOpacity: 0.28,
+      shadowRadius: a.s(24),
+      shadowOffset: {width: 0, height: 0},
+      elevation: 18,
+    },
+    caromWinnerOverlayHeader: {
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginBottom: a.s(24),
+      width: '100%',
+    },
+    caromWinnerOverlayEyebrow: {
+      color: '#FF5A5A',
+      fontSize: a.fs(24, 0.98, 1.18),
+      lineHeight: a.fs(30, 0.98, 1.18),
+      fontWeight: '800',
+      letterSpacing: 1.2,
+      textTransform: 'uppercase',
+      textAlign: 'center',
+      marginBottom: a.s(8),
+    },
+    caromWinnerOverlayTitle: {
+      color: '#FFFFFF',
+      fontSize: a.fs(52, 1.04, 1.26),
+      lineHeight: a.fs(58, 1.04, 1.26),
+      fontWeight: '900',
+      textAlign: 'center',
+    },
+    caromWinnerOverlaySubtitle: {
+      color: 'rgba(255, 255, 255, 0.92)',
+      fontSize: a.fs(28, 0.96, 1.16),
+      lineHeight: a.fs(34, 0.96, 1.16),
+      fontWeight: '600',
+      textAlign: 'center',
+      marginTop: a.s(8),
+    },
+    caromWinnerScoreHeader: {
+      flexDirection: 'row',
+      alignItems: 'stretch',
+      justifyContent: 'space-between',
+      backgroundColor: '#B11616',
+      borderWidth: 1,
+      borderColor: 'rgba(255,255,255,0.12)',
+      borderRadius: a.s(22),
+      overflow: 'hidden',
+      marginBottom: a.s(16),
+      minHeight: a.s(72),
+    },
+    caromWinnerScoreCell: {
+      flex: 1,
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingHorizontal: a.s(8),
+      paddingVertical: a.s(10),
+      borderRightWidth: 1,
+      borderRightColor: 'rgba(255,255,255,0.12)',
+    },
+    caromWinnerScoreCellName: {
+      flex: 2.1,
+    },
+    caromWinnerScoreCellNameLeft: {
+      backgroundColor: '#FFFFFF',
+    },
+    caromWinnerScoreCellNameRight: {
+      backgroundColor: '#F2C230',
+    },
+    caromWinnerScoreCellMatch: {
+      flex: 0.9,
+      backgroundColor: 'rgba(0, 0, 0, 0.18)',
+    },
+    caromWinnerScoreCellLast: {
+      borderRightWidth: 0,
+    },
+    caromWinnerScoreNameText: {
+      color: '#FFFFFF',
+      fontSize: a.fs(30, 0.98, 1.18),
+      lineHeight: a.fs(36, 0.98, 1.18),
+      fontWeight: '900',
+      textTransform: 'uppercase',
+      textAlign: 'center',
+    },
+    caromWinnerScoreNameTextDark: {
+      color: '#111111',
+    },
+    caromWinnerScoreValueText: {
+      color: '#FFFFFF',
+      fontSize: a.fs(38, 1.0, 1.2),
+      lineHeight: a.fs(44, 1.0, 1.2),
+      fontWeight: '900',
+      textAlign: 'center',
+    },
+    caromWinnerStatsTable: {
+      gap: a.s(10),
+    },
+    caromWinnerStatsRow: {
+      flexDirection: 'row',
+      alignItems: 'stretch',
+      gap: a.s(10),
+    },
+    caromWinnerStatsValueCell: {
+      flex: 1,
+      minHeight: a.s(76),
+      borderRadius: a.s(18),
+      backgroundColor: 'rgba(255, 255, 255, 0.05)',
+      borderWidth: 1,
+      borderColor: 'rgba(255, 255, 255, 0.08)',
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingHorizontal: a.s(10),
+      paddingVertical: a.s(12),
+    },
+    caromWinnerStatsLabelCell: {
+      flex: 1.15,
+      minHeight: a.s(76),
+      borderRadius: a.s(18),
+      backgroundColor: 'rgba(177, 22, 22, 0.22)',
+      borderWidth: 1,
+      borderColor: 'rgba(255, 90, 90, 0.28)',
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingHorizontal: a.s(10),
+      paddingVertical: a.s(12),
+    },
+    caromWinnerStatsValueText: {
+      color: '#FFFFFF',
+      fontSize: a.fs(42, 1.02, 1.24),
+      lineHeight: a.fs(48, 1.02, 1.24),
+      fontWeight: '900',
+      textAlign: 'center',
+    },
+    caromWinnerStatsLabelText: {
+      color: '#FFFFFF',
+      fontSize: a.fs(32, 1.0, 1.18),
+      lineHeight: a.fs(38, 1.0, 1.18),
+      fontWeight: '800',
+      textAlign: 'center',
+    },
+    caromWinnerOverlayCloseButton: {
+      marginTop: a.s(24),
+      width: '100%',
+      alignSelf: 'center',
+      borderRadius: a.s(22),
+      borderWidth: 1.2,
+      borderColor: 'rgba(255, 68, 68, 0.82)',
+      backgroundColor: '#1A0E0E',
+      minHeight: a.s(76),
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingHorizontal: a.s(18),
+      paddingVertical: a.s(14),
+    },
+    caromWinnerOverlayCloseText: {
+      color: '#FFFFFF',
+      fontSize: a.fs(34, 1.0, 1.2),
+      lineHeight: a.fs(40, 1.0, 1.2),
+      fontWeight: '900',
+      textAlign: 'center',
+      textTransform: 'uppercase',
+    },
     youtubeLiveOverlayBackdrop: {
       position: 'absolute',
       top: 0,
@@ -503,6 +686,53 @@ const GamePlay = () => {
     paddingHorizontal: adaptive.s(isLargeDisplay ? 36 : 22),
     paddingVertical: adaptive.s(isLargeDisplay ? 15 : 10),
   };
+
+  const showCaromWinnerOverlay =
+    isCaromGame(category) &&
+    totalPlayers === 2 &&
+    viewModel.gameSettings?.mode?.mode === 'pro' &&
+    displayProModeEnabled &&
+    !!viewModel.winner &&
+    !viewModel.youtubeLiveOverlay?.visible;
+
+  const formatWinnerStatNumber = (value?: number, digits = 0) => {
+    const numeric = Number(value ?? 0);
+
+    if (!Number.isFinite(numeric)) {
+      return digits > 0 ? `0.${'0'.repeat(digits)}` : '0';
+    }
+
+    if (digits > 0) {
+      return numeric
+        .toFixed(digits)
+        .replace(/\.0+$/, '')
+        .replace(/(\.\d*?)0+$/, '$1');
+    }
+
+    return `${Math.round(numeric)}`;
+  };
+
+  const winnerSummaryPlayers = (effectivePlayerSettings?.playingPlayers || []).slice(0, 2);
+  const leftWinnerSummaryPlayer = winnerSummaryPlayers[0];
+  const rightWinnerSummaryPlayer = winnerSummaryPlayers[1];
+
+  const winnerSummaryRows = [
+    {
+      label: 'Average',
+      left: formatWinnerStatNumber(leftWinnerSummaryPlayer?.proMode?.average, 2),
+      right: formatWinnerStatNumber(rightWinnerSummaryPlayer?.proMode?.average, 2),
+    },
+    {
+      label: 'High Run 1',
+      left: formatWinnerStatNumber(leftWinnerSummaryPlayer?.proMode?.highestRate),
+      right: formatWinnerStatNumber(rightWinnerSummaryPlayer?.proMode?.highestRate),
+    },
+    {
+      label: 'High Run 2',
+      left: formatWinnerStatNumber(leftWinnerSummaryPlayer?.proMode?.secondHighestRate),
+      right: formatWinnerStatNumber(rightWinnerSummaryPlayer?.proMode?.secondHighestRate),
+    },
+  ];
 
   if (
     !viewModel.gameSettings ||
@@ -1011,6 +1241,194 @@ const GamePlay = () => {
                 {i18n.t('reWatch')}
               </Text>
             </Button>
+          </View>
+        ) : null}
+
+        {showCaromWinnerOverlay ? (
+          <View style={localStyles.caromWinnerOverlayBackdrop}>
+            <View style={localStyles.caromWinnerOverlayCard}>
+              <View style={localStyles.caromWinnerOverlayHeader}>
+                <Text
+                  style={localStyles.caromWinnerOverlayEyebrow}
+                  color={'#FF5A5A'}
+                  textAlign={'center'}
+                  fontWeight={'900'}
+                  fontSize={30}
+                  lineHeight={36}
+                  allowFontScaling={false}
+                  maxFontSizeMultiplier={1}>
+                  THỐNG KÊ TRẬN ĐẤU
+                </Text>
+                <Text
+                  style={localStyles.caromWinnerOverlayTitle}
+                  color={colors.white}
+                  textAlign={'center'}
+                  fontWeight={'900'}
+                  fontSize={64}
+                  lineHeight={72}
+                  allowFontScaling={false}
+                  maxFontSizeMultiplier={1}>
+                  {viewModel.winner?.name || ''}
+                </Text>
+                <Text
+                  style={localStyles.caromWinnerOverlaySubtitle}
+                  color={colors.white}
+                  textAlign={'center'}
+                  fontWeight={'700'}
+                  fontSize={34}
+                  lineHeight={40}
+                  allowFontScaling={false}
+                  maxFontSizeMultiplier={1}>
+                  Chúc mừng người chiến thắng
+                </Text>
+              </View>
+
+              <View style={localStyles.caromWinnerScoreHeader}>
+                <View
+                  style={[
+                    localStyles.caromWinnerScoreCell,
+                    localStyles.caromWinnerScoreCellName,
+                    localStyles.caromWinnerScoreCellNameLeft,
+                  ]}>
+                  <Text
+                    style={[
+                      localStyles.caromWinnerScoreNameText,
+                      localStyles.caromWinnerScoreNameTextDark,
+                    ]}
+                    color={'#111111'}
+                    textAlign={'center'}
+                    fontWeight={'900'}
+                    fontSize={48}
+                    lineHeight={56}
+                    allowFontScaling={false}
+                    maxFontSizeMultiplier={1}>
+                    {leftWinnerSummaryPlayer?.name || ''}
+                  </Text>
+                </View>
+                <View style={localStyles.caromWinnerScoreCell}>
+                  <Text
+                    style={localStyles.caromWinnerScoreValueText}
+                    color={colors.white}
+                    textAlign={'center'}
+                    fontWeight={'900'}
+                    fontSize={62}
+                    lineHeight={70}
+                    allowFontScaling={false}
+                    maxFontSizeMultiplier={1}>
+                    {formatWinnerStatNumber(leftWinnerSummaryPlayer?.totalPoint)}
+                  </Text>
+                </View>
+                <View style={[localStyles.caromWinnerScoreCell, localStyles.caromWinnerScoreCellMatch]}>
+                  <Text
+                    style={localStyles.caromWinnerScoreValueText}
+                    color={colors.white}
+                    textAlign={'center'}
+                    fontWeight={'900'}
+                    allowFontScaling={false}
+                    maxFontSizeMultiplier={1}>
+                    {' '}
+                  </Text>
+                </View>
+                <View style={localStyles.caromWinnerScoreCell}>
+                  <Text
+                    style={localStyles.caromWinnerScoreValueText}
+                    color={colors.white}
+                    textAlign={'center'}
+                    fontWeight={'900'}
+                    fontSize={62}
+                    lineHeight={70}
+                    allowFontScaling={false}
+                    maxFontSizeMultiplier={1}>
+                    {formatWinnerStatNumber(rightWinnerSummaryPlayer?.totalPoint)}
+                  </Text>
+                </View>
+                <View
+                  style={[
+                    localStyles.caromWinnerScoreCell,
+                    localStyles.caromWinnerScoreCellName,
+                    localStyles.caromWinnerScoreCellNameRight,
+                    localStyles.caromWinnerScoreCellLast,
+                  ]}>
+                  <Text
+                    style={[
+                      localStyles.caromWinnerScoreNameText,
+                      localStyles.caromWinnerScoreNameTextDark,
+                    ]}
+                    color={'#111111'}
+                    textAlign={'center'}
+                    fontWeight={'900'}
+                    fontSize={48}
+                    lineHeight={56}
+                    allowFontScaling={false}
+                    maxFontSizeMultiplier={1}>
+                    {rightWinnerSummaryPlayer?.name || ''}
+                  </Text>
+                </View>
+              </View>
+
+              <View style={localStyles.caromWinnerStatsTable}>
+                {winnerSummaryRows.map(row => (
+                  <View key={row.label} style={localStyles.caromWinnerStatsRow}>
+                    <View style={localStyles.caromWinnerStatsValueCell}>
+                      <Text
+                        style={localStyles.caromWinnerStatsValueText}
+                        color={colors.white}
+                        textAlign={'center'}
+                        fontWeight={'900'}
+                        fontSize={58}
+                        lineHeight={66}
+                        allowFontScaling={false}
+                        maxFontSizeMultiplier={1}>
+                        {row.left}
+                      </Text>
+                    </View>
+                    <View style={localStyles.caromWinnerStatsLabelCell}>
+                      <Text
+                        style={localStyles.caromWinnerStatsLabelText}
+                        color={colors.white}
+                        textAlign={'center'}
+                        fontWeight={'900'}
+                        fontSize={44}
+                        lineHeight={52}
+                        allowFontScaling={false}
+                        maxFontSizeMultiplier={1}>
+                        {row.label}
+                      </Text>
+                    </View>
+                    <View style={localStyles.caromWinnerStatsValueCell}>
+                      <Text
+                        style={localStyles.caromWinnerStatsValueText}
+                        color={colors.white}
+                        textAlign={'center'}
+                        fontWeight={'900'}
+                        fontSize={58}
+                        lineHeight={66}
+                        allowFontScaling={false}
+                        maxFontSizeMultiplier={1}>
+                        {row.right}
+                      </Text>
+                    </View>
+                  </View>
+                ))}
+              </View>
+
+              <Button
+                style={localStyles.caromWinnerOverlayCloseButton}
+                onPress={viewModel.onCloseWinnerSummary}>
+                <Text
+                  style={localStyles.caromWinnerOverlayCloseText}
+                  color={colors.white}
+                  textAlign={'center'}
+                  fontWeight={'900'}
+                  fontSize={42}
+                  lineHeight={50}
+                  allowFontScaling={false}
+                  maxFontSizeMultiplier={1}>
+                  XIN CHÚC MỪNG{`
+`}TRẬN ĐẤU ĐÃ KẾT THÚC
+                </Text>
+              </Button>
+            </View>
           </View>
         ) : null}
 

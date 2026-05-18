@@ -1132,6 +1132,7 @@ const handleZoomSliderComplete = useCallback(
         totalPoint: player?.totalPoint,
         currentPoint: player?.proMode?.currentPoint,
         highestRate: player?.proMode?.highestRate,
+        secondHighestRate: player?.proMode?.secondHighestRate,
         average: player?.proMode?.average,
       })),
       thumbnails: thumbnailOverlay,

@@ -57,6 +57,10 @@ const sanitizePlayerSettingsForRealm = (
                   player.proMode.highestRate == null
                     ? player.proMode.highestRate
                     : toSafeInteger(player.proMode.highestRate, 0),
+                secondHighestRate:
+                  (player.proMode as any).secondHighestRate == null
+                    ? (player.proMode as any).secondHighestRate
+                    : toSafeInteger((player.proMode as any).secondHighestRate, 0),
                 average:
                   player.proMode.average == null
                     ? player.proMode.average

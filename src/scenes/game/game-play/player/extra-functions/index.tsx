@@ -15,6 +15,7 @@ import styles from './styles';
 interface Props {
   index: number;
   highestRate: number;
+  secondHighestRate?: number;
   isOnPoolBreak: boolean;
   proModeEnabled: boolean;
   averagePoint: string;
@@ -42,11 +43,25 @@ const ExtraFunctions = (props: Props) => {
           justify={'center'}
           alignItems={'center'}>
           <Text fontWeight={'bold'} fontSize={labelFontSize}>
-            {'HR'}
+            {'HR1'}
           </Text>
           <View marginLeft={'5'}>
             <Text fontSize={48} fontWeight={'bold'} adjustsFontSizeToFit={true}>
               {props.highestRate}
+            </Text>
+          </View>
+        </View>
+        <View
+          flex={'1'}
+          direction={'row'}
+          justify={'center'}
+          alignItems={'center'}>
+          <Text fontWeight={'bold'} fontSize={labelFontSize}>
+            {'HR2'}
+          </Text>
+          <View marginLeft={'5'}>
+            <Text fontSize={48} fontWeight={'bold'} adjustsFontSizeToFit={true}>
+              {props.secondHighestRate || 0}
             </Text>
           </View>
         </View>
@@ -66,7 +81,14 @@ const ExtraFunctions = (props: Props) => {
         </View>
       </View>
     );
-  }, [adaptive, breakFontSize, labelFontSize, props.averagePoint, props.highestRate]);
+  }, [
+    adaptive,
+    breakFontSize,
+    labelFontSize,
+    props.averagePoint,
+    props.highestRate,
+    props.secondHighestRate,
+  ]);
 
   return (
     <View style={styles.functionWrapper} direction={'row'} justify={'between'}>

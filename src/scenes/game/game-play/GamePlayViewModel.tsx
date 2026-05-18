@@ -79,6 +79,24 @@ import {
 let countdownInterval: NodeJS.Timeout, warmUpCountdownInterval: NodeJS.Timeout;
 const {CameraService} = NativeModules;
 
+const getSafeRunPoint = (value?: number) => {
+  const numeric = Number(value ?? 0);
+  return Number.isFinite(numeric) ? numeric : 0;
+};
+
+const getTopTwoRuns = (player: Player, currentPoint: number) => {
+  const runs = [
+    getSafeRunPoint(player.proMode?.highestRate),
+    getSafeRunPoint(player.proMode?.secondHighestRate),
+    getSafeRunPoint(currentPoint),
+  ].sort((a, b) => b - a);
+
+  return {
+    highestRate: runs[0] || 0,
+    secondHighestRate: runs[1] || 0,
+  };
+};
+
 const playCountdownBeepSafely = () => {
   try {
     const soundModule = Sound as any;
@@ -1758,8 +1776,36 @@ const GamePlayViewModel = () => {
     );
   }, []);
 
+  const navigateBackAfterWinner = () => {
+    setTimeout(() => {
+      try {
+        if (navigation?.canGoBack?.()) {
+          navigation.goBack();
+          return;
+        }
+      } catch (error) {
+        console.log('[WinnerAlert] navigation.goBack failed', error);
+      }
+
+      try {
+        goBack();
+      } catch (error) {
+        console.log('[WinnerAlert] fallback goBack failed', error);
+      }
+    }, 0);
+  };
+
   const showWinnerAlertAndGoBack = useCallback((winnerPlayer?: Player) => {
     if (!winnerPlayer?.name || winnerAlertShownRef.current) {
+      return;
+    }
+
+    const shouldUseCaromWinnerSummary =
+      isCaromGame(gameSettings?.category) &&
+      gameSettings?.mode?.mode === 'pro' &&
+      (playerSettings?.playingPlayers?.length || 0) === 2;
+
+    if (shouldUseCaromWinnerSummary) {
       return;
     }
 
@@ -1773,28 +1819,97 @@ const GamePlayViewModel = () => {
           text: i18n.t('txtClose'),
           onPress: () => {
             winnerAlertShownRef.current = false;
-            setTimeout(() => {
-              try {
-                if (navigation?.canGoBack?.()) {
-                  navigation.goBack();
-                  return;
-                }
-              } catch (error) {
-                console.log('[WinnerAlert] navigation.goBack failed', error);
-              }
-
-              try {
-                goBack();
-              } catch (error) {
-                console.log('[WinnerAlert] fallback goBack failed', error);
-              }
-            }, 0);
+            resetCurrentMatchForNextGame();
+            navigateBackAfterWinner();
           },
         },
       ],
       {cancelable: false},
     );
-  }, [navigation]);
+  }, [gameSettings?.category, gameSettings?.mode?.mode, navigation, playerSettings?.playingPlayers?.length]);
+
+  const resetCurrentMatchForNextGame = () => {
+    pendingNewGameAfterViolateRef.current = false;
+    winnerAlertShownRef.current = false;
+    void setReplayResumeSnapshot(null);
+    void setLiveMatchSnapshot(null);
+    setReplayReturnRequestSync(null);
+    setWinner(undefined);
+    setIsStarted(false);
+    setIsPaused(false);
+    setIsMatchPaused(false);
+    setGameBreakEnabled(false);
+    setWarmUpCountdownTime(undefined);
+    clearInterval(warmUpCountdownInterval);
+    setTotalTurns(1);
+    setTotalTime(0);
+    setCurrentPlayerIndex(0);
+    setPoolBreakPlayerIndex(0);
+    setPool8SetWinnerIndex(null);
+    setPool8FreeSetWinnerIndex(null);
+    setPool8FreeHole10Scores([0, 0, 0, 0]);
+    setPool8Trackers(buildDefaultPool8Trackers());
+
+    if (isPoolGame(gameSettings?.category)) {
+      setPoolBreakEnabled(
+        !isPool15FreeGame(gameSettings?.category) &&
+          !!gameSettings?.mode?.countdownTime,
+      );
+    } else {
+      setPoolBreakEnabled(false);
+    }
+
+    if (gameSettings?.mode?.warmUpTime) {
+      setWarmUpCount(gameSettings.players.playingPlayers.length);
+    } else {
+      setWarmUpCount(undefined);
+    }
+
+    if (gameSettings?.mode?.countdownTime) {
+      const extraTimeBonus = isPoolGame(gameSettings?.category)
+        ? gameSettings.mode?.extraTimeBonus || 0
+        : 0;
+      setCountdownTime(gameSettings.mode.countdownTime + extraTimeBonus);
+    } else {
+      setCountdownTime(0);
+    }
+
+    // Lấy lại danh sách người chơi gốc từ cài đặt trận, không lấy playerSettings hiện tại.
+    // Như vậy nếu trong trận cũ đổi tên Người chơi 1 thành Người chơi 2,
+    // trận mới sẽ quay về đúng tên ban đầu và reset sạch điểm/thống kê.
+    const sourcePlayerSettings = cloneReplayValue(gameSettings?.players || playerSettings);
+
+    if (sourcePlayerSettings) {
+      setPlayerSettings({
+        ...sourcePlayerSettings,
+        playingPlayers: sourcePlayerSettings.playingPlayers.map((player, playerIndex) => ({
+          ...player,
+          name:
+            gameSettings?.players?.playingPlayers?.[playerIndex]?.name ||
+            player.name ||
+            `Người chơi ${playerIndex + 1}`,
+          totalPoint: 0,
+          violate: 0,
+          scoredBalls: [],
+          proMode: player.proMode
+            ? {
+                ...player.proMode,
+                highestRate: 0,
+                secondHighestRate: 0,
+                average: 0,
+                currentPoint: 0,
+                extraTimeTurns: gameSettings?.mode?.extraTimeTurns,
+              }
+            : player.proMode,
+        })),
+      } as PlayerSettings);
+    }
+  };
+
+  const onCloseWinnerSummary = () => {
+    resetCurrentMatchForNextGame();
+    navigateBackAfterWinner();
+  };
 
   const onChangePlayerPoint = useCallback(
     (addedPoint: number, index: number, stepIndex: number) => {
@@ -1810,6 +1925,11 @@ const GamePlayViewModel = () => {
 
       const player = playerSettings.playingPlayers[index];
       const nextTotalPoint = Number(player?.totalPoint || 0) + addedPoint;
+      const nextCurrentPoint = Number(player?.proMode?.currentPoint || 0) + addedPoint;
+      const winnerRuns = player ? getTopTwoRuns(player, nextCurrentPoint) : undefined;
+      const winnerAverage = Number(
+        (nextTotalPoint / Math.max(1, totalTurns + 1)).toFixed(2),
+      );
       const winnerPlayer =
         player && nextTotalPoint >= Number(gameSettings.players.goal.goal || 0)
           ? ({
@@ -1817,7 +1937,9 @@ const GamePlayViewModel = () => {
               totalPoint: nextTotalPoint,
               proMode: {
                 ...player.proMode,
-                currentPoint: Number(player.proMode?.currentPoint || 0) + addedPoint,
+                ...(winnerRuns || {}),
+                average: winnerAverage,
+                currentPoint: nextCurrentPoint,
               },
             } as Player)
           : undefined;
@@ -1828,13 +1950,27 @@ const GamePlayViewModel = () => {
             ...prev,
             playingPlayers: prev?.playingPlayers.map((currentPlayer, playerIndex) => {
               if (index === playerIndex) {
+                const updatedCurrentPoint =
+                  Number(currentPlayer.proMode?.currentPoint || 0) + addedPoint;
+                const updatedRuns = winnerPlayer
+                  ? getTopTwoRuns(currentPlayer, updatedCurrentPoint)
+                  : undefined;
+
                 return {
                   ...currentPlayer,
                   totalPoint: currentPlayer.totalPoint + addedPoint,
                   proMode: {
                     ...currentPlayer.proMode,
-                    currentPoint:
-                      (currentPlayer.proMode?.currentPoint || 0) + addedPoint,
+                    ...(updatedRuns || {}),
+                    average: winnerPlayer
+                      ? Number(
+                          (
+                            (Number(currentPlayer.totalPoint || 0) + addedPoint) /
+                            Math.max(1, totalTurns + 1)
+                          ).toFixed(2),
+                        )
+                      : currentPlayer.proMode?.average,
+                    currentPoint: updatedCurrentPoint,
                   },
                 };
               }
@@ -2590,8 +2726,8 @@ const GamePlayViewModel = () => {
             playingPlayers: prev?.playingPlayers.map((player, playerIndex) => {
               if (playerIndex === currentPlayerIndex) {
                 const currentPoint = Number(player.proMode?.currentPoint || 0);
-                const highestRate = Math.max(
-                  Number(player.proMode?.highestRate || 0),
+                const {highestRate, secondHighestRate} = getTopTwoRuns(
+                  player,
                   currentPoint,
                 );
                 const average = Number(
@@ -2606,6 +2742,7 @@ const GamePlayViewModel = () => {
                   proMode: {
                     ...player.proMode,
                     highestRate,
+                    secondHighestRate,
                     average,
                     currentPoint: 0,
                   },
@@ -3543,6 +3680,7 @@ const GamePlayViewModel = () => {
                   text: i18n.t('txtExitWithoutSaving'),
                   style: 'destructive',
                   onPress: () => {
+                    resetCurrentMatchForNextGame();
                     goBack();
                   },
                 },
@@ -3654,6 +3792,7 @@ const GamePlayViewModel = () => {
           setReplayResumeSnapshotSync(null);
           setLiveMatchSnapshotSync(null);
 
+          resetCurrentMatchForNextGame();
           goBack();
         } catch (error) {
           isEndingGameRef.current = false;
@@ -3673,63 +3812,17 @@ const GamePlayViewModel = () => {
 ]);
 
   const onReset = useCallback(() => {
-    pendingNewGameAfterViolateRef.current = false;
-    void setReplayResumeSnapshot(null);
-    void setLiveMatchSnapshot(null);
-    setReplayReturnRequestSync(null);
-    const shouldResetRackScore = false;
-
-    const newPlayerSettings = {
-      ...playerSettings,
-      playingPlayers: playerSettings?.playingPlayers.map(player => ({
-        ...player,
-        totalPoint: shouldResetRackScore ? 0 : player.totalPoint,
-        violate: 0,
-        scoredBalls: [],
-        proMode: {
-          ...player.proMode,
-          highestRate: 0,
-          average: 0,
-          extraTimeTurns: gameSettings?.mode?.extraTimeTurns,
-        },
-      })),
-    } as PlayerSettings;
-
-    setPlayerSettings(newPlayerSettings);
-    setWinner(undefined);
+    resetCurrentMatchForNextGame();
 
     if (
       isPoolGame(gameSettings?.category) &&
       gameSettings?.mode?.countdownTime
     ) {
-      const extraTimeBonus = gameSettings.mode?.extraTimeBonus || 0;
-      setCountdownTime(gameSettings.mode?.countdownTime! + extraTimeBonus);
-      setPoolBreakEnabled(!isPool15FreeGame(gameSettings?.category));
+      onSwitchPoolBreakPlayerIndex(0, playerIndex => {
+        setCurrentPlayerIndex(playerIndex);
+      });
     }
-
-    if (isPool15OnlyGame(gameSettings?.category)) {
-      setPool8SetWinnerIndex(null);
-      setPool8Trackers(prev => resetPool8Trackers(prev.length ? prev : buildDefaultPool8Trackers()));
-      setIsMatchPaused(false);
-      setPoolBreakEnabled(false);
-      return;
-    }
-
-    if (isPool15FreeGame(gameSettings?.category)) {
-      setPool8FreeSetWinnerIndex(null);
-      setIsMatchPaused(false);
-      return;
-    }
-
-    onSwitchPoolBreakPlayerIndex(poolBreakPlayerIndex, playerIndex => {
-      setCurrentPlayerIndex(playerIndex);
-    });
-  }, [
-    poolBreakPlayerIndex,
-    gameSettings,
-    playerSettings,
-    onSwitchPoolBreakPlayerIndex,
-  ]);
+  }, [gameSettings, onSwitchPoolBreakPlayerIndex]);
 
   const getLatestReplaySegmentPath = async () => {
     try {
@@ -4079,6 +4172,7 @@ const GamePlayViewModel = () => {
       onDecrementPool8FreeHole10,
       onSelectWinner,
       onClearWinner,
+      onCloseWinnerSummary,
       onPoolBreak,
       onStart,
       onEndTurn,
@@ -4155,6 +4249,7 @@ const GamePlayViewModel = () => {
     onDecrementPool8FreeHole10,
     onSelectWinner,
     onClearWinner,
+    onCloseWinnerSummary,
     onPoolBreak,
     onStart,
     onEndTurn,

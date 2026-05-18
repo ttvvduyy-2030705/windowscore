@@ -720,7 +720,7 @@ const GamePlayer = (
               ]}
               allowFontScaling={false}
               maxFontSizeMultiplier={1}>
-              High run
+              High run 1
             </RNText>
             <RNText
               style={[
@@ -732,6 +732,31 @@ const GamePlayer = (
               allowFontScaling={false}
               maxFontSizeMultiplier={1}>
               {viewModel.highestRate}
+            </RNText>
+          </View>
+
+          <View style={styles.statBlock}>
+            <RNText
+              style={[
+                styles.statLabel,
+                isMediumResponsiveLayout ? styles.statLabelMedium : undefined,
+                isCompactLayout && styles.statLabelCompact,
+                {color: secondaryTextColor},
+              ]}
+              allowFontScaling={false}
+              maxFontSizeMultiplier={1}>
+              High run 2
+            </RNText>
+            <RNText
+              style={[
+                styles.statValue,
+                isMediumResponsiveLayout ? styles.statValueMedium : undefined,
+                isCompactLayout && styles.statValueCompact,
+                textColorStyle,
+              ]}
+              allowFontScaling={false}
+              maxFontSizeMultiplier={1}>
+              {viewModel.secondHighestRate}
             </RNText>
           </View>
 

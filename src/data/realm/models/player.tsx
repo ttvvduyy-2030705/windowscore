@@ -26,6 +26,7 @@ export class PlayerGoalSchema extends Realm.Object<PlayerGoal> {
 export class PlayerProModeSchema extends Realm.Object<PlayerProMode> {
   // _id!: BSON.ObjectId;
   highestRate?: number;
+  secondHighestRate?: number;
   average?: number;
   currentPoint?: number;
   extraTimeTurns?: number | string;
@@ -35,6 +36,7 @@ export class PlayerProModeSchema extends Realm.Object<PlayerProMode> {
     properties: {
       // _id: 'objectId',
       highestRate: 'int?',
+      secondHighestRate: 'int?',
       average: 'int?',
       currentPoint: 'int?',
       extraTimeTurns: 'int?',

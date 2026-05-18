@@ -37,6 +37,7 @@ export type WindowsFfmpegOverlaySnapshot = {
     score?: number;
     currentPoint?: number;
     highestRate?: number;
+    secondHighestRate?: number;
     average?: number;
   }>;
 };
@@ -178,6 +179,7 @@ const normalizePlayer = (snapshot: WindowsFfmpegOverlaySnapshot | null | undefin
     score: Number(player.score || 0),
     currentPoint: Number(player.currentPoint || 0),
     highestRate: Number(player.highestRate || 0),
+    secondHighestRate: Number(player.secondHighestRate || 0),
     average: Number(player.average || 0),
   };
 };
@@ -193,6 +195,7 @@ const buildOverlayParity = (snapshot?: WindowsFfmpegOverlaySnapshot | null) => {
     ? players.slice(0, 2).some(player =>
         Number(player?.currentPoint || 0) !== 0 ||
         Number(player?.highestRate || 0) !== 0 ||
+        Number(player?.secondHighestRate || 0) !== 0 ||
         Number(player?.average || 0) !== 0,
       )
     : true;
@@ -412,8 +415,12 @@ const buildCaromOverlayFilter = (
   );
   const leftLine = escapeDrawText(`${left.flag ? `${left.flag} ` : ''}${left.name}  ${left.score}`);
   const rightLine = escapeDrawText(`${right.flag ? `${right.flag} ` : ''}${right.name}  ${right.score}`);
-  const leftStats = escapeDrawText(`HR ${left.highestRate || left.currentPoint || 0}  AVG ${left.average || 0}`);
-  const rightStats = escapeDrawText(`HR ${right.highestRate || right.currentPoint || 0}  AVG ${right.average || 0}`);
+  const leftStats = escapeDrawText(
+    `HR1 ${left.highestRate || left.currentPoint || 0}  HR2 ${left.secondHighestRate || 0}  AVG ${left.average || 0}`,
+  );
+  const rightStats = escapeDrawText(
+    `HR1 ${right.highestRate || right.currentPoint || 0}  HR2 ${right.secondHighestRate || 0}  AVG ${right.average || 0}`,
+  );
 
   return [
     `drawbox=x=0:y=0:w=iw:h=110:color=black@0.48:t=fill`,
@@ -863,6 +870,7 @@ export const toWindowsFfmpegSnapshot = (snapshot: any): WindowsFfmpegOverlaySnap
       score: Number(player?.totalPoint || 0),
       currentPoint: Number(player?.proMode?.currentPoint || 0),
       highestRate: Number(player?.proMode?.highestRate || player?.proMode?.highestRun || 0),
+      secondHighestRate: Number(player?.proMode?.secondHighestRate || 0),
       average: Number(player?.proMode?.average || 0),
     })),
   };
