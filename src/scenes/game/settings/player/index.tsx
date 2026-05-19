@@ -1,5 +1,5 @@
 import React, {memo, useCallback, useEffect, useMemo, useState} from 'react';
-import {FlatList, Image, Pressable, Text, TextInput, View} from 'react-native';
+import {ActivityIndicator, FlatList, Image, Pressable, ScrollView, Text, TextInput, View} from 'react-native';
 import Modal from 'components/WindowsModal';
 
 import i18n from 'i18n';
@@ -13,6 +13,7 @@ import {
 import {BilliardCategory} from 'types/category';
 import {Player, PlayerNumber, PlayerSettings} from 'types/player';
 import {GameMode} from 'types/settings';
+import type {AplusLiveSettingsPanelState} from '../SettingsViewModel';
 
 import {
   COUNTRIES,
@@ -31,6 +32,11 @@ interface Props {
   gameMode?: GameMode;
   category: BilliardCategory;
   playerSettings: PlayerSettings;
+  aplusLivePanel?: AplusLiveSettingsPanelState;
+  onRefreshAplusTournaments?: () => void;
+  onSelectAplusTournament?: (tournamentId: string) => void;
+  onChangeAplusMatchCode?: (matchCode: string) => void;
+  onCheckAplusLiveMatch?: () => void;
   onSelectPlayerNumber: (playerNumber: PlayerNumber) => void;
   onSelectPlayerGoal: (addedPoint: number, index: number) => void;
   onChangePlayerName: (newName: string, index: number) => void;
@@ -63,6 +69,69 @@ const getPlayerFlagText = (player?: {flag?: string}) => {
   const rawFlag = String(player?.flag || '').trim();
   return isRemoteUri(rawFlag) ? '' : rawFlag;
 };
+
+const normalizeAplusMatchCode = (value: string) => {
+  const rawCode = String(value || '').toUpperCase().replace(/[^T0-9]/g, '');
+
+  if (!rawCode) {
+    return '';
+  }
+
+  const hasLeadingT = rawCode.startsWith('T');
+  const digits = rawCode.replace(/T/g, '').replace(/\D/g, '').slice(0, 3);
+
+  if (hasLeadingT && !digits) {
+    return 'T';
+  }
+
+  return digits ? `T${digits}` : '';
+};
+
+const AplusMatchCodeInput = memo(
+  ({
+    value,
+    editable,
+    onChange,
+    inputStyle,
+    disabledStyle,
+  }: {
+    value: string;
+    editable: boolean;
+    onChange?: (matchCode: string) => void;
+    inputStyle: any[];
+    disabledStyle: any;
+  }) => {
+    const [draftCode, setDraftCode] = useState(normalizeAplusMatchCode(value));
+
+    useEffect(() => {
+      const normalizedValue = normalizeAplusMatchCode(value);
+      setDraftCode(prev => (prev === normalizedValue ? prev : normalizedValue));
+    }, [value]);
+
+    const handleChangeText = useCallback(
+      (text: string) => {
+        const normalizedValue = normalizeAplusMatchCode(text);
+        setDraftCode(normalizedValue);
+        onChange?.(normalizedValue);
+      },
+      [onChange],
+    );
+
+    return (
+      <TextInput
+        value={draftCode}
+        editable={editable}
+        onChangeText={handleChangeText}
+        placeholder="T01"
+        placeholderTextColor="#8E8E8E"
+        autoCapitalize="characters"
+        autoCorrect={false}
+        selectTextOnFocus={false}
+        style={[inputStyle, !editable && disabledStyle]}
+      />
+    );
+  },
+);
 
 const EditablePlayerNameInput = memo(
   ({
@@ -154,6 +223,11 @@ const PlayerSettingsComponent = ({
   gameMode,
   category,
   playerSettings,
+  aplusLivePanel,
+  onRefreshAplusTournaments,
+  onSelectAplusTournament,
+  onChangeAplusMatchCode,
+  onCheckAplusLiveMatch,
   onSelectPlayerNumber,
   onSelectPlayerGoal,
   onChangePlayerName,
@@ -473,6 +547,211 @@ const PlayerSettingsComponent = ({
     ],
   );
 
+  const renderAplusLivePanel = useCallback(() => {
+    if (gameMode !== 'pro') {
+      return null;
+    }
+
+    const panel = aplusLivePanel;
+    const isTwoPlayer = playerSettings.playerNumber === 2;
+    const loading = panel?.connectStatus === 'loading';
+    const checking = panel?.connectStatus === 'checking';
+    const claiming = panel?.connectStatus === 'claiming';
+    const disabled = !isTwoPlayer || loading || checking || claiming;
+    const selectedTournamentId = panel?.selectedTournamentId || '';
+    const tournaments = panel?.tournaments || [];
+    const selectedTournament = tournaments.find(
+      item => item._id === selectedTournamentId,
+    );
+    const matchCode = panel?.matchCodeInput || '';
+    const isValidMatchCode = /^T\d{1,3}$/.test(matchCode);
+    const canCheck = Boolean(
+      isTwoPlayer &&
+        isValidMatchCode &&
+        Boolean(selectedTournamentId) &&
+        !loading &&
+        !checking &&
+        !claiming,
+    );
+    const needsTournament = Boolean(isTwoPlayer && isValidMatchCode && !selectedTournamentId);
+
+    return (
+      <View style={styles.aplusPanel}>
+        <View style={styles.aplusPanelHeaderRow}>
+          <View style={styles.aplusPanelTitleBlock}>
+            <Text style={styles.aplusPanelTitle}>
+              {isEnglish ? 'Aplus web connection' : 'Kết nối web Aplus'}
+            </Text>
+            <Text style={styles.aplusPanelSubtitle}>
+              {isEnglish
+                ? 'Only visible in Competition mode.'
+                : 'Chỉ hiện ở chế độ Thi đấu.'}
+            </Text>
+          </View>
+
+          <Pressable
+            onPress={onRefreshAplusTournaments}
+            disabled={loading}
+            style={({pressed}) => [
+              styles.aplusSmallButton,
+              loading && styles.aplusButtonDisabled,
+              pressed && !loading && styles.selectorButtonPressed,
+            ]}>
+            {loading ? (
+              <ActivityIndicator size="small" color="#FFFFFF" />
+            ) : (
+              <Text style={styles.aplusSmallButtonText}>
+                {isEnglish ? 'Reload' : 'Tải lại'}
+              </Text>
+            )}
+          </Pressable>
+        </View>
+
+        {!isTwoPlayer ? (
+          <Text style={styles.aplusWarningText}>
+            {isEnglish
+              ? 'Aplus web connection only supports 2 players.'
+              : 'Kết nối web chỉ hỗ trợ 2 người chơi.'}
+          </Text>
+        ) : null}
+
+        <Text style={styles.aplusFieldLabel}>
+          {isEnglish ? 'Tournament' : 'Chọn giải'}
+        </Text>
+
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.aplusTournamentList}>
+          {tournaments.length ? (
+            tournaments.map(item => {
+              const active = item._id === selectedTournamentId;
+              return (
+                <Pressable
+                  key={item._id}
+                  disabled={disabled}
+                  onPress={() => onSelectAplusTournament?.(item._id)}
+                  style={({pressed}) => [
+                    styles.aplusTournamentButton,
+                    active && styles.aplusTournamentButtonActive,
+                    disabled && styles.aplusButtonDisabled,
+                    pressed && !disabled && styles.selectorButtonPressed,
+                  ]}>
+                  <Text
+                    numberOfLines={1}
+                    style={[
+                      styles.aplusTournamentText,
+                      active && styles.aplusTournamentTextActive,
+                    ]}>
+                    {item.name || item.slug || item._id}
+                  </Text>
+                </Pressable>
+              );
+            })
+          ) : (
+            <Text style={styles.aplusEmptyText}>
+              {loading
+                ? isEnglish
+                  ? 'Loading tournaments...'
+                  : 'Đang tải danh sách giải...'
+                : isEnglish
+                ? 'No tournament loaded.'
+                : 'Chưa tải được giải nào.'}
+            </Text>
+          )}
+        </ScrollView>
+
+        <View style={styles.aplusInputRow}>
+          <View style={styles.aplusInputGroup}>
+            <Text style={styles.aplusFieldLabel}>
+              {isEnglish ? 'Match code' : 'Mã trận'}
+            </Text>
+            <AplusMatchCodeInput
+              value={matchCode}
+              editable={!disabled}
+              onChange={onChangeAplusMatchCode}
+              inputStyle={[styles.aplusInput]}
+              disabledStyle={styles.aplusInputDisabled}
+            />
+          </View>
+
+          <Pressable
+            onPress={onCheckAplusLiveMatch}
+            disabled={!canCheck}
+            style={({pressed}) => [
+              styles.aplusPrimaryButton,
+              !canCheck && styles.aplusButtonDisabled,
+              pressed && canCheck && styles.selectorButtonPressed,
+            ]}>
+            {checking || claiming ? (
+              <ActivityIndicator size="small" color="#FFFFFF" />
+            ) : (
+              <Text style={styles.aplusPrimaryButtonText}>
+                {isEnglish ? 'Check' : 'Kiểm tra'}
+              </Text>
+            )}
+          </Pressable>
+        </View>
+
+        {selectedTournament ? (
+          <Text style={styles.aplusHintText} numberOfLines={1}>
+            {isEnglish ? 'Selected: ' : 'Đang chọn: '}
+            {selectedTournament.name || selectedTournament.slug}
+          </Text>
+        ) : null}
+
+        {needsTournament ? (
+          <Text style={styles.aplusWarningText}>
+            {isEnglish
+              ? 'The match code is valid. Reload and select a tournament before checking.'
+              : 'Mã trận đã hợp lệ. Hãy bấm Tải lại và chọn giải trước khi kiểm tra.'}
+          </Text>
+        ) : null}
+
+        {isTwoPlayer && matchCode.length > 0 && !isValidMatchCode ? (
+          <Text style={styles.aplusHintText}>
+            {isEnglish
+              ? 'Enter T + number, for example T01 or T12.'
+              : 'Nhập mã dạng T + số, ví dụ T01 hoặc T12.'}
+          </Text>
+        ) : null}
+
+        {panel?.connectError ? (
+          <Text style={styles.aplusErrorText}>{panel.connectError}</Text>
+        ) : null}
+
+        {panel?.connectMessage ? (
+          <Text style={styles.aplusSuccessText}>{panel.connectMessage}</Text>
+        ) : null}
+
+        {panel?.previewMatch ? (
+          <View style={styles.aplusMatchPreview}>
+            <Text style={styles.aplusMatchPreviewCode}>
+              {panel.previewMatch.matchCode || matchCode}
+            </Text>
+            <Text style={styles.aplusMatchPreviewText} numberOfLines={2}>
+              {panel.previewMatch.player1}  vs  {panel.previewMatch.player2}
+            </Text>
+            <Text style={styles.aplusMatchPreviewMeta}>
+              {panel.previewMatch.roundName || ''}
+              {panel.previewMatch.tableNumber ? ` • ${panel.previewMatch.tableNumber}` : ''}
+            </Text>
+          </View>
+        ) : null}
+      </View>
+    );
+  }, [
+    aplusLivePanel,
+    gameMode,
+    isEnglish,
+    onChangeAplusMatchCode,
+    onCheckAplusLiveMatch,
+    onRefreshAplusTournaments,
+    onSelectAplusTournament,
+    playerSettings.playerNumber,
+    styles,
+  ]);
+
   return (
     <View style={styles.container}>
       {showTitle ? <Text style={styles.mainTitle}>{title}</Text> : null}
@@ -493,6 +772,8 @@ const PlayerSettingsComponent = ({
       <View style={styles.playerList}>
         {playerSettings.playingPlayers.map(renderPlayerItem)}
       </View>
+
+      {renderAplusLivePanel()}
 
       <Modal
         visible={countryModalVisible}

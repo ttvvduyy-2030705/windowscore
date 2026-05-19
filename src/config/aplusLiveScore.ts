@@ -3,7 +3,7 @@ import {Platform} from 'react-native';
 // Local backend dùng khi chạy debug trên máy dev.
 // Nếu backend local không chạy cùng máy Windows app, đổi localhost thành IP LAN của máy chạy BE.
 export const APLUS_LIVE_SCORE_DEV_API_BASE_URL =
-  'http://localhost:5000/api/live';
+  'http://127.0.0.1:5000/api/live';
 
 // URL production sau khi deploy backend Aplus.
 // Khi đưa lên hosting thật, đảm bảo backend đã mount /api/live và có LIVE_SCORE_API_KEY giống key bên dưới.

@@ -1,5 +1,16 @@
-import {useCallback, useContext, useEffect, useMemo, useRef, useState} from 'react';
-import {useFocusEffect, useNavigation, useRoute} from '@react-navigation/native';
+import {
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
+import {
+  useFocusEffect,
+  useNavigation,
+  useRoute,
+} from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {Alert, Platform} from 'react-native';
 import {useSelector, useDispatch} from 'react-redux';
@@ -75,6 +86,14 @@ import {
   updateWindowsFfmpegOverlay,
   type WindowsFfmpegLiveConfig,
 } from 'services/livestream/WindowsFfmpegLiveEngine';
+import {
+  clearSavedAplusLiveSession,
+  finishAplusLiveMatch,
+  heartbeatAplusLiveMatch,
+  releaseAplusLiveMatch,
+  sendAplusLiveScore,
+} from 'services/aplusLiveScore';
+import type {AplusLiveMatch, AplusLiveSession} from 'types/aplusLiveScore';
 
 let countdownInterval: NodeJS.Timeout, warmUpCountdownInterval: NodeJS.Timeout;
 const {CameraService} = NativeModules;
@@ -108,7 +127,8 @@ const playCountdownBeepSafely = () => {
 
     console.log('[WindowsVideoCrashGuard]', {
       component: 'GamePlayViewModel',
-      reason: 'Sound.beep is not available on this platform; skipped countdown beep',
+      reason:
+        'Sound.beep is not available on this platform; skipped countdown beep',
       preventedRedScreen: true,
     });
   } catch (error) {
@@ -137,13 +157,18 @@ type StorageShape = {
 };
 
 type GameplayLiveRouteParams = {
-  gameSettings?: GameSettings;
+  gameSettings?: GameSettings & {
+    aplusLiveSession?: AplusLiveSession;
+    aplusLiveMatch?: AplusLiveMatch;
+  };
   livestreamPlatform?: 'facebook' | 'youtube' | 'tiktok' | 'device' | null;
   saveToDeviceWhileStreaming?: boolean;
   liveVisibility?: 'public' | 'private' | 'unlisted';
   liveAccountName?: string;
   liveAccountId?: string;
   liveSetupToken?: string;
+  aplusLiveSession?: AplusLiveSession;
+  aplusLiveMatch?: AplusLiveMatch;
 };
 
 const normalizeGameplayLivestreamPlatform = (value: any) => {
@@ -155,7 +180,6 @@ const normalizeGameplayLivestreamPlatform = (value: any) => {
     : null;
 };
 
-
 const DEBUG_MATCH_RESTORE = false;
 const debugMatchRestoreLog = (...args: any[]) => {
   if (__DEV__ && DEBUG_MATCH_RESTORE) {
@@ -166,7 +190,6 @@ const debugMatchRestoreLog = (...args: any[]) => {
 const setYouTubeNativeCameraLock = (locked: boolean) => {
   (globalThis as any).__APLUS_YOUTUBE_NATIVE_LOCK__ = locked;
 };
-
 
 const getCurrentCameraSource = (): 'back' | 'front' | 'external' => {
   const value = (globalThis as any).__APLUS_CURRENT_CAMERA_SOURCE__;
@@ -229,7 +252,6 @@ const resolveLockedLiveSource = (
 
   return null;
 };
-
 
 const LIVE_SNAPSHOT_SYNC_MIN_MS = 5000;
 const REPLAY_TIMELINE_TIME_BUCKET_SECONDS = 3;
@@ -302,8 +324,7 @@ const buildDefaultPool8Trackers = (): Pool8Tracker[] => [
 const resetPool8Trackers = (trackers: Pool8Tracker[]): Pool8Tracker[] =>
   trackers.map(tracker => ({...tracker, activeIndex: 0}));
 
-const REPLAY_RESUME_SNAPSHOT_STORAGE_KEY =
-  '@APLUS_REPLAY_RESUME_SNAPSHOT_V3';
+const REPLAY_RESUME_SNAPSHOT_STORAGE_KEY = '@APLUS_REPLAY_RESUME_SNAPSHOT_V3';
 
 const LIVE_MATCH_SNAPSHOT_STORAGE_KEY = '@APLUS_LIVE_MATCH_SNAPSHOT_V1';
 
@@ -392,7 +413,6 @@ const cloneReplayValue = <T,>(value: T): T => {
   }
 };
 
-
 const getFinalScoreSnapshot = (settings?: PlayerSettings | null) => {
   const players = Array.isArray(settings?.playingPlayers)
     ? settings!.playingPlayers
@@ -447,9 +467,7 @@ const getReplayResumeSnapshotSync = (): ReplayResumeSnapshot | null => {
   return snapshot ? cloneReplayValue(snapshot) : null;
 };
 
-const setReplayReturnRequestSync = (
-  request: ReplayReturnRequest | null,
-) => {
+const setReplayReturnRequestSync = (request: ReplayReturnRequest | null) => {
   (globalThis as any).__APLUS_REPLAY_RETURN_REQUEST__ = request
     ? cloneReplayValue(request)
     : null;
@@ -460,7 +478,6 @@ const getReplayReturnRequestSync = (): ReplayReturnRequest | null => {
   return request ? cloneReplayValue(request) : null;
 };
 
-
 type ActiveGameplaySession = {
   matchSessionId?: string;
   webcamFolderName?: string;
@@ -470,7 +487,9 @@ type ActiveGameplaySession = {
 
 const ACTIVE_GAMEPLAY_SESSION_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 
-const setActiveGameplaySessionSync = (session: ActiveGameplaySession | null) => {
+const setActiveGameplaySessionSync = (
+  session: ActiveGameplaySession | null,
+) => {
   (globalThis as any).__APLUS_ACTIVE_GAMEPLAY_SESSION__ = session
     ? cloneReplayValue({
         ...session,
@@ -488,12 +507,17 @@ const clearActiveGameplaySessionSync = () => {
   setActiveGameplaySessionSync(null);
 };
 
-const isActiveGameplaySessionReusable = (session: ActiveGameplaySession | null) => {
+const isActiveGameplaySessionReusable = (
+  session: ActiveGameplaySession | null,
+) => {
   if (!session?.matchSessionId || !session?.webcamFolderName) {
     return false;
   }
 
-  if (session.savedAt && Date.now() - session.savedAt > ACTIVE_GAMEPLAY_SESSION_MAX_AGE_MS) {
+  if (
+    session.savedAt &&
+    Date.now() - session.savedAt > ACTIVE_GAMEPLAY_SESSION_MAX_AGE_MS
+  ) {
     return false;
   }
 
@@ -520,29 +544,30 @@ const setReplayResumeSnapshot = async (
   }
 };
 
-const getReplayResumeSnapshot = async (): Promise<ReplayResumeSnapshot | null> => {
-  const runtimeSnapshot = getReplayResumeSnapshotSync();
-  if (runtimeSnapshot) {
-    return runtimeSnapshot;
-  }
-
-  try {
-    const rawSnapshot = await AsyncStorage.getItem(
-      REPLAY_RESUME_SNAPSHOT_STORAGE_KEY,
-    );
-
-    if (!rawSnapshot) {
-      return null;
+const getReplayResumeSnapshot =
+  async (): Promise<ReplayResumeSnapshot | null> => {
+    const runtimeSnapshot = getReplayResumeSnapshotSync();
+    if (runtimeSnapshot) {
+      return runtimeSnapshot;
     }
 
-    const parsedSnapshot = JSON.parse(rawSnapshot) as ReplayResumeSnapshot;
-    setReplayResumeSnapshotSync(parsedSnapshot);
-    return cloneReplayValue(parsedSnapshot);
-  } catch (error) {
-    console.log('[Replay] Failed to load resume snapshot:', error);
-    return null;
-  }
-};
+    try {
+      const rawSnapshot = await AsyncStorage.getItem(
+        REPLAY_RESUME_SNAPSHOT_STORAGE_KEY,
+      );
+
+      if (!rawSnapshot) {
+        return null;
+      }
+
+      const parsedSnapshot = JSON.parse(rawSnapshot) as ReplayResumeSnapshot;
+      setReplayResumeSnapshotSync(parsedSnapshot);
+      return cloneReplayValue(parsedSnapshot);
+    } catch (error) {
+      console.log('[Replay] Failed to load resume snapshot:', error);
+      return null;
+    }
+  };
 
 const isReplayResumeSnapshotReusable = (
   snapshot: ReplayResumeSnapshot | null,
@@ -586,6 +611,18 @@ const isReplayResumeSnapshotMatch = (
   return expectedFolderName === snapshot.webcamFolderName;
 };
 
+const getAplusPlayerScore = (player?: Player) => {
+  const numericScore = Number(player?.totalPoint ?? 0);
+  return Number.isFinite(numericScore) ? numericScore : 0;
+};
+
+const getAplusLiveErrorMessage = (error: any) => {
+  return (
+    error?.message ||
+    'Không đồng bộ được điểm lên web Aplus. App vẫn tiếp tục trận và sẽ thử lại.'
+  );
+};
+
 const GamePlayViewModel = () => {
   const {language} = useContext(LanguageContext);
   const navigation = useNavigation<any>();
@@ -594,23 +631,32 @@ const GamePlayViewModel = () => {
   const realm = useRealm();
   const dispatch = useDispatch();
   const {updateGameSettings} = useSelector((state: RootState) => state.UI.game);
-  const {gameSettings: reduxGameSettings} = useSelector((state: RootState) => state.game);
+  const {gameSettings: reduxGameSettings} = useSelector(
+    (state: RootState) => state.game,
+  );
   const routeGameSettings = routeParams.gameSettings;
   const gameSettings = useMemo(
     () => routeGameSettings ?? reduxGameSettings,
     [routeGameSettings, reduxGameSettings],
   );
-  const selectedLivestreamPlatform =
-    (normalizeGameplayLivestreamPlatform(routeParams.livestreamPlatform) ||
-      normalizeGameplayLivestreamPlatform((gameSettings as any)?.livestreamPlatform) ||
-      null) as 'facebook' | 'youtube' | 'tiktok' | 'device' | null;
+  const selectedLivestreamPlatform = (normalizeGameplayLivestreamPlatform(
+    routeParams.livestreamPlatform,
+  ) ||
+    normalizeGameplayLivestreamPlatform(
+      (gameSettings as any)?.livestreamPlatform,
+    ) ||
+    null) as 'facebook' | 'youtube' | 'tiktok' | 'device' | null;
   const saveToDeviceWhileStreaming = Boolean(
     routeParams.saveToDeviceWhileStreaming ??
-      (gameSettings as any)?.saveToDeviceWhileStreaming ??
-      false,
+    (gameSettings as any)?.saveToDeviceWhileStreaming ??
+    false,
   );
   const shouldUseYouTubeLive = selectedLivestreamPlatform === 'youtube';
   const shouldUseLocalRecordingOnly = selectedLivestreamPlatform !== 'youtube';
+  const aplusLiveSession =
+    routeParams.aplusLiveSession || (gameSettings as any)?.aplusLiveSession;
+  const aplusLiveMatch =
+    routeParams.aplusLiveMatch || (gameSettings as any)?.aplusLiveMatch;
   const gameSettingsSignature = useMemo(() => {
     return buildGameSettingsSignature(gameSettings);
   }, [
@@ -642,6 +688,30 @@ const GamePlayViewModel = () => {
   const lastLiveSnapshotSyncAtRef = useRef(0);
   const lastReplayTimelineWriteSignatureRef = useRef('');
   const lastPruneCompletedSegmentsRef = useRef(0);
+  const aplusLiveSessionRef = useRef<AplusLiveSession | undefined>(undefined);
+  const aplusLiveStreamUrlRef = useRef('');
+  const aplusLiveHeartbeatIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const aplusLiveHeartbeatSendingRef = useRef(false);
+  const aplusLiveFinishedRef = useRef(false);
+  const aplusLiveFinishInFlightRef = useRef(false);
+  const aplusLiveReleaseInFlightRef = useRef(false);
+  const aplusLiveScoreDebounceRef = useRef<NodeJS.Timeout | null>(null);
+  const aplusLiveScoreRetryRef = useRef<NodeJS.Timeout | null>(null);
+  const aplusLiveScoreSendingRef = useRef(false);
+  const aplusLiveScoreInitializedRef = useRef(false);
+  const aplusLiveLastScoreSignatureRef = useRef('');
+  const aplusLivePendingScoreRef = useRef<
+    | {
+        score1: number;
+        score2: number;
+        status: 'playing';
+        isLive: true;
+        livestreamUrl?: string;
+        streamStatus?: 'live' | 'offline' | 'ended';
+        signature: string;
+      }
+    | undefined
+  >(undefined);
   const remoteHandlersRef = useRef({
     start: () => {},
     warmUp: () => {},
@@ -655,8 +725,12 @@ const GamePlayViewModel = () => {
     left: () => {},
     right: () => {},
   });
-  const recordingFinishedResolverRef = useRef<((videoPath?: string) => void) | null>(null);
-  const recordingFinishedPromiseRef = useRef<Promise<string | undefined> | null>(null);
+  const recordingFinishedResolverRef = useRef<
+    ((videoPath?: string) => void) | null
+  >(null);
+  const recordingFinishedPromiseRef = useRef<Promise<
+    string | undefined
+  > | null>(null);
   const shouldStartRecordingRef = useRef(false);
   const pendingYouTubeNativeStartRef = useRef<{
     url: string;
@@ -685,10 +759,11 @@ const GamePlayViewModel = () => {
     isReplayResumeSnapshotReusable(replayResumeSnapshotOnMount)
       ? replayResumeSnapshotOnMount
       : null;
-  const reusableActiveGameplaySessionOnMount =
-    isActiveGameplaySessionReusable(activeGameplaySessionOnMount)
-      ? activeGameplaySessionOnMount
-      : null;
+  const reusableActiveGameplaySessionOnMount = isActiveGameplaySessionReusable(
+    activeGameplaySessionOnMount,
+  )
+    ? activeGameplaySessionOnMount
+    : null;
   const initialMatchSessionId =
     reusableReplayResumeSnapshotOnMount?.matchSessionId ||
     replayReturnRequestOnMount?.matchSessionId ||
@@ -709,22 +784,28 @@ const GamePlayViewModel = () => {
       value:
         | PlayerSettings
         | undefined
-        | ((previous: PlayerSettings | undefined) => PlayerSettings | undefined),
+        | ((
+            previous: PlayerSettings | undefined,
+          ) => PlayerSettings | undefined),
     ) => {
       const optimisticNext =
         typeof value === 'function'
-          ? (value as (
-              previous: PlayerSettings | undefined,
-            ) => PlayerSettings | undefined)(playerSettingsRef.current)
+          ? (
+              value as (
+                previous: PlayerSettings | undefined,
+              ) => PlayerSettings | undefined
+            )(playerSettingsRef.current)
           : value;
       playerSettingsRef.current = cloneReplayValue(optimisticNext);
 
       setPlayerSettingsState(previous => {
         const next =
           typeof value === 'function'
-            ? (value as (
-                previous: PlayerSettings | undefined,
-              ) => PlayerSettings | undefined)(previous)
+            ? (
+                value as (
+                  previous: PlayerSettings | undefined,
+                ) => PlayerSettings | undefined
+              )(previous)
             : value;
         playerSettingsRef.current = cloneReplayValue(next);
         return next;
@@ -736,12 +817,24 @@ const GamePlayViewModel = () => {
   const winnerAlertShownRef = useRef(false);
   const pendingNewGameAfterViolateRef = useRef(false);
   const [isCameraReady, setIsCameraReady] = useState(false);
-  const [pool8FreeHole10Scores, setPool8FreeHole10Scores] = useState<number[]>([0, 0, 0, 0]);
-  const [pool8FreeSetWinnerIndex, setPool8FreeSetWinnerIndex] = useState<number | null>(null);
-  const [pool8Trackers, setPool8Trackers] = useState<Pool8Tracker[]>(buildDefaultPool8Trackers);
-  const [pool8SetWinnerIndex, setPool8SetWinnerIndex] = useState<number | null>(null);
+  const [pool8FreeHole10Scores, setPool8FreeHole10Scores] = useState<number[]>([
+    0, 0, 0, 0,
+  ]);
+  const [pool8FreeSetWinnerIndex, setPool8FreeSetWinnerIndex] = useState<
+    number | null
+  >(null);
+  const [pool8Trackers, setPool8Trackers] = useState<Pool8Tracker[]>(
+    buildDefaultPool8Trackers,
+  );
+  const [pool8SetWinnerIndex, setPool8SetWinnerIndex] = useState<number | null>(
+    null,
+  );
   const [cameraSessionNonce, setCameraSessionNonce] = useState(0);
   const replayReturnAtRef = useRef(0);
+  const [aplusLiveSyncStatus, setAplusLiveSyncStatus] = useState<
+    'idle' | 'online' | 'syncing' | 'error'
+  >(aplusLiveSession ? 'online' : 'idle');
+  const [aplusLiveSyncError, setAplusLiveSyncError] = useState('');
 
   useEffect(() => {
     isRecordingRef.current = isRecording;
@@ -760,6 +853,405 @@ const GamePlayViewModel = () => {
   }, [playerSettings]);
 
   useEffect(() => {
+    aplusLiveSessionRef.current = aplusLiveSession;
+
+    if (!aplusLiveSession) {
+      setAplusLiveSyncStatus('idle');
+      setAplusLiveSyncError('');
+      aplusLiveFinishedRef.current = false;
+      aplusLiveFinishInFlightRef.current = false;
+      aplusLiveReleaseInFlightRef.current = false;
+      aplusLiveScoreInitializedRef.current = false;
+      aplusLiveLastScoreSignatureRef.current = '';
+      aplusLivePendingScoreRef.current = undefined;
+      aplusLiveStreamUrlRef.current = '';
+      return;
+    }
+
+    aplusLiveFinishedRef.current = false;
+    aplusLiveFinishInFlightRef.current = false;
+    aplusLiveReleaseInFlightRef.current = false;
+    setAplusLiveSyncStatus('online');
+    setAplusLiveSyncError('');
+  }, [aplusLiveSession?.matchId, aplusLiveSession?.sessionToken]);
+
+  const flushAplusLiveScore = useCallback(async () => {
+    const session = aplusLiveSessionRef.current;
+    const pendingScore = aplusLivePendingScoreRef.current;
+
+    if (!session || !pendingScore || aplusLiveScoreSendingRef.current) {
+      return;
+    }
+
+    aplusLiveScoreSendingRef.current = true;
+    setAplusLiveSyncStatus('syncing');
+
+    try {
+      const payload = {
+        score1: pendingScore.score1,
+        score2: pendingScore.score2,
+        status: pendingScore.status,
+        isLive: pendingScore.isLive,
+        ...(pendingScore.livestreamUrl !== undefined
+          ? {livestreamUrl: pendingScore.livestreamUrl}
+          : {}),
+        ...(pendingScore.streamStatus ? {streamStatus: pendingScore.streamStatus} : {}),
+      };
+
+      await sendAplusLiveScore(session.matchId, session.sessionToken, payload);
+
+      aplusLiveLastScoreSignatureRef.current = pendingScore.signature;
+      setAplusLiveSyncStatus('online');
+      setAplusLiveSyncError('');
+    } catch (error: any) {
+      const message = getAplusLiveErrorMessage(error);
+      console.log(
+        '[AplusLiveScore] score sync failed; will retry latest score',
+        {
+          matchId: session.matchId,
+          message,
+        },
+      );
+      setAplusLiveSyncStatus('error');
+      setAplusLiveSyncError(message);
+
+      if (aplusLiveScoreRetryRef.current) {
+        clearTimeout(aplusLiveScoreRetryRef.current);
+      }
+
+      aplusLiveScoreRetryRef.current = setTimeout(() => {
+        void flushAplusLiveScore();
+      }, 3000);
+    } finally {
+      aplusLiveScoreSendingRef.current = false;
+
+      const latestPendingScore = aplusLivePendingScoreRef.current;
+      if (
+        latestPendingScore &&
+        latestPendingScore.signature !== aplusLiveLastScoreSignatureRef.current
+      ) {
+        if (aplusLiveScoreDebounceRef.current) {
+          clearTimeout(aplusLiveScoreDebounceRef.current);
+        }
+
+        aplusLiveScoreDebounceRef.current = setTimeout(() => {
+          void flushAplusLiveScore();
+        }, 150);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    const session = aplusLiveSessionRef.current;
+    const playingPlayers = playerSettings?.playingPlayers || [];
+    const leftPlayer = playingPlayers[0];
+    const rightPlayer = playingPlayers[1];
+
+    if (!session || !leftPlayer || !rightPlayer) {
+      return;
+    }
+
+    const score1 = getAplusPlayerScore(leftPlayer);
+    const score2 = getAplusPlayerScore(rightPlayer);
+    const livestreamUrl = aplusLiveStreamUrlRef.current;
+    const signature = `${session.matchId}:${score1}:${score2}:playing:${livestreamUrl}`;
+
+    if (!aplusLiveScoreInitializedRef.current) {
+      aplusLiveScoreInitializedRef.current = true;
+      aplusLiveLastScoreSignatureRef.current = signature;
+      return;
+    }
+
+    if (signature === aplusLiveLastScoreSignatureRef.current) {
+      return;
+    }
+
+    aplusLivePendingScoreRef.current = {
+      score1,
+      score2,
+      status: 'playing',
+      isLive: true,
+      ...(livestreamUrl ? {livestreamUrl, streamStatus: 'live' as const} : {}),
+      signature,
+    };
+
+    if (aplusLiveScoreDebounceRef.current) {
+      clearTimeout(aplusLiveScoreDebounceRef.current);
+    }
+
+    aplusLiveScoreDebounceRef.current = setTimeout(() => {
+      void flushAplusLiveScore();
+    }, 250);
+  }, [
+    flushAplusLiveScore,
+    playerSettings?.playingPlayers?.[0]?.totalPoint,
+    playerSettings?.playingPlayers?.[1]?.totalPoint,
+  ]);
+
+  useEffect(() => {
+    return () => {
+      if (aplusLiveScoreDebounceRef.current) {
+        clearTimeout(aplusLiveScoreDebounceRef.current);
+      }
+
+      if (aplusLiveScoreRetryRef.current) {
+        clearTimeout(aplusLiveScoreRetryRef.current);
+      }
+
+      if (aplusLiveHeartbeatIntervalRef.current) {
+        clearInterval(aplusLiveHeartbeatIntervalRef.current);
+      }
+    };
+  }, []);
+
+  const getAplusLiveCurrentScores = useCallback((settings?: PlayerSettings) => {
+    const playingPlayers = settings?.playingPlayers || [];
+
+    return {
+      score1: getAplusPlayerScore(playingPlayers[0]),
+      score2: getAplusPlayerScore(playingPlayers[1]),
+    };
+  }, []);
+
+  const publishAplusLivestreamUrlToWeb = useCallback(
+    async (url?: string | null, source = 'youtube') => {
+      const cleanUrl = String(url || '').trim();
+      const session = aplusLiveSessionRef.current;
+
+      if (!cleanUrl || !session || aplusLiveFinishedRef.current) {
+        return;
+      }
+
+      aplusLiveStreamUrlRef.current = cleanUrl;
+      const {score1, score2} = getAplusLiveCurrentScores(
+        playerSettingsRef.current || playerSettings,
+      );
+
+      try {
+        setAplusLiveSyncStatus('syncing');
+        await sendAplusLiveScore(session.matchId, session.sessionToken, {
+          score1,
+          score2,
+          status: 'playing',
+          isLive: true,
+          livestreamUrl: cleanUrl,
+          streamStatus: 'live',
+        });
+        setAplusLiveSyncStatus('online');
+        setAplusLiveSyncError('');
+        console.log('[AplusLiveScore] published livestream URL to web', {
+          matchId: session.matchId,
+          source,
+          livestreamUrl: cleanUrl,
+        });
+      } catch (error: any) {
+        const message = getAplusLiveErrorMessage(error);
+        setAplusLiveSyncStatus('error');
+        setAplusLiveSyncError(message);
+        console.log('[AplusLiveScore] publish livestream URL failed', {
+          matchId: session.matchId,
+          source,
+          message,
+        });
+      }
+    },
+    [getAplusLiveCurrentScores, playerSettings],
+  );
+
+  const finishAplusLiveSessionSafely = useCallback(
+    async (reason: string, finalPlayerSettings?: PlayerSettings) => {
+      const session = aplusLiveSessionRef.current;
+
+      if (
+        !session ||
+        aplusLiveFinishedRef.current ||
+        aplusLiveFinishInFlightRef.current
+      ) {
+        return;
+      }
+
+      aplusLiveFinishInFlightRef.current = true;
+
+      if (aplusLiveScoreDebounceRef.current) {
+        clearTimeout(aplusLiveScoreDebounceRef.current);
+      }
+
+      if (aplusLiveScoreRetryRef.current) {
+        clearTimeout(aplusLiveScoreRetryRef.current);
+      }
+
+      if (aplusLiveHeartbeatIntervalRef.current) {
+        clearInterval(aplusLiveHeartbeatIntervalRef.current);
+        aplusLiveHeartbeatIntervalRef.current = null;
+      }
+
+      const {score1, score2} = getAplusLiveCurrentScores(
+        finalPlayerSettings || playerSettingsRef.current || playerSettings,
+      );
+
+      setAplusLiveSyncStatus('syncing');
+
+      try {
+        await finishAplusLiveMatch(session.matchId, session.sessionToken, {
+          score1,
+          score2,
+          ...(aplusLiveStreamUrlRef.current
+            ? {livestreamUrl: aplusLiveStreamUrlRef.current}
+            : {}),
+        });
+        await clearSavedAplusLiveSession();
+        aplusLiveFinishedRef.current = true;
+        setAplusLiveSyncStatus('idle');
+        setAplusLiveSyncError('');
+        console.log('[AplusLiveScore] finished live match', {
+          matchId: session.matchId,
+          reason,
+          score1,
+          score2,
+        });
+      } catch (error: any) {
+        const message = getAplusLiveErrorMessage(error);
+        setAplusLiveSyncStatus('error');
+        setAplusLiveSyncError(message);
+        console.log('[AplusLiveScore] finish failed', {
+          matchId: session.matchId,
+          reason,
+          message,
+        });
+      } finally {
+        aplusLiveFinishInFlightRef.current = false;
+      }
+    },
+    [getAplusLiveCurrentScores, playerSettings],
+  );
+
+  const releaseAplusLiveSessionSafely = useCallback(async (reason: string) => {
+    const session = aplusLiveSessionRef.current;
+
+    if (
+      !session ||
+      aplusLiveFinishedRef.current ||
+      aplusLiveFinishInFlightRef.current ||
+      aplusLiveReleaseInFlightRef.current
+    ) {
+      return;
+    }
+
+    aplusLiveReleaseInFlightRef.current = true;
+
+    if (aplusLiveScoreDebounceRef.current) {
+      clearTimeout(aplusLiveScoreDebounceRef.current);
+    }
+
+    if (aplusLiveScoreRetryRef.current) {
+      clearTimeout(aplusLiveScoreRetryRef.current);
+    }
+
+    if (aplusLiveHeartbeatIntervalRef.current) {
+      clearInterval(aplusLiveHeartbeatIntervalRef.current);
+      aplusLiveHeartbeatIntervalRef.current = null;
+    }
+
+    try {
+      await releaseAplusLiveMatch(session.matchId, session.sessionToken);
+      await clearSavedAplusLiveSession();
+      aplusLiveFinishedRef.current = true;
+      setAplusLiveSyncStatus('idle');
+      setAplusLiveSyncError('');
+      console.log('[AplusLiveScore] released live lock', {
+        matchId: session.matchId,
+        reason,
+      });
+    } catch (error: any) {
+      const message = getAplusLiveErrorMessage(error);
+      setAplusLiveSyncStatus('error');
+      setAplusLiveSyncError(message);
+      console.log('[AplusLiveScore] release failed', {
+        matchId: session.matchId,
+        reason,
+        message,
+      });
+    } finally {
+      aplusLiveReleaseInFlightRef.current = false;
+    }
+  }, []);
+
+  useEffect(() => {
+    if (aplusLiveHeartbeatIntervalRef.current) {
+      clearInterval(aplusLiveHeartbeatIntervalRef.current);
+      aplusLiveHeartbeatIntervalRef.current = null;
+    }
+
+    if (!aplusLiveSession) {
+      return;
+    }
+
+    const sendHeartbeat = async () => {
+      const session = aplusLiveSessionRef.current;
+
+      if (
+        !session ||
+        aplusLiveFinishedRef.current ||
+        aplusLiveFinishInFlightRef.current ||
+        aplusLiveReleaseInFlightRef.current ||
+        aplusLiveHeartbeatSendingRef.current
+      ) {
+        return;
+      }
+
+      aplusLiveHeartbeatSendingRef.current = true;
+
+      try {
+        await heartbeatAplusLiveMatch(session.matchId, session.sessionToken);
+        if (aplusLiveSyncStatus === 'error') {
+          setAplusLiveSyncStatus('online');
+          setAplusLiveSyncError('');
+        }
+      } catch (error: any) {
+        const message = getAplusLiveErrorMessage(error);
+        setAplusLiveSyncStatus('error');
+        setAplusLiveSyncError(message);
+        console.log('[AplusLiveScore] heartbeat failed', {
+          matchId: session.matchId,
+          message,
+        });
+      } finally {
+        aplusLiveHeartbeatSendingRef.current = false;
+      }
+    };
+
+    void sendHeartbeat();
+    aplusLiveHeartbeatIntervalRef.current = setInterval(sendHeartbeat, 10000);
+
+    return () => {
+      if (aplusLiveHeartbeatIntervalRef.current) {
+        clearInterval(aplusLiveHeartbeatIntervalRef.current);
+        aplusLiveHeartbeatIntervalRef.current = null;
+      }
+    };
+  }, [
+    aplusLiveSession?.matchId,
+    aplusLiveSession?.sessionToken,
+    aplusLiveSyncStatus,
+  ]);
+
+  useEffect(() => {
+    return () => {
+      const session = aplusLiveSessionRef.current;
+
+      if (
+        !session ||
+        aplusLiveFinishedRef.current ||
+        aplusLiveFinishInFlightRef.current
+      ) {
+        return;
+      }
+
+      void releaseAplusLiveSessionSafely('screen-unmount');
+    };
+  }, [releaseAplusLiveSessionSafely]);
+
+  useEffect(() => {
     winnerRef.current = cloneReplayValue(winner);
   }, [winner]);
 
@@ -769,11 +1261,13 @@ const GamePlayViewModel = () => {
     }
 
     setPool8FreeHole10Scores(prev => {
-      const next = Array.from({length: Math.max(4, playerSettings.playingPlayers.length)}, (_, index) => prev[index] || 0);
+      const next = Array.from(
+        {length: Math.max(4, playerSettings.playingPlayers.length)},
+        (_, index) => prev[index] || 0,
+      );
       return next;
     });
   }, [playerSettings?.playingPlayers.length]);
-
 
   const clearRecordingStartRetry = useCallback(() => {
     if (recordingStartRetryRef.current) {
@@ -825,10 +1319,8 @@ const GamePlayViewModel = () => {
     };
   }, [language]);
 
-
-
-  const readYouTubeVisibilityFromStorage = useCallback(
-    async (): Promise<Visibility> => {
+  const readYouTubeVisibilityFromStorage =
+    useCallback(async (): Promise<Visibility> => {
       try {
         const raw = await AsyncStorage.getItem(LIVESTREAM_ACCOUNT_STORAGE_KEY);
         if (!raw) {
@@ -850,9 +1342,7 @@ const GamePlayViewModel = () => {
       } catch (_error) {
         return 'public';
       }
-    },
-    [],
-  );
+    }, []);
 
   const routeWebcamFolderName =
     gameSettings?.webcamFolderName != null
@@ -885,18 +1375,23 @@ const GamePlayViewModel = () => {
 
     const restoredExistingMatchSession = Boolean(
       (reusableReplayResumeSnapshotOnMount?.matchSessionId &&
-        reusableReplayResumeSnapshotOnMount.matchSessionId === matchSessionIdRef.current) ||
-        (replayReturnRequestOnMount?.matchSessionId &&
-          replayReturnRequestOnMount.matchSessionId === matchSessionIdRef.current) ||
-        (reusableActiveGameplaySessionOnMount?.matchSessionId &&
-          reusableActiveGameplaySessionOnMount.matchSessionId === matchSessionIdRef.current),
+        reusableReplayResumeSnapshotOnMount.matchSessionId ===
+          matchSessionIdRef.current) ||
+      (replayReturnRequestOnMount?.matchSessionId &&
+        replayReturnRequestOnMount.matchSessionId ===
+          matchSessionIdRef.current) ||
+      (reusableActiveGameplaySessionOnMount?.matchSessionId &&
+        reusableActiveGameplaySessionOnMount.matchSessionId ===
+          matchSessionIdRef.current),
     );
 
     setActiveGameplaySessionSync({
       matchSessionId: matchSessionIdRef.current,
       webcamFolderName,
       savedAt: Date.now(),
-      source: restoredExistingMatchSession ? 'restore-existing-session' : 'gameplay-active',
+      source: restoredExistingMatchSession
+        ? 'restore-existing-session'
+        : 'gameplay-active',
     });
 
     if (!activeMatchFolderNameRef.current) {
@@ -915,7 +1410,8 @@ const GamePlayViewModel = () => {
         activeMatchId: matchSessionIdRef.current,
         webcamFolderName,
         previousWebcamFolderName: activeMatchFolderNameRef.current,
-        reasonIfCreateNew: 'webcamFolderName state changed; existing recorder session remains guarded',
+        reasonIfCreateNew:
+          'webcamFolderName state changed; existing recorder session remains guarded',
       });
       activeMatchFolderNameRef.current = webcamFolderName;
     } else {
@@ -930,7 +1426,8 @@ const GamePlayViewModel = () => {
       try {
         await cleanupBrokenReplayFiles(webcamFolderName);
         const existingFiles = await listReplayFiles(webcamFolderName);
-        const nextSegmentIndex = await getNextReplaySegmentIndex(webcamFolderName);
+        const nextSegmentIndex =
+          await getNextReplaySegmentIndex(webcamFolderName);
         if (!mounted) {
           return;
         }
@@ -947,9 +1444,9 @@ const GamePlayViewModel = () => {
     };
   }, [webcamFolderName]);
 
-
   const [isStarted, setIsStarted] = useState(
-    gameSettings?.mode?.mode === 'fast' && selectedLivestreamPlatform !== 'youtube'
+    gameSettings?.mode?.mode === 'fast' &&
+      selectedLivestreamPlatform !== 'youtube'
       ? true
       : false,
   );
@@ -967,7 +1464,8 @@ const GamePlayViewModel = () => {
     useState(false);
   const [youtubeLivePreparing, setYoutubeLivePreparing] = useState(false);
   const [youtubeNativeStartNonce, setYoutubeNativeStartNonce] = useState(0);
-  const youtubeLiveNativeMode = youtubeLivePreviewActive || youtubeLivePreparing;
+  const youtubeLiveNativeMode =
+    youtubeLivePreviewActive || youtubeLivePreparing;
 
   useEffect(() => {
     setYouTubeNativeCameraLock(youtubeLiveNativeMode);
@@ -1032,9 +1530,15 @@ const GamePlayViewModel = () => {
           if (activeYouTubeBroadcastId) {
             try {
               await stopYouTubeLiveSession(activeYouTubeBroadcastId);
-              console.log('[YouTube Live] stopped broadcast after native start failed:', activeYouTubeBroadcastId);
+              console.log(
+                '[YouTube Live] stopped broadcast after native start failed:',
+                activeYouTubeBroadcastId,
+              );
             } catch (youtubeStopError) {
-              console.log('[YouTube Live] stop after native start failed:', youtubeStopError);
+              console.log(
+                '[YouTube Live] stop after native start failed:',
+                youtubeStopError,
+              );
             }
           }
           pendingYouTubeNativeStartRef.current = null;
@@ -1068,69 +1572,79 @@ const GamePlayViewModel = () => {
   const [poolBreakEnabled, setPoolBreakEnabled] = useState<boolean>(false);
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [proModeEnabled, setProModeEnabled] = useState(
-  !isPoolGame(gameSettings?.category) && gameSettings?.mode?.mode !== 'fast',
-);
+    !isPoolGame(gameSettings?.category) && gameSettings?.mode?.mode !== 'fast',
+  );
 
-  const applyReplayResumeSnapshot = useCallback((snapshot: ReplayResumeSnapshot) => {
-    clearInterval(countdownInterval);
-    clearInterval(warmUpCountdownInterval);
+  const applyReplayResumeSnapshot = useCallback(
+    (snapshot: ReplayResumeSnapshot) => {
+      clearInterval(countdownInterval);
+      clearInterval(warmUpCountdownInterval);
 
-    const scoreBeforeReplayRestore = getScoreSnapshotFromPlayerSettings(playerSettingsRef.current);
-    playerSettingsRef.current = cloneReplayValue(snapshot.playerSettings);
-    winnerRef.current = cloneReplayValue(snapshot.winner);
+      const scoreBeforeReplayRestore = getScoreSnapshotFromPlayerSettings(
+        playerSettingsRef.current,
+      );
+      playerSettingsRef.current = cloneReplayValue(snapshot.playerSettings);
+      winnerRef.current = cloneReplayValue(snapshot.winner);
 
-    console.log('[ReplayReturnFlow]', {
-      event: 'closeReplay',
-      scoreBeforeReplay: getScoreSnapshotFromPlayerSettings(snapshot.playerSettings),
-      scoreAfterReplayClose: getScoreSnapshotFromPlayerSettings(snapshot.playerSettings),
-      scoreBeforeRestore: scoreBeforeReplayRestore,
-      matchIdBeforeReplay: snapshot.matchSessionId,
-      matchIdAfterReplayClose: snapshot.matchSessionId,
-      historyPathBeforeReplay: lastRecordedVideoPathRef.current,
-      historyPathAfterReplayClose: lastRecordedVideoPathRef.current,
-      replayCleanupTouchedHistory: false,
-      replayCleanupTouchedScore: false,
-    });
+      console.log('[ReplayReturnFlow]', {
+        event: 'closeReplay',
+        scoreBeforeReplay: getScoreSnapshotFromPlayerSettings(
+          snapshot.playerSettings,
+        ),
+        scoreAfterReplayClose: getScoreSnapshotFromPlayerSettings(
+          snapshot.playerSettings,
+        ),
+        scoreBeforeRestore: scoreBeforeReplayRestore,
+        matchIdBeforeReplay: snapshot.matchSessionId,
+        matchIdAfterReplayClose: snapshot.matchSessionId,
+        historyPathBeforeReplay: lastRecordedVideoPathRef.current,
+        historyPathAfterReplayClose: lastRecordedVideoPathRef.current,
+        replayCleanupTouchedHistory: false,
+        replayCleanupTouchedScore: false,
+      });
 
-    setWebcamFolderName(snapshot.webcamFolderName || Date.now().toString());
-    setCurrentPlayerIndex(snapshot.currentPlayerIndex ?? 0);
-    setPoolBreakPlayerIndex(snapshot.poolBreakPlayerIndex ?? 0);
-    setTotalTurns(snapshot.totalTurns ?? 1);
-    setTotalTime(snapshot.totalTime ?? 0);
-    setCountdownTime(snapshot.countdownTime ?? 0);
-    setWarmUpCount(snapshot.warmUpCount);
-    setWarmUpCountdownTime(snapshot.warmUpCountdownTime);
-    setPlayerSettings(cloneReplayValue(snapshot.playerSettings));
-    setWinner(cloneReplayValue(snapshot.winner));
-    setIsStarted(!!snapshot.isStarted);
-    setIsPaused(!!snapshot.isPaused);
-    setIsMatchPaused(!!snapshot.isMatchPaused);
-    setGameBreakEnabled(!!snapshot.gameBreakEnabled);
-    setPoolBreakEnabled(!!snapshot.poolBreakEnabled);
-    setSoundEnabled(
-      snapshot.soundEnabled == null ? true : !!snapshot.soundEnabled,
-    );
-    setProModeEnabled(!!snapshot.proModeEnabled);
+      setWebcamFolderName(snapshot.webcamFolderName || Date.now().toString());
+      setCurrentPlayerIndex(snapshot.currentPlayerIndex ?? 0);
+      setPoolBreakPlayerIndex(snapshot.poolBreakPlayerIndex ?? 0);
+      setTotalTurns(snapshot.totalTurns ?? 1);
+      setTotalTime(snapshot.totalTime ?? 0);
+      setCountdownTime(snapshot.countdownTime ?? 0);
+      setWarmUpCount(snapshot.warmUpCount);
+      setWarmUpCountdownTime(snapshot.warmUpCountdownTime);
+      setPlayerSettings(cloneReplayValue(snapshot.playerSettings));
+      setWinner(cloneReplayValue(snapshot.winner));
+      setIsStarted(!!snapshot.isStarted);
+      setIsPaused(!!snapshot.isPaused);
+      setIsMatchPaused(!!snapshot.isMatchPaused);
+      setGameBreakEnabled(!!snapshot.gameBreakEnabled);
+      setPoolBreakEnabled(!!snapshot.poolBreakEnabled);
+      setSoundEnabled(
+        snapshot.soundEnabled == null ? true : !!snapshot.soundEnabled,
+      );
+      setProModeEnabled(!!snapshot.proModeEnabled);
 
-    if (snapshot.matchSessionId) {
-      matchSessionIdRef.current = snapshot.matchSessionId;
-    }
+      if (snapshot.matchSessionId) {
+        matchSessionIdRef.current = snapshot.matchSessionId;
+      }
 
-    setActiveGameplaySessionSync({
-      matchSessionId: snapshot.matchSessionId || matchSessionIdRef.current,
-      webcamFolderName: snapshot.webcamFolderName || webcamFolderName,
-      savedAt: Date.now(),
-      source: 'replay-restore',
-    });
+      setActiveGameplaySessionSync({
+        matchSessionId: snapshot.matchSessionId || matchSessionIdRef.current,
+        webcamFolderName: snapshot.webcamFolderName || webcamFolderName,
+        savedAt: Date.now(),
+        source: 'replay-restore',
+      });
 
-    appliedReplayResumeSnapshotRef.current = true;
-    initializedGameStateRef.current = true;
-  }, []);
+      appliedReplayResumeSnapshotRef.current = true;
+      initializedGameStateRef.current = true;
+    },
+    [],
+  );
 
   const tryRestoreReplayResumeSnapshot = useCallback(async () => {
     const snapshot = await getReplayResumeSnapshot();
     const returnRequest = getReplayReturnRequestSync();
-    const expectedFolderName = webcamFolderName || gameSettings?.webcamFolderName;
+    const expectedFolderName =
+      webcamFolderName || gameSettings?.webcamFolderName;
     const expectedMatchSessionId =
       returnRequest?.matchSessionId || matchSessionIdRef.current;
 
@@ -1139,13 +1653,13 @@ const GamePlayViewModel = () => {
     );
     const shouldForceRestore = Boolean(
       shouldRestoreBecausePlaybackIsReturning ||
-        (returnRequest &&
-          snapshot &&
-          isReplayResumeSnapshotReusable(snapshot) &&
-          ((returnRequest.matchSessionId &&
-            snapshot.matchSessionId === returnRequest.matchSessionId) ||
-            (returnRequest.webcamFolderName &&
-              snapshot.webcamFolderName === returnRequest.webcamFolderName))),
+      (returnRequest &&
+        snapshot &&
+        isReplayResumeSnapshotReusable(snapshot) &&
+        ((returnRequest.matchSessionId &&
+          snapshot.matchSessionId === returnRequest.matchSessionId) ||
+          (returnRequest.webcamFolderName &&
+            snapshot.webcamFolderName === returnRequest.webcamFolderName))),
     );
 
     if (!shouldForceRestore && !snapshot?.restoreOnNextFocus) {
@@ -1185,7 +1699,11 @@ const GamePlayViewModel = () => {
     });
 
     return true;
-  }, [applyReplayResumeSnapshot, gameSettings?.webcamFolderName, webcamFolderName]);
+  }, [
+    applyReplayResumeSnapshot,
+    gameSettings?.webcamFolderName,
+    webcamFolderName,
+  ]);
 
   const buildLiveMatchSnapshot = useCallback((): LiveMatchSnapshot | null => {
     if (!playerSettings || !gameSettingsSignature) {
@@ -1284,7 +1802,6 @@ const GamePlayViewModel = () => {
     }, [tryRestoreLiveMatchSnapshot, tryRestoreReplayResumeSnapshot]),
   );
 
-
   useEffect(() => {
     const snapshot = buildLiveMatchSnapshot();
 
@@ -1382,49 +1899,38 @@ const GamePlayViewModel = () => {
   ]);
 
   useEffect(() => {
-    RemoteControl.instance.registerKeyEvents(
-      RemoteControlKeys.START,
-      () => remoteHandlersRef.current.start(),
+    RemoteControl.instance.registerKeyEvents(RemoteControlKeys.START, () =>
+      remoteHandlersRef.current.start(),
     );
-    RemoteControl.instance.registerKeyEvents(
-      RemoteControlKeys.WARM_UP,
-      () => remoteHandlersRef.current.warmUp(),
+    RemoteControl.instance.registerKeyEvents(RemoteControlKeys.WARM_UP, () =>
+      remoteHandlersRef.current.warmUp(),
     );
-    RemoteControl.instance.registerKeyEvents(
-      RemoteControlKeys.STOP,
-      () => remoteHandlersRef.current.stop(),
+    RemoteControl.instance.registerKeyEvents(RemoteControlKeys.STOP, () =>
+      remoteHandlersRef.current.stop(),
     );
-    RemoteControl.instance.registerKeyEvents(
-      RemoteControlKeys.BREAK,
-      () => remoteHandlersRef.current.gameBreak(),
+    RemoteControl.instance.registerKeyEvents(RemoteControlKeys.BREAK, () =>
+      remoteHandlersRef.current.gameBreak(),
     );
-    RemoteControl.instance.registerKeyEvents(
-      RemoteControlKeys.EXTENSION,
-      () => remoteHandlersRef.current.extension(),
+    RemoteControl.instance.registerKeyEvents(RemoteControlKeys.EXTENSION, () =>
+      remoteHandlersRef.current.extension(),
     );
-    RemoteControl.instance.registerKeyEvents(
-      RemoteControlKeys.TIMER,
-      () => remoteHandlersRef.current.timer(),
+    RemoteControl.instance.registerKeyEvents(RemoteControlKeys.TIMER, () =>
+      remoteHandlersRef.current.timer(),
     );
-    RemoteControl.instance.registerKeyEvents(
-      RemoteControlKeys.NEW_GAME,
-      () => remoteHandlersRef.current.newGame(),
+    RemoteControl.instance.registerKeyEvents(RemoteControlKeys.NEW_GAME, () =>
+      remoteHandlersRef.current.newGame(),
     );
-    RemoteControl.instance.registerKeyEvents(
-      RemoteControlKeys.UP,
-      () => remoteHandlersRef.current.up(),
+    RemoteControl.instance.registerKeyEvents(RemoteControlKeys.UP, () =>
+      remoteHandlersRef.current.up(),
     );
-    RemoteControl.instance.registerKeyEvents(
-      RemoteControlKeys.DOWN,
-      () => remoteHandlersRef.current.down(),
+    RemoteControl.instance.registerKeyEvents(RemoteControlKeys.DOWN, () =>
+      remoteHandlersRef.current.down(),
     );
-    RemoteControl.instance.registerKeyEvents(
-      RemoteControlKeys.LEFT,
-      () => remoteHandlersRef.current.left(),
+    RemoteControl.instance.registerKeyEvents(RemoteControlKeys.LEFT, () =>
+      remoteHandlersRef.current.left(),
     );
-    RemoteControl.instance.registerKeyEvents(
-      RemoteControlKeys.RIGHT,
-      () => remoteHandlersRef.current.right(),
+    RemoteControl.instance.registerKeyEvents(RemoteControlKeys.RIGHT, () =>
+      remoteHandlersRef.current.right(),
     );
   }, []);
   useEffect(() => {
@@ -1460,7 +1966,7 @@ const GamePlayViewModel = () => {
       setIsMatchPaused(false);
       setGameBreakEnabled(false);
       setWinner(undefined);
-    setPool8FreeSetWinnerIndex(null);
+      setPool8FreeSetWinnerIndex(null);
       setTotalTurns(1);
       setTotalTime(0);
       setCurrentPlayerIndex(0);
@@ -1505,7 +2011,11 @@ const GamePlayViewModel = () => {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gameSettings, tryRestoreLiveMatchSnapshot, tryRestoreReplayResumeSnapshot]);
+  }, [
+    gameSettings,
+    tryRestoreLiveMatchSnapshot,
+    tryRestoreReplayResumeSnapshot,
+  ]);
 
   useEffect(() => {
     if (!isStarted || isPaused || !isCameraReady) {
@@ -1531,22 +2041,24 @@ const GamePlayViewModel = () => {
         ? REPLAY_RETURN_CAMERA_STABILIZE_MS
         : 0;
 
-    console.log('[Replay] auto start recording after camera ready', {startDelay});
+    console.log('[Replay] auto start recording after camera ready', {
+      startDelay,
+    });
 
     let attempts = 0;
     const beginRetryLoop = () => {
       recordingStartRetryRef.current = setInterval(() => {
-      attempts += 1;
-      console.log('[Replay] start retry attempt:', attempts);
+        attempts += 1;
+        console.log('[Replay] start retry attempt:', attempts);
 
-      const started = startVideoRecording();
+        const started = startVideoRecording();
 
-      if (started) {
-        shouldStartRecordingRef.current = false;
-        pendingStartRecordingRef.current = false;
-        clearRecordingStartRetry();
-        return;
-      }
+        if (started) {
+          shouldStartRecordingRef.current = false;
+          pendingStartRecordingRef.current = false;
+          clearRecordingStartRetry();
+          return;
+        }
 
         if (attempts >= 12) {
           console.log('[Replay] failed to start recording after retries');
@@ -1597,8 +2109,12 @@ const GamePlayViewModel = () => {
       0,
       totalTime - currentReplaySegmentStartTotalTimeRef.current,
     );
-    const segmentTimeBucket = Math.floor(segmentTime / REPLAY_TIMELINE_TIME_BUCKET_SECONDS);
-    const countdownBucket = Math.floor(Number(countdownTime || 0) / REPLAY_TIMELINE_COUNTDOWN_BUCKET_SECONDS);
+    const segmentTimeBucket = Math.floor(
+      segmentTime / REPLAY_TIMELINE_TIME_BUCKET_SECONDS,
+    );
+    const countdownBucket = Math.floor(
+      Number(countdownTime || 0) / REPLAY_TIMELINE_COUNTDOWN_BUCKET_SECONDS,
+    );
 
     const signature = JSON.stringify({
       webcamFolderName,
@@ -1772,7 +2288,7 @@ const GamePlayViewModel = () => {
 
             return player;
           }),
-        } as PlayerSettings),
+        }) as PlayerSettings,
     );
   }, []);
 
@@ -1795,38 +2311,52 @@ const GamePlayViewModel = () => {
     }, 0);
   };
 
-  const showWinnerAlertAndGoBack = useCallback((winnerPlayer?: Player) => {
-    if (!winnerPlayer?.name || winnerAlertShownRef.current) {
-      return;
-    }
+  const showWinnerAlertAndGoBack = useCallback(
+    (winnerPlayer?: Player) => {
+      if (!winnerPlayer?.name || winnerAlertShownRef.current) {
+        return;
+      }
 
-    const shouldUseCaromWinnerSummary =
-      isCaromGame(gameSettings?.category) &&
-      gameSettings?.mode?.mode === 'pro' &&
-      (playerSettings?.playingPlayers?.length || 0) === 2;
+      const shouldUseCaromWinnerSummary =
+        isCaromGame(gameSettings?.category) &&
+        gameSettings?.mode?.mode === 'pro' &&
+        (playerSettings?.playingPlayers?.length || 0) === 2;
 
-    if (shouldUseCaromWinnerSummary) {
-      return;
-    }
+      if (shouldUseCaromWinnerSummary) {
+        return;
+      }
 
-    winnerAlertShownRef.current = true;
+      winnerAlertShownRef.current = true;
 
-    Alert.alert(
-      i18n.t('txtWin'),
-      i18n.t('msgWinner', {player: winnerPlayer.name}),
-      [
-        {
-          text: i18n.t('txtClose'),
-          onPress: () => {
-            winnerAlertShownRef.current = false;
-            resetCurrentMatchForNextGame();
-            navigateBackAfterWinner();
+      Alert.alert(
+        i18n.t('txtWin'),
+        i18n.t('msgWinner', {player: winnerPlayer.name}),
+        [
+          {
+            text: i18n.t('txtClose'),
+            onPress: async () => {
+              winnerAlertShownRef.current = false;
+              await finishAplusLiveSessionSafely(
+                'winner-alert',
+                playerSettingsRef.current || playerSettings,
+              );
+              resetCurrentMatchForNextGame();
+              navigateBackAfterWinner();
+            },
           },
-        },
-      ],
-      {cancelable: false},
-    );
-  }, [gameSettings?.category, gameSettings?.mode?.mode, navigation, playerSettings?.playingPlayers?.length]);
+        ],
+        {cancelable: false},
+      );
+    },
+    [
+      finishAplusLiveSessionSafely,
+      gameSettings?.category,
+      gameSettings?.mode?.mode,
+      navigation,
+      playerSettings,
+      playerSettings?.playingPlayers?.length,
+    ],
+  );
 
   const resetCurrentMatchForNextGame = () => {
     pendingNewGameAfterViolateRef.current = false;
@@ -1877,31 +2407,35 @@ const GamePlayViewModel = () => {
     // Lấy lại danh sách người chơi gốc từ cài đặt trận, không lấy playerSettings hiện tại.
     // Như vậy nếu trong trận cũ đổi tên Người chơi 1 thành Người chơi 2,
     // trận mới sẽ quay về đúng tên ban đầu và reset sạch điểm/thống kê.
-    const sourcePlayerSettings = cloneReplayValue(gameSettings?.players || playerSettings);
+    const sourcePlayerSettings = cloneReplayValue(
+      gameSettings?.players || playerSettings,
+    );
 
     if (sourcePlayerSettings) {
       setPlayerSettings({
         ...sourcePlayerSettings,
-        playingPlayers: sourcePlayerSettings.playingPlayers.map((player, playerIndex) => ({
-          ...player,
-          name:
-            gameSettings?.players?.playingPlayers?.[playerIndex]?.name ||
-            player.name ||
-            `Người chơi ${playerIndex + 1}`,
-          totalPoint: 0,
-          violate: 0,
-          scoredBalls: [],
-          proMode: player.proMode
-            ? {
-                ...player.proMode,
-                highestRate: 0,
-                secondHighestRate: 0,
-                average: 0,
-                currentPoint: 0,
-                extraTimeTurns: gameSettings?.mode?.extraTimeTurns,
-              }
-            : player.proMode,
-        })),
+        playingPlayers: sourcePlayerSettings.playingPlayers.map(
+          (player, playerIndex) => ({
+            ...player,
+            name:
+              gameSettings?.players?.playingPlayers?.[playerIndex]?.name ||
+              player.name ||
+              `Người chơi ${playerIndex + 1}`,
+            totalPoint: 0,
+            violate: 0,
+            scoredBalls: [],
+            proMode: player.proMode
+              ? {
+                  ...player.proMode,
+                  highestRate: 0,
+                  secondHighestRate: 0,
+                  average: 0,
+                  currentPoint: 0,
+                  extraTimeTurns: gameSettings?.mode?.extraTimeTurns,
+                }
+              : player.proMode,
+          }),
+        ),
       } as PlayerSettings);
     }
   };
@@ -1925,8 +2459,11 @@ const GamePlayViewModel = () => {
 
       const player = playerSettings.playingPlayers[index];
       const nextTotalPoint = Number(player?.totalPoint || 0) + addedPoint;
-      const nextCurrentPoint = Number(player?.proMode?.currentPoint || 0) + addedPoint;
-      const winnerRuns = player ? getTopTwoRuns(player, nextCurrentPoint) : undefined;
+      const nextCurrentPoint =
+        Number(player?.proMode?.currentPoint || 0) + addedPoint;
+      const winnerRuns = player
+        ? getTopTwoRuns(player, nextCurrentPoint)
+        : undefined;
       const winnerAverage = Number(
         (nextTotalPoint / Math.max(1, totalTurns + 1)).toFixed(2),
       );
@@ -1948,36 +2485,40 @@ const GamePlayViewModel = () => {
         prev =>
           ({
             ...prev,
-            playingPlayers: prev?.playingPlayers.map((currentPlayer, playerIndex) => {
-              if (index === playerIndex) {
-                const updatedCurrentPoint =
-                  Number(currentPlayer.proMode?.currentPoint || 0) + addedPoint;
-                const updatedRuns = winnerPlayer
-                  ? getTopTwoRuns(currentPlayer, updatedCurrentPoint)
-                  : undefined;
+            playingPlayers: prev?.playingPlayers.map(
+              (currentPlayer, playerIndex) => {
+                if (index === playerIndex) {
+                  const updatedCurrentPoint =
+                    Number(currentPlayer.proMode?.currentPoint || 0) +
+                    addedPoint;
+                  const updatedRuns = winnerPlayer
+                    ? getTopTwoRuns(currentPlayer, updatedCurrentPoint)
+                    : undefined;
 
-                return {
-                  ...currentPlayer,
-                  totalPoint: currentPlayer.totalPoint + addedPoint,
-                  proMode: {
-                    ...currentPlayer.proMode,
-                    ...(updatedRuns || {}),
-                    average: winnerPlayer
-                      ? Number(
-                          (
-                            (Number(currentPlayer.totalPoint || 0) + addedPoint) /
-                            Math.max(1, totalTurns + 1)
-                          ).toFixed(2),
-                        )
-                      : currentPlayer.proMode?.average,
-                    currentPoint: updatedCurrentPoint,
-                  },
-                };
-              }
+                  return {
+                    ...currentPlayer,
+                    totalPoint: currentPlayer.totalPoint + addedPoint,
+                    proMode: {
+                      ...currentPlayer.proMode,
+                      ...(updatedRuns || {}),
+                      average: winnerPlayer
+                        ? Number(
+                            (
+                              (Number(currentPlayer.totalPoint || 0) +
+                                addedPoint) /
+                              Math.max(1, totalTurns + 1)
+                            ).toFixed(2),
+                          )
+                        : currentPlayer.proMode?.average,
+                      currentPoint: updatedCurrentPoint,
+                    },
+                  };
+                }
 
-              return currentPlayer;
-            }),
-          } as PlayerSettings),
+                return currentPlayer;
+              },
+            ),
+          }) as PlayerSettings,
       );
 
       if (winnerPlayer) {
@@ -2039,7 +2580,11 @@ const GamePlayViewModel = () => {
     setCountdownTime(prev => {
       const safePrev = Number.isFinite(prev) ? prev : baseCountdown;
       const next = safePrev + appliedBonus;
-      console.log('[Extension] countdown update', {safePrev, appliedBonus, next});
+      console.log('[Extension] countdown update', {
+        safePrev,
+        appliedBonus,
+        next,
+      });
       return next;
     });
 
@@ -2101,20 +2646,27 @@ const GamePlayViewModel = () => {
       const triggeredPlayer = players[playerIndex];
       const oldFoulCount = Number(triggeredPlayer?.violate || 0);
       const nextViolate = reset ? 0 : oldFoulCount + 1;
-      const opponentIndex = players.findIndex((_, index) => index !== playerIndex);
-      const isThreeFoulPenalty = !reset && nextViolate >= 3 && opponentIndex >= 0;
-      const opponentPlayer = isThreeFoulPenalty ? players[opponentIndex] : undefined;
+      const opponentIndex = players.findIndex(
+        (_, index) => index !== playerIndex,
+      );
+      const isThreeFoulPenalty =
+        !reset && nextViolate >= 3 && opponentIndex >= 0;
+      const opponentPlayer = isThreeFoulPenalty
+        ? players[opponentIndex]
+        : undefined;
       const opponentScoreBefore = Number(opponentPlayer?.totalPoint || 0);
       const opponentScoreAfter = isThreeFoulPenalty
         ? opponentScoreBefore + 1
         : opponentScoreBefore;
       const matchPausedBefore = Boolean(isPaused || isMatchPaused);
-      const timerRunningBefore = Boolean(isStarted && !isPaused && !isMatchPaused);
+      const timerRunningBefore = Boolean(
+        isStarted && !isPaused && !isMatchPaused,
+      );
       const recordingActiveBefore = Boolean(
         isRecordingRef.current ||
-          isRecording ||
-          shouldStartRecordingRef.current ||
-          pendingStartRecordingRef.current,
+        isRecording ||
+        shouldStartRecordingRef.current ||
+        pendingStartRecordingRef.current,
       );
 
       const extraTimeTurns = gameSettings?.mode?.extraTimeTurns;
@@ -2186,7 +2738,10 @@ const GamePlayViewModel = () => {
         setPool8FreeHole10Scores(prev => prev.map(() => 0));
       }
 
-      const playerNumber = Math.max(1, Number(gameSettings?.players?.playerNumber || players.length || 1));
+      const playerNumber = Math.max(
+        1,
+        Number(gameSettings?.players?.playerNumber || players.length || 1),
+      );
       const nextRackPlayerIndex =
         poolBreakPlayerIndex + 1 > playerNumber - 1
           ? 0
@@ -2200,10 +2755,10 @@ const GamePlayViewModel = () => {
       const timerRunningAfter = true;
       const recordingActiveAfter = Boolean(
         isRecordingRef.current ||
-          isRecording ||
-          shouldStartRecordingRef.current ||
-          pendingStartRecordingRef.current ||
-          recordingActiveBefore,
+        isRecording ||
+        shouldStartRecordingRef.current ||
+        pendingStartRecordingRef.current ||
+        recordingActiveBefore,
       );
 
       console.log('[ThreeFoulPenalty]', {
@@ -2261,7 +2816,10 @@ const GamePlayViewModel = () => {
 
       const winnerPlayer = playerSettings.playingPlayers[playerIndex];
       const announcedWinnerPlayer = addMatchPoint
-        ? ({...winnerPlayer, totalPoint: Number(winnerPlayer.totalPoint || 0) + 1} as Player)
+        ? ({
+            ...winnerPlayer,
+            totalPoint: Number(winnerPlayer.totalPoint || 0) + 1,
+          } as Player)
         : winnerPlayer;
 
       setWinner(announcedWinnerPlayer);
@@ -2274,14 +2832,16 @@ const GamePlayViewModel = () => {
           prev =>
             ({
               ...prev,
-              playingPlayers: prev?.playingPlayers.map((player, currentIndex) => {
-                if (playerIndex === currentIndex) {
-                  return {...player, totalPoint: player.totalPoint + 1};
-                }
+              playingPlayers: prev?.playingPlayers.map(
+                (player, currentIndex) => {
+                  if (playerIndex === currentIndex) {
+                    return {...player, totalPoint: player.totalPoint + 1};
+                  }
 
-                return player;
-              }),
-            } as PlayerSettings),
+                  return player;
+                },
+              ),
+            }) as PlayerSettings,
         );
       }
 
@@ -2293,7 +2853,8 @@ const GamePlayViewModel = () => {
   const onSelectWinner = useCallback(() => {
     onSelectWinnerByIndex(
       currentPlayerIndex,
-      isPool9Game(gameSettings?.category) || isPool10Game(gameSettings?.category),
+      isPool9Game(gameSettings?.category) ||
+        isPool10Game(gameSettings?.category),
     );
   }, [currentPlayerIndex, gameSettings?.category, onSelectWinnerByIndex]);
 
@@ -2409,13 +2970,14 @@ const GamePlayViewModel = () => {
       }
 
       if (activeBall === BallType.B8) {
-        const updatedPlayers = playerSettings.playingPlayers.map((player, index) =>
-          index === playerIndex
-            ? ({
-                ...player,
-                totalPoint: Number(player.totalPoint || 0) + 1,
-              } as Player)
-            : player,
+        const updatedPlayers = playerSettings.playingPlayers.map(
+          (player, index) =>
+            index === playerIndex
+              ? ({
+                  ...player,
+                  totalPoint: Number(player.totalPoint || 0) + 1,
+                } as Player)
+              : player,
         );
 
         setPlayerSettings({...playerSettings, playingPlayers: updatedPlayers});
@@ -2425,7 +2987,10 @@ const GamePlayViewModel = () => {
         const setWinnerPlayer = updatedPlayers[playerIndex];
         const targetGoal = Number(gameSettings?.players?.goal?.goal || 0);
 
-        if (Number(setWinnerPlayer?.totalPoint || 0) >= targetGoal && targetGoal > 0) {
+        if (
+          Number(setWinnerPlayer?.totalPoint || 0) >= targetGoal &&
+          targetGoal > 0
+        ) {
           setWinner(setWinnerPlayer);
           setIsStarted(false);
           setIsPaused(false);
@@ -2440,7 +3005,10 @@ const GamePlayViewModel = () => {
           index === playerIndex
             ? {
                 ...item,
-                activeIndex: Math.min(item.sequence.length - 1, item.activeIndex + 1),
+                activeIndex: Math.min(
+                  item.sequence.length - 1,
+                  item.activeIndex + 1,
+                ),
               }
             : item,
         ),
@@ -2473,7 +3041,10 @@ const GamePlayViewModel = () => {
         return;
       }
 
-      if (isPool15FreeGame(gameSettings?.category) && pool8FreeSetWinnerIndex !== null) {
+      if (
+        isPool15FreeGame(gameSettings?.category) &&
+        pool8FreeSetWinnerIndex !== null
+      ) {
         return;
       }
 
@@ -2512,13 +3083,19 @@ const GamePlayViewModel = () => {
               : player,
           );
 
-          setPlayerSettings({...playerSettings, playingPlayers: updatedPlayers});
+          setPlayerSettings({
+            ...playerSettings,
+            playingPlayers: updatedPlayers,
+          });
           setPool8FreeSetWinnerIndex(currentPlayerIndex);
           setIsMatchPaused(true);
 
           const setWinnerPlayer = updatedPlayers[currentPlayerIndex];
           const targetGoal = Number(gameSettings?.players?.goal?.goal || 0);
-          if (Number(setWinnerPlayer?.totalPoint || 0) >= targetGoal && targetGoal > 0) {
+          if (
+            Number(setWinnerPlayer?.totalPoint || 0) >= targetGoal &&
+            targetGoal > 0
+          ) {
             setWinner(setWinnerPlayer);
             setIsStarted(false);
             setIsPaused(false);
@@ -2527,7 +3104,10 @@ const GamePlayViewModel = () => {
           return;
         }
 
-        setPlayerSettings({...playerSettings, playingPlayers: newPlayingPlayers});
+        setPlayerSettings({
+          ...playerSettings,
+          playingPlayers: newPlayingPlayers,
+        });
         return;
       }
 
@@ -2639,7 +3219,9 @@ const GamePlayViewModel = () => {
     setIsStarted(true);
 
     if (isPool15OnlyGame(gameSettings?.category)) {
-      setPool8Trackers(prev => resetPool8Trackers(prev.length ? prev : buildDefaultPool8Trackers()));
+      setPool8Trackers(prev =>
+        resetPool8Trackers(prev.length ? prev : buildDefaultPool8Trackers()),
+      );
       setPool8SetWinnerIndex(null);
     }
   }, [gameSettings, isStarted, isPaused, poolBreakEnabled]);
@@ -2731,10 +3313,7 @@ const GamePlayViewModel = () => {
                   currentPoint,
                 );
                 const average = Number(
-                  (
-                    Number(player.totalPoint || 0) /
-                    completedTurns
-                  ).toFixed(2),
+                  (Number(player.totalPoint || 0) / completedTurns).toFixed(2),
                 );
 
                 return {
@@ -2757,7 +3336,7 @@ const GamePlayViewModel = () => {
                 },
               };
             }),
-          } as PlayerSettings),
+          }) as PlayerSettings,
       );
 
       if (newTotalTurns !== null) {
@@ -2832,7 +3411,8 @@ const GamePlayViewModel = () => {
       const subscriberCount = eligibility?.subscriberCount;
       const hiddenSubscriberCount = Boolean(eligibility?.hiddenSubscriberCount);
       const liveEnabled = eligibility?.liveEnabled;
-      const liveEnabledReason = eligibility?.liveEnabledReason || fallbackMessage || '';
+      const liveEnabledReason =
+        eligibility?.liveEnabledReason || fallbackMessage || '';
 
       const subscriberCheck: YouTubeEligibilityCheck = {
         key: 'subscribers',
@@ -2843,27 +3423,33 @@ const GamePlayViewModel = () => {
               ? 'pass'
               : 'fail'
             : hiddenSubscriberCount
-            ? 'unknown'
-            : 'unknown',
+              ? 'unknown'
+              : 'unknown',
         detail:
           typeof subscriberCount === 'number'
-            ? i18n.t('youtubeLiveSubscriberCountDetail', {count: subscriberCount})
+            ? i18n.t('youtubeLiveSubscriberCountDetail', {
+                count: subscriberCount,
+              })
             : hiddenSubscriberCount
-            ? i18n.t('youtubeLiveHiddenSubscriberDetail')
-            : i18n.t('youtubeLiveUnknownSubscriberDetail'),
+              ? i18n.t('youtubeLiveHiddenSubscriberDetail')
+              : i18n.t('youtubeLiveUnknownSubscriberDetail'),
       };
 
       const liveEnabledCheck: YouTubeEligibilityCheck = {
         key: 'liveEnabled',
         label: i18n.t('youtubeLiveEnabledRequirement'),
         status:
-          liveEnabled === true ? 'pass' : liveEnabled === false ? 'fail' : 'unknown',
+          liveEnabled === true
+            ? 'pass'
+            : liveEnabled === false
+              ? 'fail'
+              : 'unknown',
         detail:
           liveEnabled === true
             ? i18n.t('youtubeLiveEnabledDetail')
             : liveEnabled === false
-            ? liveEnabledReason || i18n.t('youtubeLiveDisabledDetail')
-            : i18n.t('youtubeLiveUnknownEnabledDetail'),
+              ? liveEnabledReason || i18n.t('youtubeLiveDisabledDetail')
+              : i18n.t('youtubeLiveUnknownEnabledDetail'),
       };
 
       return {
@@ -2884,7 +3470,10 @@ const GamePlayViewModel = () => {
       eligibility: YouTubeEligibilityResponse | null,
       fallbackMessage?: string,
     ) => {
-      const overlayState = buildYouTubeLiveOverlay(eligibility, fallbackMessage);
+      const overlayState = buildYouTubeLiveOverlay(
+        eligibility,
+        fallbackMessage,
+      );
       console.log('[YouTubeLiveEligibilityOverlay]', {
         visible: true,
         title: overlayState.title,
@@ -2900,7 +3489,6 @@ const GamePlayViewModel = () => {
     },
     [buildYouTubeLiveOverlay],
   );
-
 
   const onStart = useCallback(async () => {
     if (isStarted) {
@@ -2931,10 +3519,18 @@ const GamePlayViewModel = () => {
     console.log('[Replay] onStart pressed');
     console.log('[YouTube Live] start button pressed');
     console.log('[Live Flow] start pressed');
-    console.log('[Live Flow] selectedPlatform=' + String(selectedLivestreamPlatform || 'none'));
+    console.log(
+      '[Live Flow] selectedPlatform=' +
+        String(selectedLivestreamPlatform || 'none'),
+    );
     console.log('[Live Flow] youtubeConnected=unknown-before-api-check');
-    console.log('[Live Flow] shouldCreateYouTubeLive=' + String(shouldUseYouTubeLive));
-    console.log('[Live Flow] routePlatform=' + String(routeParams.livestreamPlatform || 'none'));
+    console.log(
+      '[Live Flow] shouldCreateYouTubeLive=' + String(shouldUseYouTubeLive),
+    );
+    console.log(
+      '[Live Flow] routePlatform=' +
+        String(routeParams.livestreamPlatform || 'none'),
+    );
     console.log('[Live] selected platform:', selectedLivestreamPlatform, {
       saveToDeviceWhileStreaming,
       shouldUseYouTubeLive,
@@ -2974,13 +3570,18 @@ const GamePlayViewModel = () => {
     const nativePhoneFacing = lockedLiveSource === 'front' ? 'front' : 'back';
 
     if (!shouldUseYouTubeLive) {
-      console.log('[Live Flow] skip create reason=selectedPlatform is not youtube', {
-        selectedLivestreamPlatform,
-        currentSource,
-        availableSources,
-        lockedLiveSource,
-      });
-      console.log('[Live Flow] local recording active reason=selectedPlatform is not youtube');
+      console.log(
+        '[Live Flow] skip create reason=selectedPlatform is not youtube',
+        {
+          selectedLivestreamPlatform,
+          currentSource,
+          availableSources,
+          lockedLiveSource,
+        },
+      );
+      console.log(
+        '[Live Flow] local recording active reason=selectedPlatform is not youtube',
+      );
       console.log('[Live] local recording mode only:', {
         selectedLivestreamPlatform,
         currentSource,
@@ -3051,7 +3652,10 @@ const GamePlayViewModel = () => {
         ).trim();
 
         if (streamUrl && streamName) {
-          return {rtmpUrl: streamUrl.replace(/\/+$/g, ''), streamKey: streamName};
+          return {
+            rtmpUrl: streamUrl.replace(/\/+$/g, ''),
+            streamKey: streamName,
+          };
         }
 
         if (streamUrlWithKey) {
@@ -3075,11 +3679,15 @@ const GamePlayViewModel = () => {
         let liveResponse: any = null;
 
         try {
-          const selectedLiveVisibility = await readYouTubeVisibilityFromStorage();
+          const selectedLiveVisibility =
+            await readYouTubeVisibilityFromStorage();
 
           liveResponse = await createYouTubeLiveSession({
             title: youtubeTitle,
-            description: i18n.t("youtubeLiveDescription", {firstPlayerName, secondPlayerName}) as string,
+            description: i18n.t('youtubeLiveDescription', {
+              firstPlayerName,
+              secondPlayerName,
+            }) as string,
             privacyStatus: selectedLiveVisibility,
             enableAutoStart: true,
             enableAutoStop: true,
@@ -3091,7 +3699,9 @@ const GamePlayViewModel = () => {
 
           const ingestion = resolveIngestion(liveResponse?.session);
           activeYouTubeBroadcastIdRef.current =
-            liveResponse?.session?.broadcastId || liveResponse?.session?.id || '';
+            liveResponse?.session?.broadcastId ||
+            liveResponse?.session?.id ||
+            '';
 
           console.log('[YouTube Live] created for Windows FFmpeg:', {
             broadcastId: liveResponse?.session?.broadcastId || '',
@@ -3110,10 +3720,9 @@ const GamePlayViewModel = () => {
             'WindowsFfmpegCameraDevice',
             'WindowsFfmpegAudioDevice',
           ]);
-          const liveConfigLookup = liveConfigItems.reduce<Record<string, string>>(
-            (acc, [key, value]) => ({...acc, [key]: value || ''}),
-            {},
-          );
+          const liveConfigLookup = liveConfigItems.reduce<
+            Record<string, string>
+          >((acc, [key, value]) => ({...acc, [key]: value || ''}), {});
 
           const windowsLiveConfig: WindowsFfmpegLiveConfig = {
             platform: 'youtube',
@@ -3141,23 +3750,34 @@ const GamePlayViewModel = () => {
           );
 
           if (!startResult?.ok) {
-            const activeYouTubeBroadcastId = activeYouTubeBroadcastIdRef.current;
+            const activeYouTubeBroadcastId =
+              activeYouTubeBroadcastIdRef.current;
             activeYouTubeBroadcastIdRef.current = '';
 
             if (activeYouTubeBroadcastId) {
               try {
                 await stopYouTubeLiveSession(activeYouTubeBroadcastId);
-                console.log('[YouTube Live] stopped broadcast after FFmpeg start failed:', activeYouTubeBroadcastId);
+                console.log(
+                  '[YouTube Live] stopped broadcast after FFmpeg start failed:',
+                  activeYouTubeBroadcastId,
+                );
               } catch (youtubeStopError) {
-                console.log('[YouTube Live] stop after FFmpeg start failed:', youtubeStopError);
+                console.log(
+                  '[YouTube Live] stop after FFmpeg start failed:',
+                  youtubeStopError,
+                );
               }
             }
 
             throw new Error(
-              startResult?.error ||
-                i18n.t('youtubeFfmpegStartFailed'),
+              startResult?.error || i18n.t('youtubeFfmpegStartFailed'),
             );
           }
+
+          await publishAplusLivestreamUrlToWeb(
+            liveResponse?.session?.watchUrl,
+            'youtube-windows-ffmpeg',
+          );
 
           setYoutubeLivePreparing(false);
           setYoutubeLivePreviewActive(false);
@@ -3169,10 +3789,13 @@ const GamePlayViewModel = () => {
             source: 'windows-ffmpeg-oauth-live-start',
           });
         } catch (error: any) {
-          console.log('[YouTube Live] Windows FFmpeg OAuth/create/start failed:', {
-            message: error?.message || String(error),
-            hasSession: Boolean(liveResponse?.session),
-          });
+          console.log(
+            '[YouTube Live] Windows FFmpeg OAuth/create/start failed:',
+            {
+              message: error?.message || String(error),
+              hasSession: Boolean(liveResponse?.session),
+            },
+          );
 
           pendingYouTubeNativeStartRef.current = null;
           activeYouTubeBroadcastIdRef.current = '';
@@ -3185,7 +3808,9 @@ const GamePlayViewModel = () => {
             await stopWindowsFfmpegYouTubeLive('start-failed');
           } catch {}
 
-          const payload = error?.payload as YouTubeEligibilityResponse | undefined;
+          const payload = error?.payload as
+            | YouTubeEligibilityResponse
+            | undefined;
           const fallbackMessage =
             payload?.message ||
             error?.message ||
@@ -3227,15 +3852,23 @@ const GamePlayViewModel = () => {
     const youtubeNativePreviewAvailable = isYouTubeNativePreviewViewAvailable();
     const youtubeNativeReady = isYouTubeNativeLiveReady();
 
-    console.log('[YouTube Live] native engine mounted=' + youtubeNativeModuleMounted);
-    console.log('[YouTube Live] native preview view available=' + youtubeNativePreviewAvailable);
+    console.log(
+      '[YouTube Live] native engine mounted=' + youtubeNativeModuleMounted,
+    );
+    console.log(
+      '[YouTube Live] native preview view available=' +
+        youtubeNativePreviewAvailable,
+    );
     console.log('[YouTube Live] native ready=' + youtubeNativeReady);
 
     if (!youtubeNativeReady) {
-      console.log('[YouTube Live] fallback reason=native module/view manager missing', {
-        youtubeNativeModuleMounted,
-        youtubeNativePreviewAvailable,
-      });
+      console.log(
+        '[YouTube Live] fallback reason=native module/view manager missing',
+        {
+          youtubeNativeModuleMounted,
+          youtubeNativePreviewAvailable,
+        },
+      );
       pendingYouTubeNativeStartRef.current = null;
       activeYouTubeBroadcastIdRef.current = '';
       setYoutubeLivePreparing(false);
@@ -3247,8 +3880,7 @@ const GamePlayViewModel = () => {
       setYoutubeLiveOverlay({
         visible: true,
         title: i18n.t('youtubeLiveNotReadyTitle'),
-        message:
-          i18n.t('youtubeNativeModuleMissing'),
+        message: i18n.t('youtubeNativeModuleMissing'),
         checks: [],
       });
       return;
@@ -3275,27 +3907,51 @@ const GamePlayViewModel = () => {
         await stopYouTubeNativeLive();
         await stopVideoRecording(false);
 
-        const selectedLiveVisibility =
-          await readYouTubeVisibilityFromStorage();
+        const selectedLiveVisibility = await readYouTubeVisibilityFromStorage();
 
         const liveResponse = await createYouTubeLiveSession({
           title: youtubeTitle,
-          description: i18n.t("youtubeLiveDescription", {firstPlayerName, secondPlayerName}) as string,
+          description: i18n.t('youtubeLiveDescription', {
+            firstPlayerName,
+            secondPlayerName,
+          }) as string,
           privacyStatus: selectedLiveVisibility,
           enableAutoStart: true,
           enableAutoStop: true,
         });
 
         console.log('[YouTube Live] created:', liveResponse?.session);
-        console.log('[YouTube Live] broadcastId=' + String(liveResponse?.session?.broadcastId || ''));
-        console.log('[YouTube Live] streamId=' + String(liveResponse?.session?.streamId || ''));
-        console.log('[YouTube Live] rtmpUrl exists=' + Boolean(liveResponse?.session?.streamUrl));
-        console.log('[YouTube Live] streamKey exists=' + Boolean(liveResponse?.session?.streamName));
-        console.log('[YouTube Live] rtmpUrl received=' + Boolean(liveResponse?.session?.streamUrlWithKey));
+        console.log(
+          '[YouTube Live] broadcastId=' +
+            String(liveResponse?.session?.broadcastId || ''),
+        );
+        console.log(
+          '[YouTube Live] streamId=' +
+            String(liveResponse?.session?.streamId || ''),
+        );
+        console.log(
+          '[YouTube Live] rtmpUrl exists=' +
+            Boolean(liveResponse?.session?.streamUrl),
+        );
+        console.log(
+          '[YouTube Live] streamKey exists=' +
+            Boolean(liveResponse?.session?.streamName),
+        );
+        console.log(
+          '[YouTube Live] rtmpUrl received=' +
+            Boolean(liveResponse?.session?.streamUrlWithKey),
+        );
 
         activeYouTubeBroadcastIdRef.current =
           liveResponse?.session?.broadcastId || liveResponse?.session?.id || '';
-        console.log('[YouTube Live] active broadcast:', activeYouTubeBroadcastIdRef.current);
+        console.log(
+          '[YouTube Live] active broadcast:',
+          activeYouTubeBroadcastIdRef.current,
+        );
+        await publishAplusLivestreamUrlToWeb(
+          liveResponse?.session?.watchUrl,
+          'youtube-native',
+        );
         pendingYouTubeNativeStartRef.current = {
           url: liveResponse.session.streamUrlWithKey,
           options: {
@@ -3330,7 +3986,9 @@ const GamePlayViewModel = () => {
           await stopYouTubeNativeLive();
         } catch {}
 
-        const payload = error?.payload as YouTubeEligibilityResponse | undefined;
+        const payload = error?.payload as
+          | YouTubeEligibilityResponse
+          | undefined;
         const fallbackMessage =
           payload?.message ||
           error?.message ||
@@ -3363,6 +4021,7 @@ const GamePlayViewModel = () => {
     gameSettings,
     isStarted,
     playerSettings,
+    publishAplusLivestreamUrlToWeb,
     readYouTubeVisibilityFromStorage,
     saveToDeviceWhileStreaming,
     routeParams.livestreamPlatform,
@@ -3462,7 +4121,12 @@ const GamePlayViewModel = () => {
     void stopVideoRecording(false).catch(error => {
       console.log('[Replay] async stop on pause failed:', error);
     });
-  }, [isPaused, _resetCountdown, startNewGameAfterViolate, youtubeLiveNativeMode]);
+  }, [
+    isPaused,
+    _resetCountdown,
+    startNewGameAfterViolate,
+    youtubeLiveNativeMode,
+  ]);
 
   const onReplay = useCallback(async () => {
     if (!isStarted || !isPaused || !webcamFolderName) {
@@ -3487,7 +4151,8 @@ const GamePlayViewModel = () => {
         return;
       }
 
-      const latestPlayerSettingsForReplay = playerSettingsRef.current || playerSettings;
+      const latestPlayerSettingsForReplay =
+        playerSettingsRef.current || playerSettings;
       const latestWinnerForReplay = winnerRef.current || winner;
       const replayScoreSnapshot = getScoreSnapshotFromPlayerSettings(
         latestPlayerSettingsForReplay,
@@ -3506,7 +4171,8 @@ const GamePlayViewModel = () => {
         scoreAfterReplayClose: undefined,
         matchIdBeforeReplay: matchSessionIdRef.current,
         matchIdAfterReplayClose: undefined,
-        historyPathBeforeReplay: lastRecordedVideoPathRef.current || recordedPath,
+        historyPathBeforeReplay:
+          lastRecordedVideoPathRef.current || recordedPath,
         historyPathAfterReplayClose: undefined,
         replayCleanupTouchedHistory: false,
         replayCleanupTouchedScore: false,
@@ -3567,249 +4233,286 @@ const GamePlayViewModel = () => {
   ]);
 
   const onStop = useCallback(async () => {
-  Alert.alert(i18n.t('stop'), i18n.t('msgStopGame'), [
-    {
-      text: i18n.t('txtCancel'),
-      style: 'cancel',
-    },
-    {
-      text: i18n.t('stop'),
-      onPress: async () => {
-        if (isEndingGameRef.current) {
-          return;
-        }
-
-        isEndingGameRef.current = true;
-
-        try {
-          void setReplayResumeSnapshot(null);
-          void setLiveMatchSnapshot(null);
-          setReplayReturnRequestSync(null);
-          shouldStartRecordingRef.current = false;
-          pendingStartRecordingRef.current = false;
-          pendingYouTubeNativeStartRef.current = null;
-          setYoutubeLivePreparing(false);
-          await stopYouTubeNativeLive();
-          if (Platform.OS === 'windows') {
-            await stopWindowsFfmpegYouTubeLive('end-match');
-          }
-
-          const activeYouTubeBroadcastId = activeYouTubeBroadcastIdRef.current;
-          activeYouTubeBroadcastIdRef.current = '';
-          if (activeYouTubeBroadcastId) {
-            try {
-              await stopYouTubeLiveSession(activeYouTubeBroadcastId);
-              console.log('[YouTube Live] stopped broadcast:', activeYouTubeBroadcastId);
-            } catch (youtubeStopError) {
-              console.log('[YouTube Live] stop broadcast failed:', youtubeStopError);
-            }
-          }
-
-          setYoutubeLivePreviewActive(false);
-          setIsCameraReady(false);
-
-          const stoppedRecordingPath = await stopVideoRecording(false);
-          const recordedPath =
-            stoppedRecordingPath ??
-            lastRecordedVideoPathRef.current ??
-            (await getLatestReplaySegmentPath());
-
-          let finalVideoExists = false;
-          let finalVideoSize = 0;
-          if (recordedPath) {
-            try {
-              finalVideoExists = await RNFS.exists(recordedPath);
-              if (finalVideoExists) {
-                const stat = await RNFS.stat(recordedPath);
-                finalVideoSize = Number(stat?.size || 0);
-              }
-            } catch (statError) {
-              console.log('[HistoryFinalize] final video stat failed', statError);
-            }
-          }
-
-          console.log('[Replay] recorded path before endGame:', recordedPath);
-          console.log('[EndMatchAfterReplay]', {
-            currentScoreAtEnd: getScoreSnapshotFromPlayerSettings(
-              playerSettingsRef.current || playerSettings,
-            ),
-            finalCommittedScore: getScoreSnapshotFromPlayerSettings(
-              playerSettingsRef.current || playerSettings,
-            ),
-            historyVideoPath: recordedPath,
-            replayVideoPath: undefined,
-            usedVideoPathForHistory: recordedPath,
-            isUsingReplayPathForHistory: false,
-            showedVideoNotAvailable: false,
-            reasonIfVideoUnavailable: recordedPath ? undefined : 'no-history-or-recording-file-found-yet',
-          });
-          console.log('[VideoAvailabilityMessage]', {
-            context: 'end-match',
-            messageShown: false,
-            checkedPath: recordedPath,
-            checkedPathType: 'history',
-            exists: finalVideoExists,
-            size: finalVideoSize,
-            shouldShowToUser: false,
-          });
-
-          if (!recordedPath) {
-            isEndingGameRef.current = false;
-
-            console.log('[VideoAvailabilityMessage]', {
-              context: 'end-match',
-              messageShown: true,
-              checkedPath: recordedPath,
-              checkedPathType: 'history',
-              exists: false,
-              size: 0,
-              shouldShowToUser: true,
-            });
-
-            Alert.alert(
-              i18n.t('txtwarn'),
-              totalTime > 0
-                ? i18n.t('msgVideoNotAvailableExit')
-                : i18n.t('msgNoRecordingExit'),
-              [
-                {
-                  text: i18n.t('txtCancel'),
-                  style: 'cancel',
-                },
-                {
-                  text: i18n.t('txtExitWithoutSaving'),
-                  style: 'destructive',
-                  onPress: () => {
-                    resetCurrentMatchForNextGame();
-                    goBack();
-                  },
-                },
-              ],
-            );
-
+    Alert.alert(i18n.t('stop'), i18n.t('msgStopGame'), [
+      {
+        text: i18n.t('txtCancel'),
+        style: 'cancel',
+      },
+      {
+        text: i18n.t('stop'),
+        onPress: async () => {
+          if (isEndingGameRef.current) {
             return;
           }
 
-          await flushReplayScoreboardTimeline(webcamFolderName);
-          const replayTimeline = await loadReplayScoreboardTimeline(webcamFolderName);
-          const overlayLastSnapshot = replayTimeline?.entries?.length
-            ? replayTimeline.entries[replayTimeline.entries.length - 1]
-            : undefined;
-          const overlayLastSettings = overlayLastSnapshot?.playerSettings as
-            | PlayerSettings
-            | undefined;
-          const scoreBeforeFinalize = getFinalScoreSnapshot(playerSettings);
-          const latestStatePlayerSettings = playerSettingsRef.current || playerSettings;
-          const latestStateScore = getFinalScoreSnapshot(latestStatePlayerSettings);
-          const overlayLastSnapshotScore = getFinalScoreSnapshot(overlayLastSettings);
-          const useOverlayAsFinal =
-            overlayLastSettings &&
-            getScoreSnapshotTotal(overlayLastSnapshotScore) >=
-              getScoreSnapshotTotal(latestStateScore);
-          const finalPlayerSettings = cloneReplayValue(
-            useOverlayAsFinal ? overlayLastSettings : latestStatePlayerSettings,
-          );
-          const finalCommittedScore = getFinalScoreSnapshot(finalPlayerSettings);
-          const finalWinnerName =
-            winnerRef.current?.name ||
-            deriveWinnerNameFromScore(finalPlayerSettings, finalCommittedScore);
-          const finalTurn = totalTurnsRef.current;
-          const finalDurationSeconds = Math.max(
-            0,
-            Number(totalTimeRef.current || totalTime || 0),
-          );
-          const exportOptions = {
-            finalScore: finalCommittedScore,
-            winnerName: finalWinnerName,
-            finalPlayers: finalPlayerSettings?.playingPlayers,
-            finalTurn,
-            endedAt: Date.now(),
-            durationMs: finalDurationSeconds * 1000,
-          };
+          isEndingGameRef.current = true;
 
-          if (Platform.OS === 'windows') {
-            try {
-              const historyFolder = await exportMatchToArchive(
-                webcamFolderName,
-                exportOptions,
-              );
-              await deleteReplayFolder(webcamFolderName, {includeArchive: false});
-              console.log('[History] savedVideoPath =', historyFolder);
-              console.log('[HistoryFinalize]', {
-                matchId: webcamFolderName,
-                scoreBeforeFinalize,
-                overlayLastSnapshotScore,
-                finalCommittedScore,
-                savedHistoryScore: finalCommittedScore,
-                winner: finalWinnerName,
-                historyRecordPath: historyFolder,
-                finalVideoPath: recordedPath,
-                finalVideoExists,
-                finalVideoSize,
-              });
-            } catch (exportError) {
-              console.log('[HistoryVideo] error', exportError);
+          try {
+            void setReplayResumeSnapshot(null);
+            void setLiveMatchSnapshot(null);
+            setReplayReturnRequestSync(null);
+            shouldStartRecordingRef.current = false;
+            pendingStartRecordingRef.current = false;
+            pendingYouTubeNativeStartRef.current = null;
+            setYoutubeLivePreparing(false);
+            await stopYouTubeNativeLive();
+            if (Platform.OS === 'windows') {
+              await stopWindowsFfmpegYouTubeLive('end-match');
             }
-          } else if (saveToDeviceWhileStreaming) {
-            try {
-              const historyFolder = await exportMatchToArchive(
-                webcamFolderName,
-                exportOptions,
-              );
-              await deleteReplayFolder(webcamFolderName, {includeArchive: false});
-              console.log('[HistoryFinalize]', {
-                matchId: webcamFolderName,
-                scoreBeforeFinalize,
-                overlayLastSnapshotScore,
-                finalCommittedScore,
-                savedHistoryScore: finalCommittedScore,
-                winner: finalWinnerName,
-                historyRecordPath: historyFolder,
-                finalVideoPath: recordedPath,
-                finalVideoExists,
-                finalVideoSize,
-              });
-            } catch (exportError) {
-              console.log('[Replay] export full match failed:', exportError);
+
+            const activeYouTubeBroadcastId =
+              activeYouTubeBroadcastIdRef.current;
+            activeYouTubeBroadcastIdRef.current = '';
+            if (activeYouTubeBroadcastId) {
+              try {
+                await stopYouTubeLiveSession(activeYouTubeBroadcastId);
+                console.log(
+                  '[YouTube Live] stopped broadcast:',
+                  activeYouTubeBroadcastId,
+                );
+              } catch (youtubeStopError) {
+                console.log(
+                  '[YouTube Live] stop broadcast failed:',
+                  youtubeStopError,
+                );
+              }
             }
+
+            setYoutubeLivePreviewActive(false);
+            setIsCameraReady(false);
+
+            const stoppedRecordingPath = await stopVideoRecording(false);
+            const recordedPath =
+              stoppedRecordingPath ??
+              lastRecordedVideoPathRef.current ??
+              (await getLatestReplaySegmentPath());
+
+            let finalVideoExists = false;
+            let finalVideoSize = 0;
+            if (recordedPath) {
+              try {
+                finalVideoExists = await RNFS.exists(recordedPath);
+                if (finalVideoExists) {
+                  const stat = await RNFS.stat(recordedPath);
+                  finalVideoSize = Number(stat?.size || 0);
+                }
+              } catch (statError) {
+                console.log(
+                  '[HistoryFinalize] final video stat failed',
+                  statError,
+                );
+              }
+            }
+
+            console.log('[Replay] recorded path before endGame:', recordedPath);
+            console.log('[EndMatchAfterReplay]', {
+              currentScoreAtEnd: getScoreSnapshotFromPlayerSettings(
+                playerSettingsRef.current || playerSettings,
+              ),
+              finalCommittedScore: getScoreSnapshotFromPlayerSettings(
+                playerSettingsRef.current || playerSettings,
+              ),
+              historyVideoPath: recordedPath,
+              replayVideoPath: undefined,
+              usedVideoPathForHistory: recordedPath,
+              isUsingReplayPathForHistory: false,
+              showedVideoNotAvailable: false,
+              reasonIfVideoUnavailable: recordedPath
+                ? undefined
+                : 'no-history-or-recording-file-found-yet',
+            });
+            console.log('[VideoAvailabilityMessage]', {
+              context: 'end-match',
+              messageShown: false,
+              checkedPath: recordedPath,
+              checkedPathType: 'history',
+              exists: finalVideoExists,
+              size: finalVideoSize,
+              shouldShowToUser: false,
+            });
+
+            if (!recordedPath) {
+              isEndingGameRef.current = false;
+
+              console.log('[VideoAvailabilityMessage]', {
+                context: 'end-match',
+                messageShown: true,
+                checkedPath: recordedPath,
+                checkedPathType: 'history',
+                exists: false,
+                size: 0,
+                shouldShowToUser: true,
+              });
+
+              Alert.alert(
+                i18n.t('txtwarn'),
+                totalTime > 0
+                  ? i18n.t('msgVideoNotAvailableExit')
+                  : i18n.t('msgNoRecordingExit'),
+                [
+                  {
+                    text: i18n.t('txtCancel'),
+                    style: 'cancel',
+                  },
+                  {
+                    text: i18n.t('txtExitWithoutSaving'),
+                    style: 'destructive',
+                    onPress: async () => {
+                      await releaseAplusLiveSessionSafely(
+                        'exit-without-saving',
+                      );
+                      resetCurrentMatchForNextGame();
+                      goBack();
+                    },
+                  },
+                ],
+              );
+
+              return;
+            }
+
+            await flushReplayScoreboardTimeline(webcamFolderName);
+            const replayTimeline =
+              await loadReplayScoreboardTimeline(webcamFolderName);
+            const overlayLastSnapshot = replayTimeline?.entries?.length
+              ? replayTimeline.entries[replayTimeline.entries.length - 1]
+              : undefined;
+            const overlayLastSettings = overlayLastSnapshot?.playerSettings as
+              | PlayerSettings
+              | undefined;
+            const scoreBeforeFinalize = getFinalScoreSnapshot(playerSettings);
+            const latestStatePlayerSettings =
+              playerSettingsRef.current || playerSettings;
+            const latestStateScore = getFinalScoreSnapshot(
+              latestStatePlayerSettings,
+            );
+            const overlayLastSnapshotScore =
+              getFinalScoreSnapshot(overlayLastSettings);
+            const useOverlayAsFinal =
+              overlayLastSettings &&
+              getScoreSnapshotTotal(overlayLastSnapshotScore) >=
+                getScoreSnapshotTotal(latestStateScore);
+            const finalPlayerSettings = cloneReplayValue(
+              useOverlayAsFinal
+                ? overlayLastSettings
+                : latestStatePlayerSettings,
+            );
+            const finalCommittedScore =
+              getFinalScoreSnapshot(finalPlayerSettings);
+            const finalWinnerName =
+              winnerRef.current?.name ||
+              deriveWinnerNameFromScore(
+                finalPlayerSettings,
+                finalCommittedScore,
+              );
+            const finalTurn = totalTurnsRef.current;
+            const finalDurationSeconds = Math.max(
+              0,
+              Number(totalTimeRef.current || totalTime || 0),
+            );
+            const exportOptions = {
+              finalScore: finalCommittedScore,
+              winnerName: finalWinnerName,
+              finalPlayers: finalPlayerSettings?.playingPlayers,
+              finalTurn,
+              endedAt: Date.now(),
+              durationMs: finalDurationSeconds * 1000,
+            };
+
+            if (Platform.OS === 'windows') {
+              try {
+                const historyFolder = await exportMatchToArchive(
+                  webcamFolderName,
+                  exportOptions,
+                );
+                await deleteReplayFolder(webcamFolderName, {
+                  includeArchive: false,
+                });
+                console.log('[History] savedVideoPath =', historyFolder);
+                console.log('[HistoryFinalize]', {
+                  matchId: webcamFolderName,
+                  scoreBeforeFinalize,
+                  overlayLastSnapshotScore,
+                  finalCommittedScore,
+                  savedHistoryScore: finalCommittedScore,
+                  winner: finalWinnerName,
+                  historyRecordPath: historyFolder,
+                  finalVideoPath: recordedPath,
+                  finalVideoExists,
+                  finalVideoSize,
+                });
+              } catch (exportError) {
+                console.log('[HistoryVideo] error', exportError);
+              }
+            } else if (saveToDeviceWhileStreaming) {
+              try {
+                const historyFolder = await exportMatchToArchive(
+                  webcamFolderName,
+                  exportOptions,
+                );
+                await deleteReplayFolder(webcamFolderName, {
+                  includeArchive: false,
+                });
+                console.log('[HistoryFinalize]', {
+                  matchId: webcamFolderName,
+                  scoreBeforeFinalize,
+                  overlayLastSnapshotScore,
+                  finalCommittedScore,
+                  savedHistoryScore: finalCommittedScore,
+                  winner: finalWinnerName,
+                  historyRecordPath: historyFolder,
+                  finalVideoPath: recordedPath,
+                  finalVideoExists,
+                  finalVideoSize,
+                });
+              } catch (exportError) {
+                console.log('[Replay] export full match failed:', exportError);
+              }
+            }
+
+            dispatch(
+              gameActions.endGame({
+                realm,
+                gameSettings: {
+                  ...gameSettings,
+                  players: finalPlayerSettings || playerSettings,
+                  totalTime: finalDurationSeconds || totalTime,
+                  webcamFolderName,
+                  replayPath: recordedPath,
+                  saveToDeviceWhileStreaming,
+                },
+              }),
+            );
+
+            await finishAplusLiveSessionSafely(
+              'stop-game',
+              finalPlayerSettings || playerSettings,
+            );
+
+            clearActiveGameplaySessionSync();
+            setReplayResumeSnapshotSync(null);
+            setLiveMatchSnapshotSync(null);
+
+            resetCurrentMatchForNextGame();
+            goBack();
+          } catch (error) {
+            isEndingGameRef.current = false;
+            console.error(JSON.stringify(error));
           }
-
-          dispatch(
-            gameActions.endGame({
-              realm,
-              gameSettings: {
-                ...gameSettings,
-                players: finalPlayerSettings || playerSettings,
-                totalTime: finalDurationSeconds || totalTime,
-                webcamFolderName,
-                replayPath: recordedPath,
-                saveToDeviceWhileStreaming,
-              },
-            }),
-          );
-
-          clearActiveGameplaySessionSync();
-          setReplayResumeSnapshotSync(null);
-          setLiveMatchSnapshotSync(null);
-
-          resetCurrentMatchForNextGame();
-          goBack();
-        } catch (error) {
-          isEndingGameRef.current = false;
-          console.error(JSON.stringify(error));
-        }
+        },
       },
-    },
+    ]);
+  }, [
+    dispatch,
+    finishAplusLiveSessionSafely,
+    realm,
+    releaseAplusLiveSessionSafely,
+    totalTime,
+    gameSettings,
+    playerSettings,
+    saveToDeviceWhileStreaming,
+    webcamFolderName,
   ]);
-}, [
-  dispatch,
-  realm,
-  totalTime,
-  gameSettings,
-  playerSettings,
-  saveToDeviceWhileStreaming,
-  webcamFolderName,
-]);
 
   const onReset = useCallback(() => {
     resetCurrentMatchForNextGame();
@@ -3846,7 +4549,10 @@ const GamePlayViewModel = () => {
 
       return replayFiles[replayFiles.length - 1]?.path;
     } catch (error) {
-      console.log('[Replay] Failed to get latest replay/history segment:', error);
+      console.log(
+        '[Replay] Failed to get latest replay/history segment:',
+        error,
+      );
       return undefined;
     }
   };
@@ -3911,22 +4617,32 @@ const GamePlayViewModel = () => {
                 // Mặc định tắt để ưu tiên độ mượt và tránh spike FFmpeg sau mỗi segment.
               }
 
-              const registeringSegmentIndex = currentReplaySegmentIndexRef.current;
-              const nativeDurationSeconds = Number((video as any)?.durationSeconds || 0);
+              const registeringSegmentIndex =
+                currentReplaySegmentIndexRef.current;
+              const nativeDurationSeconds = Number(
+                (video as any)?.durationSeconds || 0,
+              );
               const wallDurationSeconds = Math.max(
                 0,
-                (Date.now() - Math.max(0, currentReplaySegmentWallStartMsRef.current || Date.now())) / 1000,
+                (Date.now() -
+                  Math.max(
+                    0,
+                    currentReplaySegmentWallStartMsRef.current || Date.now(),
+                  )) /
+                  1000,
               );
               const matchClockDurationSeconds = Math.max(
                 0,
-                totalTimeRef.current - currentReplaySegmentStartTotalTimeRef.current,
+                totalTimeRef.current -
+                  currentReplaySegmentStartTotalTimeRef.current,
               );
               const resolvedDurationSeconds = Math.max(
                 nativeDurationSeconds,
                 wallDurationSeconds,
                 matchClockDurationSeconds,
               );
-              const resolvedSegmentStartedAt = Number((video as any)?.nativeStartResolvedAtMs || 0) ||
+              const resolvedSegmentStartedAt =
+                Number((video as any)?.nativeStartResolvedAtMs || 0) ||
                 currentReplaySegmentWallStartMsRef.current ||
                 Date.now() - resolvedDurationSeconds * 1000;
 
@@ -3949,7 +4665,9 @@ const GamePlayViewModel = () => {
                   matchSessionId: matchSessionIdRef.current,
                   segmentIndex: registeringSegmentIndex,
                   mode: gameSettings?.category,
-                  playerNames: playerSettings?.playingPlayers?.map(player => String(player?.name || '')).filter(Boolean) as string[],
+                  playerNames: playerSettings?.playingPlayers
+                    ?.map(player => String(player?.name || ''))
+                    .filter(Boolean) as string[],
                   segmentStartedAt: resolvedSegmentStartedAt,
                   durationSeconds: resolvedDurationSeconds,
                 },
@@ -3972,11 +4690,11 @@ const GamePlayViewModel = () => {
                 ) {
                   lastPruneCompletedSegmentsRef.current = completedSegments;
                   setTimeout(() => {
-                    void pruneReplayStorage(MAX_REPLAY_STORAGE_BYTES, [webcamFolderName]).catch(
-                      error => {
-                        console.log('[Replay] deferred prune failed:', error);
-                      },
-                    );
+                    void pruneReplayStorage(MAX_REPLAY_STORAGE_BYTES, [
+                      webcamFolderName,
+                    ]).catch(error => {
+                      console.log('[Replay] deferred prune failed:', error);
+                    });
                   }, 1500);
                 }
               }
@@ -4073,7 +4791,9 @@ const GamePlayViewModel = () => {
 
     if (!cameraRef.current || !isRecordingRef.current) {
       console.log('[Replay] skip stop: not recording');
-      return lastRecordedVideoPathRef.current ?? (await getLatestReplaySegmentPath());
+      return (
+        lastRecordedVideoPathRef.current ?? (await getLatestReplaySegmentPath())
+      );
     }
 
     isStoppingRecordingRef.current = true;
@@ -4099,7 +4819,8 @@ const GamePlayViewModel = () => {
       if (!recordedPath) {
         await new Promise(resolve => setTimeout(resolve, 700));
         recordedPath =
-          lastRecordedVideoPathRef.current ?? (await getLatestReplaySegmentPath());
+          lastRecordedVideoPathRef.current ??
+          (await getLatestReplaySegmentPath());
       }
 
       if (!recordedPath) {
@@ -4110,7 +4831,10 @@ const GamePlayViewModel = () => {
         restartAfterStopRef.current = false;
       }
 
-      console.log('[Replay] stopVideoRecording finished with path:', recordedPath);
+      console.log(
+        '[Replay] stopVideoRecording finished with path:',
+        recordedPath,
+      );
       return recordedPath;
     } catch (error) {
       console.error('Failed to stop recording:', error);
@@ -4118,7 +4842,9 @@ const GamePlayViewModel = () => {
       setIsRecording(false);
       isStoppingRecordingRef.current = false;
       restartAfterStopRef.current = false;
-      return lastRecordedVideoPathRef.current ?? (await getLatestReplaySegmentPath());
+      return (
+        lastRecordedVideoPathRef.current ?? (await getLatestReplaySegmentPath())
+      );
     }
   };
 
@@ -4186,12 +4912,16 @@ const GamePlayViewModel = () => {
       youtubeLivePreviewActive,
       dismissYouTubeLiveOverlay,
       openYouTubeLiveLogin,
+      aplusLiveSession,
+      aplusLiveMatch,
+      aplusLiveSyncStatus,
+      aplusLiveSyncError,
       cameraRef,
       setIsCameraReady,
       isCameraReady,
       isRecording,
       cameraSessionNonce,
-    language,
+      language,
       //isPreview,
       //setIsPreview,
       //pauseVideoRecording,
@@ -4263,6 +4993,10 @@ const GamePlayViewModel = () => {
     youtubeLivePreviewActive,
     dismissYouTubeLiveOverlay,
     openYouTubeLiveLogin,
+    aplusLiveSession,
+    aplusLiveMatch,
+    aplusLiveSyncStatus,
+    aplusLiveSyncError,
     cameraRef,
     isPaused,
     setIsCameraReady,

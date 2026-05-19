@@ -127,6 +127,11 @@ const GameSettings = (props: Props) => {
                 gameMode={viewModel.gameMode}
                 category={viewModel.category}
                 playerSettings={viewModel.playerSettings}
+                aplusLivePanel={viewModel.aplusLivePanel}
+                onRefreshAplusTournaments={viewModel.onRefreshAplusTournaments}
+                onSelectAplusTournament={viewModel.onSelectAplusTournament}
+                onChangeAplusMatchCode={viewModel.onChangeAplusMatchCode}
+                onCheckAplusLiveMatch={viewModel.onCheckAplusLiveMatch}
                 onSelectPlayerNumber={viewModel.onSelectPlayerNumber}
                 onSelectPlayerGoal={viewModel.onSelectPlayerGoal}
                 onChangePlayerName={viewModel.onChangePlayerName}
