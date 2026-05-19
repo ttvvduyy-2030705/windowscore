@@ -3,12 +3,12 @@ import {Platform} from 'react-native';
 // Local backend dùng khi chạy debug trên máy dev.
 // Nếu backend local không chạy cùng máy Windows app, đổi localhost thành IP LAN của máy chạy BE.
 export const APLUS_LIVE_SCORE_DEV_API_BASE_URL =
-  'http://127.0.0.1:5000/api/live';
+  'https://api-aplus.180.93.36.239.nip.io/api/live';
 
 // URL production sau khi deploy backend Aplus.
 // Khi đưa lên hosting thật, đảm bảo backend đã mount /api/live và có LIVE_SCORE_API_KEY giống key bên dưới.
 export const APLUS_LIVE_SCORE_RELEASE_API_BASE_URL =
-  'https://aplusbilliards.vn/api/live';
+  'https://api-aplus.180.93.36.239.nip.io/api/live';
 
 export const APLUS_LIVE_SCORE_API_BASE_URL = Platform.OS === 'windows'
   ? __DEV__
@@ -20,7 +20,7 @@ export const APLUS_LIVE_SCORE_API_BASE_URL = Platform.OS === 'windows'
 
 // Batch 5: để key local trùng với BE/.env đang test.
 // Khi deploy production, đổi giá trị này để trùng LIVE_SCORE_API_KEY trên hosting.
-export const APLUS_LIVE_SCORE_API_KEY = 'aplus_live_score_secret_key';
+export const APLUS_LIVE_SCORE_API_KEY = '9573af1e70f348a8b3677d8701a5cb50c4af771bbbe042c8944647b24f84235b';
 
 export const APLUS_LIVE_SCORE_REQUEST_TIMEOUT_MS = 10000;
 
