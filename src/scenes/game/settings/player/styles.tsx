@@ -271,6 +271,37 @@ export const createStyles = (adaptive: {
       fontSize: fs(isPhone ? 12 : 13),
       paddingVertical: s(6),
     },
+    aplusTournamentSelector: {
+      minHeight: s(48),
+      borderRadius: s(10),
+      borderWidth: 1,
+      borderColor: 'rgba(255,255,255,0.18)',
+      backgroundColor: '#454545',
+      justifyContent: 'center',
+      paddingHorizontal: s(13),
+      marginBottom: s(10),
+    },
+    aplusTournamentSelectorContent: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+    },
+    aplusTournamentSelectorText: {
+      flex: 1,
+      color: '#FFFFFF',
+      fontSize: fs(isPhone ? 12.5 : 13.5),
+      fontWeight: '600',
+      marginRight: s(10),
+    },
+    aplusTournamentPlaceholder: {
+      color: '#BDBDBD',
+      fontWeight: '500',
+    },
+    aplusTournamentChevron: {
+      color: '#FFFFFF',
+      fontSize: fs(12),
+      fontWeight: '800',
+    },
     aplusInputRow: {
       flexDirection: 'row',
       alignItems: 'flex-end',
@@ -371,6 +402,16 @@ export const createStyles = (adaptive: {
       borderColor: 'rgba(255,0,0,0.28)',
       padding: s(14),
     },
+    tournamentModalCard: {
+      width: '100%',
+      maxWidth: s(520),
+      maxHeight: '72%',
+      backgroundColor: '#1F1F1F',
+      borderRadius: s(14),
+      borderWidth: 1,
+      borderColor: 'rgba(255,0,0,0.28)',
+      padding: s(14),
+    },
     countryModalTitle: {
       color: '#FFFFFF',
       fontSize: fs(16),
@@ -410,6 +451,22 @@ export const createStyles = (adaptive: {
       color: '#FFFFFF',
       fontSize: fs(15),
       flex: 1,
+    },
+    tournamentItem: {
+      paddingVertical: s(12),
+      paddingHorizontal: s(10),
+      borderRadius: s(10),
+    },
+    tournamentItemActive: {
+      backgroundColor: '#E11D25',
+    },
+    tournamentItemText: {
+      color: '#FFFFFF',
+      fontSize: fs(14.5),
+      fontWeight: '600',
+    },
+    tournamentItemTextActive: {
+      fontWeight: '800',
     },
     countryEmptyText: {
       color: '#B8B8B8',

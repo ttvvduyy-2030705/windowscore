@@ -1,5 +1,5 @@
 import React, {memo, useCallback, useEffect, useMemo, useState} from 'react';
-import {ActivityIndicator, FlatList, Image, Pressable, ScrollView, Text, TextInput, View} from 'react-native';
+import {ActivityIndicator, Image, Pressable, ScrollView, Text, TextInput, View} from 'react-native';
 import Modal from 'components/WindowsModal';
 
 import i18n from 'i18n';
@@ -244,6 +244,8 @@ const PlayerSettingsComponent = ({
   const [countryPlayerIndex, setCountryPlayerIndex] = useState<number | null>(
     null,
   );
+  const [tournamentModalVisible, setTournamentModalVisible] = useState(false);
+  const [tournamentKeyword, setTournamentKeyword] = useState('');
 
   const reapplyFullscreenSystemUI = useCallback(() => {
     configureSystemUI({
@@ -303,6 +305,18 @@ const PlayerSettingsComponent = ({
     requestAnimationFrame(reapplyFullscreenSystemUI);
   }, [reapplyFullscreenSystemUI]);
 
+  const openTournamentModal = useCallback(() => {
+    setTournamentKeyword('');
+    setTournamentModalVisible(true);
+    requestAnimationFrame(reapplyFullscreenSystemUI);
+  }, [reapplyFullscreenSystemUI]);
+
+  const closeTournamentModal = useCallback(() => {
+    setTournamentModalVisible(false);
+    setTournamentKeyword('');
+    requestAnimationFrame(reapplyFullscreenSystemUI);
+  }, [reapplyFullscreenSystemUI]);
+
   useEffect(() => {
     if (!countryModalVisible) {
       return;
@@ -319,6 +333,22 @@ const PlayerSettingsComponent = ({
     };
   }, [countryModalVisible, reapplyFullscreenSystemUI]);
 
+  useEffect(() => {
+    if (!tournamentModalVisible) {
+      return;
+    }
+
+    reapplyFullscreenSystemUI();
+
+    const timers = [0, 80, 180].map(delay =>
+      setTimeout(reapplyFullscreenSystemUI, delay),
+    );
+
+    return () => {
+      timers.forEach(clearTimeout);
+    };
+  }, [tournamentModalVisible, reapplyFullscreenSystemUI]);
+
   const filteredCountries = useMemo(() => {
     const keyword = normalizeCountryName(countryKeyword);
 
@@ -334,6 +364,25 @@ const PlayerSettingsComponent = ({
       );
     });
   }, [countryKeyword]);
+
+  const filteredTournaments = useMemo(() => {
+    const tournaments = aplusLivePanel?.tournaments || [];
+    const keyword = String(tournamentKeyword || '').trim().toLowerCase();
+
+    if (!keyword) {
+      return tournaments;
+    }
+
+    return tournaments.filter(item => {
+      const name = String(item?.name || '').toLowerCase();
+      const slug = String(item?.slug || '').toLowerCase();
+      const id = String(item?._id || '').toLowerCase();
+
+      return name.includes(keyword) || slug.includes(keyword) || id.includes(keyword);
+    });
+  }, [aplusLivePanel?.tournaments, tournamentKeyword]);
+
+  const selectedAplusTournamentId = aplusLivePanel?.selectedTournamentId || '';
 
   const renderSelectorRow = useCallback(
     (
@@ -619,47 +668,43 @@ const PlayerSettingsComponent = ({
           {isEnglish ? 'Tournament' : 'Chọn giải'}
         </Text>
 
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.aplusTournamentList}>
-          {tournaments.length ? (
-            tournaments.map(item => {
-              const active = item._id === selectedTournamentId;
-              return (
-                <Pressable
-                  key={item._id}
-                  disabled={disabled}
-                  onPress={() => onSelectAplusTournament?.(item._id)}
-                  style={({pressed}) => [
-                    styles.aplusTournamentButton,
-                    active && styles.aplusTournamentButtonActive,
-                    disabled && styles.aplusButtonDisabled,
-                    pressed && !disabled && styles.selectorButtonPressed,
-                  ]}>
-                  <Text
-                    numberOfLines={1}
-                    style={[
-                      styles.aplusTournamentText,
-                      active && styles.aplusTournamentTextActive,
-                    ]}>
-                    {item.name || item.slug || item._id}
-                  </Text>
-                </Pressable>
-              );
-            })
-          ) : (
-            <Text style={styles.aplusEmptyText}>
-              {loading
-                ? isEnglish
-                  ? 'Loading tournaments...'
-                  : 'Đang tải danh sách giải...'
-                : isEnglish
-                ? 'No tournament loaded.'
-                : 'Chưa tải được giải nào.'}
-            </Text>
-          )}
-        </ScrollView>
+        {tournaments.length ? (
+          <Pressable
+            disabled={disabled}
+            onPress={openTournamentModal}
+            style={({pressed}) => [
+              styles.aplusTournamentSelector,
+              disabled && styles.aplusButtonDisabled,
+              pressed && !disabled && styles.selectorButtonPressed,
+            ]}>
+            <View style={styles.aplusTournamentSelectorContent}>
+              <Text
+                numberOfLines={1}
+                style={[
+                  styles.aplusTournamentSelectorText,
+                  !selectedTournament && styles.aplusTournamentPlaceholder,
+                ]}>
+                {selectedTournament
+                  ? selectedTournament.name || selectedTournament.slug || selectedTournament._id
+                  : isEnglish
+                  ? 'Select tournament'
+                  : 'Chọn giải'}
+              </Text>
+
+              <Text style={styles.aplusTournamentChevron}>▼</Text>
+            </View>
+          </Pressable>
+        ) : (
+          <Text style={styles.aplusEmptyText}>
+            {loading
+              ? isEnglish
+                ? 'Loading tournaments...'
+                : 'Đang tải danh sách giải...'
+              : isEnglish
+              ? 'No tournament loaded.'
+              : 'Chưa tải được giải nào.'}
+          </Text>
+        )}
 
         <View style={styles.aplusInputRow}>
           <View style={styles.aplusInputGroup}>
@@ -748,6 +793,7 @@ const PlayerSettingsComponent = ({
     onCheckAplusLiveMatch,
     onRefreshAplusTournaments,
     onSelectAplusTournament,
+    openTournamentModal,
     playerSettings.playerNumber,
     styles,
   ]);
@@ -776,6 +822,76 @@ const PlayerSettingsComponent = ({
       {renderAplusLivePanel()}
 
       <Modal
+        visible={tournamentModalVisible}
+        transparent={true}
+        animationType="fade"
+        statusBarTranslucent={true}
+        navigationBarTranslucent={true}
+        hardwareAccelerated={true}
+        onShow={reapplyFullscreenSystemUI}
+        onRequestClose={closeTournamentModal}>
+        <Pressable
+          style={styles.countryModalOverlay}
+          onPress={closeTournamentModal}>
+          <Pressable style={styles.tournamentModalCard} onPress={() => {}}>
+            <Text style={styles.countryModalTitle}>
+              {isEnglish ? 'Select tournament' : 'Chọn giải'}
+            </Text>
+
+            <TextInput
+              value={tournamentKeyword}
+              onChangeText={setTournamentKeyword}
+              placeholder={isEnglish ? 'Search tournament...' : 'Tìm giải...'}
+              placeholderTextColor="#8E8E8E"
+              autoCorrect={false}
+              autoCapitalize="none"
+              autoFocus={false}
+              onFocus={reapplyFullscreenSystemUI}
+              style={styles.countrySearchInput}
+            />
+
+            <ScrollView
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+              style={styles.countryList}>
+              {filteredTournaments.length ? (
+                filteredTournaments.map(item => {
+                  const active = item._id === selectedAplusTournamentId;
+
+                  return (
+                    <Pressable
+                      key={item._id}
+                      style={({pressed}) => [
+                        styles.tournamentItem,
+                        active && styles.tournamentItemActive,
+                        pressed && styles.countryItemPressed,
+                      ]}
+                      onPress={() => {
+                        onSelectAplusTournament?.(item._id);
+                        closeTournamentModal();
+                      }}>
+                      <Text
+                        numberOfLines={1}
+                        style={[
+                          styles.tournamentItemText,
+                          active && styles.tournamentItemTextActive,
+                        ]}>
+                        {item.name || item.slug || item._id}
+                      </Text>
+                    </Pressable>
+                  );
+                })
+              ) : (
+                <Text style={styles.countryEmptyText}>
+                  {isEnglish ? 'No tournament found' : 'Không tìm thấy giải'}
+                </Text>
+              )}
+            </ScrollView>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      <Modal
         visible={countryModalVisible}
         transparent={true}
         animationType="fade"
@@ -802,66 +918,66 @@ const PlayerSettingsComponent = ({
               style={styles.countrySearchInput}
             />
 
-            <FlatList
-              data={filteredCountries}
-              keyExtractor={item => item.code}
+            <ScrollView
               keyboardShouldPersistTaps="handled"
               showsVerticalScrollIndicator={false}
-              style={styles.countryList}
-              renderItem={({item}) => {
-                const displayFlag = item.flag || item.code || '--';
-                const displayFlagImage = getCountryFlagImageUri(item.code, 80);
+              style={styles.countryList}>
+              {filteredCountries.length ? (
+                filteredCountries.map(item => {
+                  const displayFlag = item.flag || item.code || '--';
+                  const displayFlagImage = getCountryFlagImageUri(item.code, 80);
 
-                return (
-                  <Pressable
-                    style={({pressed}) => [
-                      styles.countryItem,
-                      pressed && styles.countryItemPressed,
-                    ]}
-                    onPress={() => {
-                      if (countryPlayerIndex !== null) {
-                        onSelectPlayerCountry(
-                          {
-                            ...item,
-                            flag: displayFlag,
-                          },
-                          countryPlayerIndex,
-                        );
-                      }
-                      closeCountryModal();
-                    }}>
-                    {displayFlagImage ? (
-                      <View
-                        style={{
-                          width: 42,
-                          height: 28,
-                          marginRight: 12,
-                          borderRadius: 4,
-                          backgroundColor: '#FFFFFF',
-                          borderWidth: 1,
-                          borderColor: 'rgba(255,255,255,0.55)',
-                          overflow: 'hidden',
-                        }}>
-                        <Image
-                          source={{uri: displayFlagImage}}
-                          resizeMode="cover"
-                          fadeDuration={0}
-                          style={{width: '100%', height: '100%'}}
-                        />
-                      </View>
-                    ) : (
-                      <Text style={styles.countryFlag}>{displayFlag}</Text>
-                    )}
-                    <Text style={styles.countryName}>{item.name}</Text>
-                  </Pressable>
-                );
-              }}
-              ListEmptyComponent={
+                  return (
+                    <Pressable
+                      key={item.code}
+                      style={({pressed}) => [
+                        styles.countryItem,
+                        pressed && styles.countryItemPressed,
+                      ]}
+                      onPress={() => {
+                        if (countryPlayerIndex !== null) {
+                          onSelectPlayerCountry(
+                            {
+                              ...item,
+                              flag: displayFlag,
+                            },
+                            countryPlayerIndex,
+                          );
+                        }
+                        closeCountryModal();
+                      }}>
+                      {displayFlagImage ? (
+                        <View
+                          style={{
+                            width: 42,
+                            height: 28,
+                            marginRight: 12,
+                            borderRadius: 4,
+                            backgroundColor: '#FFFFFF',
+                            borderWidth: 1,
+                            borderColor: 'rgba(255,255,255,0.55)',
+                            overflow: 'hidden',
+                          }}>
+                          <Image
+                            source={{uri: displayFlagImage}}
+                            resizeMode="cover"
+                            fadeDuration={0}
+                            style={{width: '100%', height: '100%'}}
+                          />
+                        </View>
+                      ) : (
+                        <Text style={styles.countryFlag}>{displayFlag}</Text>
+                      )}
+                      <Text style={styles.countryName}>{item.name}</Text>
+                    </Pressable>
+                  );
+                })
+              ) : (
                 <Text style={styles.countryEmptyText}>
                   {isEnglish ? 'No result found' : 'Không tìm thấy kết quả'}
                 </Text>
-              }
-            />
+              )}
+            </ScrollView>
           </Pressable>
         </Pressable>
       </Modal>

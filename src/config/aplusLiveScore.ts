@@ -1,14 +1,17 @@
 import {Platform} from 'react-native';
 
-// Local backend dùng khi chạy debug trên máy dev.
-// Nếu backend local không chạy cùng máy Windows app, đổi localhost thành IP LAN của máy chạy BE.
+// Sidecar API live score riêng, không cần quyền sửa VPS API cũ của dev.
+// Sidecar sẽ tự proxy dữ liệu giải/trận từ API cũ:
+// https://api-aplus.180.93.36.239.nip.io/api
+//
+// Debug local: chạy aplus-live-sidecar-api ở máy dev bằng port 5010.
 export const APLUS_LIVE_SCORE_DEV_API_BASE_URL =
-  'https://api-aplus.180.93.36.239.nip.io/api/live';
+  'https://live-api.103.138.88.55.nip.io/api/live';
 
-// URL production sau khi deploy backend Aplus.
-// Khi đưa lên hosting thật, đảm bảo backend đã mount /api/live và có LIVE_SCORE_API_KEY giống key bên dưới.
+// Production: thay URL này bằng domain thật nơi deploy aplus-live-sidecar-api.
+// Ví dụ: https://live-api.aplusbilliards.vn/api/live
 export const APLUS_LIVE_SCORE_RELEASE_API_BASE_URL =
-  'https://api-aplus.180.93.36.239.nip.io/api/live';
+  'https://live-api.103.138.88.55.nip.io/api/live';
 
 export const APLUS_LIVE_SCORE_API_BASE_URL = Platform.OS === 'windows'
   ? __DEV__
@@ -18,8 +21,7 @@ export const APLUS_LIVE_SCORE_API_BASE_URL = Platform.OS === 'windows'
     ? APLUS_LIVE_SCORE_DEV_API_BASE_URL
     : APLUS_LIVE_SCORE_RELEASE_API_BASE_URL;
 
-// Batch 5: để key local trùng với BE/.env đang test.
-// Khi deploy production, đổi giá trị này để trùng LIVE_SCORE_API_KEY trên hosting.
+// Key này phải trùng với LIVE_SCORE_API_KEY trong sidecar API.
 export const APLUS_LIVE_SCORE_API_KEY = '9573af1e70f348a8b3677d8701a5cb50c4af771bbbe042c8944647b24f84235b';
 
 export const APLUS_LIVE_SCORE_REQUEST_TIMEOUT_MS = 10000;
@@ -42,6 +44,7 @@ export const isConfiguredAplusLiveScoreBaseUrl = (value: string) => {
   }
 
   if (
+    value.includes('YOUR_LIVE_SIDECAR_DOMAIN') ||
     value.includes('YOUR_APLUS_LIVE_SCORE_BACKEND_URL') ||
     value.includes('example.com')
   ) {
