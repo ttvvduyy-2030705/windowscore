@@ -22,7 +22,7 @@ export const APLUS_LIVE_SCORE_API_BASE_URL = Platform.OS === 'windows'
     : APLUS_LIVE_SCORE_RELEASE_API_BASE_URL;
 
 // Key này phải trùng với LIVE_SCORE_API_KEY trong sidecar API.
-export const APLUS_LIVE_SCORE_API_KEY = '9573af1e70f348a8b3677d8701a5cb50c4af771bbbe042c8944647b24f84235b';
+export const APLUS_LIVE_SCORE_API_KEY = 'jahsd82ohehbcfjbsc89ay3wbejkhdbc982ybkejhbcf8dasjchbkjf92jdfi8ow2i';
 
 export const APLUS_LIVE_SCORE_REQUEST_TIMEOUT_MS = 10000;
 
