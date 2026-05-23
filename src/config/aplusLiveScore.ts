@@ -6,12 +6,12 @@ import {Platform} from 'react-native';
 //
 // Debug local: chạy aplus-live-sidecar-api ở máy dev bằng port 5010.
 export const APLUS_LIVE_SCORE_DEV_API_BASE_URL =
-  'https://live-api.103.138.88.55.nip.io/api/live';
+  'https://live-api.aplusbilliards.vn/api/live';
 
 // Production: thay URL này bằng domain thật nơi deploy aplus-live-sidecar-api.
 // Ví dụ: https://live-api.aplusbilliards.vn/api/live
 export const APLUS_LIVE_SCORE_RELEASE_API_BASE_URL =
-  'https://live-api.103.138.88.55.nip.io/api/live';
+  'https://live-api.aplusbilliards.vn/api/live';
 
 export const APLUS_LIVE_SCORE_API_BASE_URL = Platform.OS === 'windows'
   ? __DEV__

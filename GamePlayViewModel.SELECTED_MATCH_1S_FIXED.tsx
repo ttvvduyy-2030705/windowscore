@@ -680,12 +680,6 @@ const GamePlayViewModel = () => {
   const currentReplaySegmentWallStartMsRef = useRef(0);
   const totalTimeRef = useRef(0);
   const totalTurnsRef = useRef(1);
-  const countdownTimeRef = useRef(0);
-  const gameSettingsRef = useRef<any>(gameSettings);
-  const isStartedRef = useRef(false);
-  const isPausedRef = useRef(false);
-  const isMatchPausedRef = useRef(false);
-  const poolBreakEnabledRef = useRef(false);
   const playerSettingsRef = useRef<PlayerSettings | undefined>(undefined);
   const winnerRef = useRef<Player | undefined>(undefined);
   const activeMatchFolderNameRef = useRef<string | null>(null);
@@ -704,6 +698,7 @@ const GamePlayViewModel = () => {
   const aplusLiveScoreDebounceRef = useRef<NodeJS.Timeout | null>(null);
   const aplusLiveScoreRetryRef = useRef<NodeJS.Timeout | null>(null);
   const aplusLiveScoreSendingRef = useRef(false);
+  const aplusLiveRealtimeSyncInFlightRef = useRef(false);
   const aplusLiveScoreInitializedRef = useRef(false);
   const aplusLiveLastScoreSignatureRef = useRef('');
   const aplusLivePendingScoreRef = useRef<
@@ -1618,23 +1613,11 @@ const payload = {
   const [isMatchPaused, setIsMatchPaused] = useState<boolean>(false);
   const [gameBreakEnabled, setGameBreakEnabled] = useState<boolean>(false);
   const [poolBreakEnabled, setPoolBreakEnabled] = useState<boolean>(false);
-  countdownTimeRef.current = countdownTime;
-  gameSettingsRef.current = gameSettings;
-  isStartedRef.current = isStarted;
-  isPausedRef.current = isPaused;
-  isMatchPausedRef.current = isMatchPaused;
-  poolBreakEnabledRef.current = poolBreakEnabled;
-
   const buildAplusLiveRealtimePayload = useCallback(() => {
-    const currentGameSettings = gameSettingsRef.current as any;
-    const currentPlayerSettings = playerSettingsRef.current as any;
-    const countdownSeconds = Math.max(
-      0,
-      Math.round(Number(countdownTimeRef.current || 0)),
-    );
+    const countdownSeconds = Math.max(0, Math.round(Number(countdownTime || 0)));
     const baseCountdownRaw =
-      currentGameSettings?.mode?.countdownTime ??
-      currentGameSettings?.countdownTime ??
+      (gameSettings as any)?.mode?.countdownTime ??
+      (gameSettings as any)?.countdownTime ??
       countdownSeconds;
     const countdownBase = Math.max(
       countdownSeconds,
@@ -1642,22 +1625,22 @@ const payload = {
     );
     const turnCount = Math.max(
       1,
-      Math.round(Number(totalTurnsRef.current || 1)),
+      Math.round(Number(totalTurnsRef.current || totalTurns || 1)),
     );
     const targetRaw =
-      currentGameSettings?.players?.goal?.goal ??
-      currentGameSettings?.goal?.goal ??
-      currentGameSettings?.goal ??
-      currentPlayerSettings?.goal?.goal ??
-      currentPlayerSettings?.goal ??
-      currentPlayerSettings?.targetScore ??
+      (gameSettings as any)?.players?.goal?.goal ??
+      (gameSettings as any)?.goal?.goal ??
+      (gameSettings as any)?.goal ??
+      (playerSettingsRef.current as any)?.goal?.goal ??
+      (playerSettingsRef.current as any)?.goal ??
+      (playerSettingsRef.current as any)?.targetScore ??
       0;
     const targetScore = Math.round(Number(targetRaw || 0));
     const countdownRunning = Boolean(
-      isStartedRef.current &&
-        !isPausedRef.current &&
-        !isMatchPausedRef.current &&
-        !poolBreakEnabledRef.current &&
+      isStarted &&
+        !isPaused &&
+        !isMatchPaused &&
+        !poolBreakEnabled &&
         !winnerRef.current,
     );
 
@@ -1675,78 +1658,75 @@ const payload = {
       turnCount,
       liveTurnCount: turnCount,
     };
-  }, []);
+  }, [
+    countdownTime,
+    gameSettings,
+    isMatchPaused,
+    isPaused,
+    isStarted,
+    poolBreakEnabled,
+    totalTurns,
+  ]);
+
 
   // SELECTED_MATCH_REALTIME_1S_SYNC_FINAL
+  // Push score, turn count, target score and countdown to the exact match selected in the Aplus panel.
+  // This replaces the old hidden AplusWebLiveCountdownSync component, so it cannot claim a wrong T1/T01 match.
   useEffect(() => {
-    let stopped = false;
-    let sending = false;
-
-    const sendRealtimeSnapshot = async () => {
-      if (stopped || sending) {
-        return;
-      }
-
+    const timer = setInterval(() => {
       const session = aplusLiveSessionRef.current;
-      const latestPlayerSettings = playerSettingsRef.current;
+      const latestPlayerSettings = playerSettingsRef.current || playerSettings;
 
       if (
         !session?.matchId ||
         !session?.sessionToken ||
         !latestPlayerSettings ||
-        aplusLiveFinishedRef.current
+        aplusLiveRealtimeSyncInFlightRef.current
       ) {
         return;
       }
 
       const {score1, score2} = getAplusLiveCurrentScores(latestPlayerSettings);
-      const realtimePayload = buildAplusLiveRealtimePayload();
+      const payload = {
+        score1,
+        score2,
+        status: winnerRef.current ? 'finished' : 'playing',
+        isLive: true,
+        ...buildAplusLiveRealtimePayload(),
+      } as any;
 
-      sending = true;
-      try {
-        await sendAplusLiveScore(
-          session.matchId,
-          session.sessionToken,
-          {
-            score1,
-            score2,
-            status: winnerRef.current ? 'finished' : 'playing',
-            isLive: true,
-            ...realtimePayload,
-          } as any,
-        );
-        setAplusLiveSyncStatus('online');
-        setAplusLiveSyncError('');
-        console.log('[AplusLiveScore] SELECTED_MATCH_REALTIME_1S_SYNC_FINAL sent', {
-          matchId: session.matchId,
-          score1,
-          score2,
-          countdown: realtimePayload.liveCountdownTime,
-          turnCount: realtimePayload.turnCount,
+      aplusLiveRealtimeSyncInFlightRef.current = true;
+      void sendAplusLiveScore(
+        session.matchId,
+        session.sessionToken,
+        payload,
+      )
+        .then(() => {
+          setAplusLiveSyncStatus('online');
+          setAplusLiveSyncError('');
+        })
+        .catch((error: any) => {
+          const message = getAplusLiveErrorMessage(error);
+          setAplusLiveSyncStatus('error');
+          setAplusLiveSyncError(message);
+          console.log('[AplusLiveScore] selected-match realtime 1s sync failed', {
+            matchId: session.matchId,
+            message,
+          });
+        })
+        .finally(() => {
+          aplusLiveRealtimeSyncInFlightRef.current = false;
         });
-      } catch (error: any) {
-        const message = getAplusLiveErrorMessage(error);
-        setAplusLiveSyncStatus('error');
-        setAplusLiveSyncError(message);
-        console.log('[AplusLiveScore] SELECTED_MATCH_REALTIME_1S_SYNC_FINAL failed', {
-          matchId: session.matchId,
-          message,
-        });
-      } finally {
-        sending = false;
-      }
-    };
-
-    void sendRealtimeSnapshot();
-    const timer = setInterval(() => {
-      void sendRealtimeSnapshot();
     }, 1000);
 
     return () => {
-      stopped = true;
       clearInterval(timer);
     };
-  }, [buildAplusLiveRealtimePayload, getAplusLiveCurrentScores]);
+  }, [
+    buildAplusLiveRealtimePayload,
+    getAplusLiveCurrentScores,
+    playerSettings,
+  ]);
 
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [proModeEnabled, setProModeEnabled] = useState(

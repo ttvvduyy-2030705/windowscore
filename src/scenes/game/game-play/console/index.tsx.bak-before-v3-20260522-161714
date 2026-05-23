@@ -1,4 +1,4 @@
-import React, {memo, useContext, useEffect, useMemo, useRef} from 'react';
+﻿import React, {memo, useContext, useEffect, useMemo, useRef} from 'react';
 import {
   Image as RNImage,
   StyleSheet,
@@ -888,19 +888,19 @@ const GameConsole = (props: ConsoleViewModelProps) => {
     if (!props.isStarted) {
       if (!isFastMode && (props.warmUpCount ?? 0) > 0) {
         return tr(
-          `Khởi động (${props.warmUpCount})`,
+          `Khá»Ÿi Ä‘á»™ng (${props.warmUpCount})`,
           `Warm-up (${props.warmUpCount})`,
         );
       }
-      return tr('Bắt đầu', 'Start');
+      return tr('Báº¯t Ä‘áº§u', 'Start');
     }
 
     return props.isPaused
       ? tr(
-          isCarom || isFastMode ? 'Bắt đầu' : 'Tiếp tục',
+          isCarom || isFastMode ? 'Báº¯t Ä‘áº§u' : 'Tiáº¿p tá»¥c',
           isCarom || isFastMode ? 'Start' : 'Resume',
         )
-      : tr('Tạm dừng', 'Pause');
+      : tr('Táº¡m dá»«ng', 'Pause');
   }, [props.isStarted, props.isPaused, props.warmUpCount, isCarom, isFastMode, language]);
 
   const handleBottomLeft = () => {
@@ -925,7 +925,7 @@ const GameConsole = (props: ConsoleViewModelProps) => {
       if (!props.isStarted) {
         return (
           <WideActionButton
-            label={tr('Đổi người', 'Switch player')}
+            label={tr('Äá»•i ngÆ°á»i', 'Switch player')}
             icon={images.game.change}
             tone={'amber'}
             onPress={viewModel.onSwapPlayers}
@@ -938,9 +938,9 @@ const GameConsole = (props: ConsoleViewModelProps) => {
 
       return (
         <TripleButton
-          leftLabel={`＋ ${tr('Tăng lượt', 'Increase turns')}`}
-          centerLabel={`✚ ${tr('Thêm giờ', 'Extension')}`}
-          rightLabel={`－ ${tr('Giảm lượt', 'Decrease turns')}`}
+          leftLabel={`ï¼‹ ${tr('TÄƒng lÆ°á»£t', 'Increase turns')}`}
+          centerLabel={`âœš ${tr('ThÃªm giá»', 'Extension')}`}
+          rightLabel={`ï¼ ${tr('Giáº£m lÆ°á»£t', 'Decrease turns')}`}
           onLeftPress={props.onIncreaseTotalTurns}
           onCenterPress={viewModel.onPressGiveMoreTime}
           onRightPress={props.onDecreaseTotalTurns}
@@ -957,7 +957,7 @@ const GameConsole = (props: ConsoleViewModelProps) => {
     if (isPool && props.isStarted && props.poolBreakEnabled) {
       return (
         <WideActionButton
-          label={`↗ ${tr('Phá bi', 'Break shot')}`}
+          label={`â†— ${tr('PhÃ¡ bi', 'Break shot')}`}
           tone={'green'}
           onPress={props.onPoolBreak}
           compact={useResponsiveCompact}
@@ -970,9 +970,9 @@ const GameConsole = (props: ConsoleViewModelProps) => {
     if (isPool && props.isStarted && !props.poolBreakEnabled) {
       return (
         <TripleButton
-          leftLabel={`◴ ${tr('Bấm giờ', 'Timer')}`}
-          centerLabel={`✚ ${tr('Thêm giờ', 'Extension')}`}
-          rightLabel={`▣ ${tr('Ván mới', 'New game')}`}
+          leftLabel={`â—´ ${tr('Báº¥m giá»', 'Timer')}`}
+          centerLabel={`âœš ${tr('ThÃªm giá»', 'Extension')}`}
+          rightLabel={`â–£ ${tr('VÃ¡n má»›i', 'New game')}`}
           onLeftPress={props.onResetTurn}
           onCenterPress={viewModel.onPressGiveMoreTime}
           onRightPress={props.onReset}
@@ -988,7 +988,7 @@ const GameConsole = (props: ConsoleViewModelProps) => {
 
     return (
       <WideActionButton
-        label={tr('Đổi người', 'Switch players')}
+        label={tr('Äá»•i ngÆ°á»i', 'Switch players')}
         icon={images.game.change}
         tone={'amber'}
         onPress={viewModel.onSwapPlayers}
@@ -1023,9 +1023,9 @@ const GameConsole = (props: ConsoleViewModelProps) => {
 
   const cameraUtilityRows = (
     <TripleButton
-      leftLabel={tr('Làm mới', 'Refresh')}
-      centerLabel={tr('Giải lao', 'Break')}
-      rightLabel={tr('Đổi cam', 'Switch cam')}
+      leftLabel={tr('LÃ m má»›i', 'Refresh')}
+      centerLabel={tr('Giáº£i lao', 'Break')}
+      rightLabel={tr('Äá»•i cam', 'Switch cam')}
       leftIcon={images.game.refresh}
       centerIcon={images.game.clock}
       rightIcon={images.game.camera}
@@ -1052,7 +1052,7 @@ const GameConsole = (props: ConsoleViewModelProps) => {
         <DualButton
           leftLabel={startLabel}
           leftIcon={props.isStarted && !props.isPaused ? undefined : images.game.start}
-          rightLabel={tr('Kết thúc', 'End')}
+          rightLabel={tr('Káº¿t thÃºc', 'End')}
           rightIcon={images.game.endMatch}
           onLeftPress={handleBottomLeft}
           onRightPress={viewModel.onStop}
@@ -1069,7 +1069,7 @@ const GameConsole = (props: ConsoleViewModelProps) => {
       <DualButton
         leftLabel={startLabel}
         leftIcon={props.isStarted && !props.isPaused ? undefined : images.game.start}
-        rightLabel={tr('Kết thúc', 'End')}
+        rightLabel={tr('Káº¿t thÃºc', 'End')}
           rightIcon={images.game.endMatch}
         onLeftPress={handleBottomLeft}
         onRightPress={viewModel.onStop}
@@ -1141,9 +1141,9 @@ const GameConsole = (props: ConsoleViewModelProps) => {
               allowFontScaling={false}
               maxFontSizeMultiplier={1}
               style={styles.pool15WinnerText}>
-              {tr('Chúc mừng ', 'Congratulations ')}
+              {tr('ChÃºc má»«ng ', 'Congratulations ')}
               {props.winner.name}
-              {tr(' đã chiến thắng', ' won')}
+              {tr(' Ä‘Ã£ chiáº¿n tháº¯ng', ' won')}
             </RNText>
           </View>
           <Button
@@ -1153,7 +1153,7 @@ const GameConsole = (props: ConsoleViewModelProps) => {
               allowFontScaling={false}
               maxFontSizeMultiplier={1}
               style={styles.pool15RestartText}>
-              {tr('Ván mới', 'New game')}
+              {tr('VÃ¡n má»›i', 'New game')}
             </RNText>
           </Button>
         </View>
@@ -1204,7 +1204,7 @@ const GameConsole = (props: ConsoleViewModelProps) => {
               <RNText style={[styles.pool8FreeSideCounterAdjustText, useCompactMiddleHoleCounter ? styles.pool8FreeSideCounterAdjustTextCompact : undefined]}>+</RNText>
             </Button>
             <View style={[styles.pool8FreeSideCounterBody, useCompactMiddleHoleCounter ? styles.pool8FreeSideCounterBodyCompact : undefined]}>
-              <RNText style={[styles.pool8FreeSideCounterTitle, useCompactMiddleHoleCounter ? styles.pool8FreeSideCounterTitleCompact : undefined]}>{tr('Lỗ giữa', 'Middle pocket')}</RNText>
+              <RNText style={[styles.pool8FreeSideCounterTitle, useCompactMiddleHoleCounter ? styles.pool8FreeSideCounterTitleCompact : undefined]}>{tr('Lá»— giá»¯a', 'Middle pocket')}</RNText>
               <RNText style={[styles.pool8FreeSideCounterValue, useCompactMiddleHoleCounter ? styles.pool8FreeSideCounterValueCompact : undefined]}>{leftHole10Score}</RNText>
             </View>
             <Button
@@ -1246,7 +1246,7 @@ const GameConsole = (props: ConsoleViewModelProps) => {
               <RNText style={[styles.pool8FreeSideCounterAdjustText, useCompactMiddleHoleCounter ? styles.pool8FreeSideCounterAdjustTextCompact : undefined]}>+</RNText>
             </Button>
             <View style={[styles.pool8FreeSideCounterBody, useCompactMiddleHoleCounter ? styles.pool8FreeSideCounterBodyCompact : undefined]}>
-              <RNText style={[styles.pool8FreeSideCounterTitle, useCompactMiddleHoleCounter ? styles.pool8FreeSideCounterTitleCompact : undefined]}>{tr('Lỗ giữa', 'Middle pocket')}</RNText>
+              <RNText style={[styles.pool8FreeSideCounterTitle, useCompactMiddleHoleCounter ? styles.pool8FreeSideCounterTitleCompact : undefined]}>{tr('Lá»— giá»¯a', 'Middle pocket')}</RNText>
               <RNText style={[styles.pool8FreeSideCounterValue, useCompactMiddleHoleCounter ? styles.pool8FreeSideCounterValueCompact : undefined]}>{rightHole10Score}</RNText>
             </View>
             <Button
@@ -1542,7 +1542,7 @@ const GameConsole = (props: ConsoleViewModelProps) => {
                     textAlignVertical: 'center',
                   },
                 ]}>
-                {tr('Mục tiêu', 'Goal')}:
+                {tr('Má»¥c tiÃªu', 'Goal')}:
               </RNText>
               <RNText
                 allowFontScaling={false}
@@ -1576,7 +1576,7 @@ const GameConsole = (props: ConsoleViewModelProps) => {
                   textAlign: 'center',
                   textAlignVertical: 'center',
                 }}>
-                {tr('Mục tiêu', 'Goal')} :
+                {tr('Má»¥c tiÃªu', 'Goal')} :
               </RNText>
               <RNText
                 allowFontScaling={false}
@@ -1655,7 +1655,7 @@ const GameConsole = (props: ConsoleViewModelProps) => {
           <DualButton
             leftLabel={startLabel}
             leftIcon={props.isStarted && !props.isPaused ? undefined : images.game.start}
-            rightLabel={tr('Kết thúc', 'End')}
+            rightLabel={tr('Káº¿t thÃºc', 'End')}
           rightIcon={images.game.endMatch}
             onLeftPress={handleBottomLeft}
             onRightPress={viewModel.onStop}
@@ -1669,9 +1669,9 @@ const GameConsole = (props: ConsoleViewModelProps) => {
       ) : isPool8Temp && props.isStarted && !props.poolBreakEnabled ? (
         <View style={[styles.topButtonRowWrap, isCameraFullscreen ? styles.hiddenWhenFullscreen : undefined]}>
           <TripleButton
-            leftLabel={`${tr('Số lượt', 'Turns')} ${props.totalTurns}`}
-            centerLabel={tr('Đổi bi', 'Swap balls')}
-            rightLabel={`${tr('Mục tiêu', 'Goal')} ${props.goal}`}
+            leftLabel={`${tr('Sá»‘ lÆ°á»£t', 'Turns')} ${props.totalTurns}`}
+            centerLabel={tr('Äá»•i bi', 'Swap balls')}
+            rightLabel={`${tr('Má»¥c tiÃªu', 'Goal')} ${props.goal}`}
             onCenterPress={props.onSwapPool8Groups}
             leftTone={'dark'}
             centerTone={'amber'}
@@ -1713,7 +1713,7 @@ const GameConsole = (props: ConsoleViewModelProps) => {
                     styles.metaInlineCombinedLabelText,
                     poolMetaTextStyle,
                   ]}>
-                  {`${tr('Số lượt', 'Turns')}: `}
+                  {`${tr('Sá»‘ lÆ°á»£t', 'Turns')}: `}
                 </RNText>
                 <RNText
                   allowFontScaling={false}
@@ -1748,7 +1748,7 @@ const GameConsole = (props: ConsoleViewModelProps) => {
                     styles.metaInlineCombinedLabelText,
                     poolMetaTextStyle,
                   ]}>
-                  {`${tr('Mục tiêu', 'Goal')}: `}
+                  {`${tr('Má»¥c tiÃªu', 'Goal')}: `}
                 </RNText>
                 <RNText
                   allowFontScaling={false}
@@ -1792,7 +1792,7 @@ const GameConsole = (props: ConsoleViewModelProps) => {
                 styles.metaLabel,
                 useResponsiveCompact ? styles.phoneMetaLabel : undefined,
               ]}>
-              {tr('Số lượt', 'Turns')}
+              {tr('Sá»‘ lÆ°á»£t', 'Turns')}
             </Text>
             <Text
               color={'#FF2525'}
@@ -1823,7 +1823,7 @@ const GameConsole = (props: ConsoleViewModelProps) => {
                 styles.metaLabel,
                 useResponsiveCompact ? styles.phoneMetaLabel : undefined,
               ]}>
-              {tr('Mục tiêu', 'Goal')} :
+              {tr('Má»¥c tiÃªu', 'Goal')} :
             </Text>
             <Text
               color={'#FF2525'}
@@ -2947,3 +2947,4 @@ const createStyles = (adaptive: any, design: any, rules: any) => {
 };
 
 export default memo(GameConsole);
+

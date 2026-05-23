@@ -29,6 +29,8 @@ import {createGameplayLayoutRules, createGameplayStyles} from '../layoutRules';
 import Pool8BlackBall from '../pool8BlackBall';
 import images from 'assets';
 import {LanguageContext} from 'context/language';
+import AplusWebLiveCountdownSync from './AplusWebLiveCountdownSync';
+
 type ActionButtonTone = 'dark' | 'amber' | 'red' | 'green' | 'muted';
 type PoolBallButtonSize = 'large' | 'small';
 
@@ -1437,7 +1439,19 @@ const GameConsole = (props: ConsoleViewModelProps) => {
           hideCaromCamera ? styles.caromWrapperNoCamera : undefined,
           isCameraFullscreen ? styles.fullscreenWrapper : undefined,
         ]}>
-{props.gameSettings?.mode?.countdownTime && !hideCaromScoreChrome ? (
+        <AplusWebLiveCountdownSync
+          playerSettings={props.playerSettings}
+          gameSettings={props.gameSettings}
+          countdownTime={props.countdownTime}
+          isStarted={props.isStarted}
+          isPaused={props.isPaused}
+          isMatchPaused={props.isMatchPaused}
+          poolBreakEnabled={props.poolBreakEnabled}
+          winner={props.winner}
+          totalTurns={props.totalTurns}
+          goal={props.goal}
+        />
+        {props.gameSettings?.mode?.countdownTime && !hideCaromScoreChrome ? (
           <View
             style={[
               styles.caromInfoWrap,
@@ -1650,7 +1664,19 @@ const GameConsole = (props: ConsoleViewModelProps) => {
         usePoolBroadcastLayout ? styles.poolWrapper : undefined,
         isCameraFullscreen ? styles.fullscreenWrapper : undefined,
       ]}>
-{isPool15 ? (
+      <AplusWebLiveCountdownSync
+        playerSettings={props.playerSettings}
+        gameSettings={props.gameSettings}
+        countdownTime={props.countdownTime}
+        isStarted={props.isStarted}
+        isPaused={props.isPaused}
+        isMatchPaused={props.isMatchPaused}
+        poolBreakEnabled={props.poolBreakEnabled}
+        winner={props.winner}
+        totalTurns={props.totalTurns}
+        goal={props.goal}
+      />
+      {isPool15 ? (
         <View style={[styles.topButtonRowWrap, isCameraFullscreen ? styles.hiddenWhenFullscreen : undefined]}>
           <DualButton
             leftLabel={startLabel}

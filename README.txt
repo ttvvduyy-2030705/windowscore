@@ -1,19 +1,12 @@
-Aplus Score Windows patch
-=========================
+This package fixes GamePlayViewModel.tsx only.
+It moves the 1-second selected-match live sync to the correct place after buildAplusLiveRealtimePayload is declared.
+It does not use the hidden AplusWebLiveCountdownSync component.
 
-Patch này thay icon app Windows bằng logo A+ nền trong suốt và đổi tên hiển thị thành "Aplus Score".
-
-Cách dùng:
-1. Giải nén zip này.
-2. Mở PowerShell Run as Administrator.
-3. Chạy:
-   Set-ExecutionPolicy RemoteSigned -Scope CurrentUser
-   cd <thu_muc_giai_nen_patch>
-   .\apply-aplus-score-patch.ps1 -ProjectRoot "C:\project\windowscore"
-
-Script sẽ:
-- Copy đè icon PNG vào windows\billiardsgrade\Assets
-- Sửa Package.appxmanifest để đổi tên app thành Aplus Score
-- Sửa app.json displayName, giữ nguyên name nội bộ để không hỏng ReactRootView ComponentName
-
-Sau đó build lại package MSIX.
+Usage:
+1. Copy GamePlayViewModel.tsx and apply-selected-match-update-fix.ps1 into C:\project\windowscore
+2. Run:
+   powershell -ExecutionPolicy Bypass -File .\apply-selected-match-update-fix.ps1
+3. Check:
+   Get-ChildItem .\src -Recurse -Include *.ts,*.tsx | Select-String "AplusWebLiveCountdownSync|SELECTED_MATCH_REALTIME_1S_SYNC_FINAL"
+4. Close the Windows app completely and run:
+   npm run windows

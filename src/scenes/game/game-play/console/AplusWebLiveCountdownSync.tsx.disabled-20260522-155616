@@ -1,0 +1,536 @@
+import React, {memo, useCallback, useEffect, useMemo, useRef, useState} from 'react';
+import {Platform} from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import DeviceInfo from 'react-native-device-info';
+import {GameSettings} from 'types/settings';
+import {Player, PlayerSettings} from 'types/player';
+
+type Props = {
+  playerSettings?: PlayerSettings;
+  gameSettings?: GameSettings;
+  countdownTime: number;
+  isStarted: boolean;
+  isPaused: boolean;
+  isMatchPaused: boolean;
+  poolBreakEnabled: boolean;
+  winner?: Player;
+  totalTurns?: number;
+  goal?: number | string;
+};
+
+type Tournament = {
+  _id: string;
+  name?: string;
+  slug?: string;
+  status?: string;
+};
+
+type LiveMatch = {
+  _id: string;
+  player1?: string;
+  player2?: string;
+  score1?: string;
+  score2?: string;
+  matchCode?: string;
+  tableNumber?: string;
+  status?: 'upcoming' | 'playing' | 'finished';
+};
+
+type StoredConnection = {
+  baseUrl?: string;
+  apiKey?: string;
+  tournamentId?: string;
+  tournamentName?: string;
+  matchId?: string;
+  matchCode?: string;
+  sessionToken?: string;
+  player1?: string;
+  player2?: string;
+};
+
+type LiveRuntimeConfig = {
+  baseUrl: string;
+  apiKey: string;
+  tournamentId: string;
+  matchCode: string;
+};
+
+/**
+ * Cấu hình cố định cho app bảng điểm Aplus.
+ *
+ * Sửa trực tiếp tại đây, build lại app là dùng luôn.
+ * Không còn hiện form nhập LIVE API key/API URL trong màn thi đấu.
+ *
+ * - apiKey: phải giống LIVE_SCORE_API_KEY bên backend web.
+ * - tournamentId: để trống thì app tự lấy giải active đầu tiên trên web.
+ * - matchCode: mã trận trên admin web. Nên để giống hệt admin, ví dụ T1, T2, T3...
+ */
+const APLUS_LIVE_CONFIG = {
+  enabled: true,
+  baseUrl: 'https://live-api.aplusbilliards.vn/api/live',
+  apiKey: 'jahsd82ohehbcfjbsc89ay3wbejkhdbc982ybkejhbcf8dasjchbkjf92jdfi8ow2i',
+  tournamentId: '',
+  matchCode: 'T1',
+  syncIntervalMs: 1000,
+};
+
+const STORAGE_KEY = '@APLUS_WEB_LIVE_SCORE_CONNECTION_V2';
+const API_KEY_PLACEHOLDER = 'jahsd82ohehbcfjbsc89ay3wbejkhdbc982ybkejhbcf8dasjchbkjf92jdfi8ow2i';
+
+const normalizeBaseUrl = (value?: string) => {
+  const raw = String(value || APLUS_LIVE_CONFIG.baseUrl).trim() || APLUS_LIVE_CONFIG.baseUrl;
+  return raw.replace(/\/+$/, '');
+};
+
+const normalizeCode = (value?: string) =>
+  String(value || '').trim().replace(/\s+/g, '').toUpperCase();
+
+const hasRealApiKey = (value?: string) => {
+  const key = String(value || '').trim();
+  return !!key && key !== API_KEY_PLACEHOLDER;
+};
+
+const toScore = (value: any) => {
+  const numeric = Number(value ?? 0);
+  return Number.isFinite(numeric) ? String(numeric) : '0';
+};
+
+const clampCountdown = (value: any) => {
+  const numeric = Number(value ?? 0);
+  if (!Number.isFinite(numeric)) {
+    return 0;
+  }
+  return Math.max(0, Math.round(numeric));
+};
+
+const getPlayerScore = (playerSettings: PlayerSettings | undefined, index: number) => {
+  const player = playerSettings?.playingPlayers?.[index] as any;
+  return toScore(player?.totalPoint ?? player?.point ?? 0);
+};
+
+const getErrorMessage = (error: any) => {
+  if (!error) return 'Lỗi không xác định';
+  if (typeof error === 'string') return error;
+  if (error?.message) return String(error.message);
+  return String(error);
+};
+
+const firstUsableValue = (...values: any[]) =>
+  values.find(value => value !== undefined && value !== null && String(value).trim() !== '');
+
+const buildLiveMetaPayload = (props: Props) => {
+  const targetScoreRaw = firstUsableValue(
+    props.goal,
+    (props.playerSettings as any)?.goal?.goal,
+    (props.playerSettings as any)?.goal,
+    (props.playerSettings as any)?.targetScore,
+    (props.playerSettings as any)?.raceTo,
+    (props.gameSettings as any)?.goal,
+    (props.gameSettings as any)?.targetScore,
+    (props.gameSettings as any)?.raceTo,
+    (props.gameSettings as any)?.players?.goal?.goal,
+    (props.gameSettings as any)?.mode?.goal,
+    (props.gameSettings as any)?.mode?.targetScore,
+    (props.gameSettings as any)?.mode?.raceTo,
+  );
+  const targetScore = Number(targetScoreRaw || 0);
+  const totalTurns = Number((props as any).totalTurns ?? 0);
+  const normalizedTarget = Number.isFinite(targetScore) && targetScore > 0 ? Math.round(targetScore) : undefined;
+  const normalizedTurns = Number.isFinite(totalTurns) && totalTurns >= 0 ? Math.round(totalTurns) : undefined;
+
+  return {
+    targetScore: normalizedTarget,
+    liveTargetScore: normalizedTarget,
+    goal: normalizedTarget,
+    matchGoal: normalizedTarget,
+    goalScore: normalizedTarget,
+    raceTo: normalizedTarget,
+    turnCount: normalizedTurns,
+    liveTurnCount: normalizedTurns,
+    totalTurns: normalizedTurns,
+    innings: normalizedTurns,
+    turns: normalizedTurns,
+  };
+};
+
+const buildTimerPayload = (props: Props) => {
+  const running = Boolean(
+    props.isStarted &&
+      !props.isPaused &&
+      !props.isMatchPaused &&
+      !props.poolBreakEnabled &&
+      !props.winner,
+  );
+
+  const baseCountdown = clampCountdown(
+    props.gameSettings?.mode?.countdownTime || props.countdownTime || 0,
+  );
+
+  const countdownSeconds = clampCountdown(props.countdownTime);
+  const countdownStatus = props.winner
+    ? 'finished'
+    : running
+      ? 'running'
+      : props.isStarted
+        ? 'paused'
+        : 'idle';
+
+  return {
+    // Fields accepted by the Aplus live backend
+    countdownTime: countdownSeconds,
+    countdownBaseTime: baseCountdown,
+    countdownRunning: running,
+    timerRunning: running,
+    countdownStatus,
+
+    // Extra aliases for backward/forward compatibility while testing
+    liveCountdownTime: countdownSeconds,
+    liveCountdownBaseTime: baseCountdown,
+    liveCountdownIsRunning: running,
+    liveCountdownStatus: countdownStatus,
+  };
+};
+
+const buildRuntimeConfig = (stored?: StoredConnection | null): LiveRuntimeConfig => {
+  const hardApiKey = String(APLUS_LIVE_CONFIG.apiKey || '').trim();
+  const storedApiKey = String(stored?.apiKey || '').trim();
+
+  return {
+    baseUrl: normalizeBaseUrl(APLUS_LIVE_CONFIG.baseUrl || stored?.baseUrl),
+    apiKey: hasRealApiKey(hardApiKey) ? hardApiKey : storedApiKey,
+    tournamentId: String(APLUS_LIVE_CONFIG.tournamentId || stored?.tournamentId || '').trim(),
+    matchCode: normalizeCode(APLUS_LIVE_CONFIG.matchCode || stored?.matchCode || 'T01'),
+  };
+};
+
+const AplusWebLiveCountdownSync = (props: Props) => {
+  const [ready, setReady] = useState(false);
+  const configRef = useRef<LiveRuntimeConfig>(buildRuntimeConfig(null));
+  const matchRef = useRef<LiveMatch | null>(null);
+  const matchIdRef = useRef('');
+  const sessionTokenRef = useRef('');
+  const lastPayloadSignatureRef = useRef('');
+  const finishSentRef = useRef(false);
+  const claimingRef = useRef(false);
+  const releasedRef = useRef(false);
+
+  const deviceVersion = useMemo(() => 'Aplus Windows Scoreboard headless countdown-sync', []);
+
+  const persistConnection = useCallback(async (patch: Partial<StoredConnection>) => {
+    try {
+      const config = configRef.current;
+      const currentMatch = matchRef.current;
+      const raw = await AsyncStorage.getItem(STORAGE_KEY);
+      const current = raw ? (JSON.parse(raw) as StoredConnection) : {};
+      const next: StoredConnection = {
+        ...current,
+        baseUrl: config.baseUrl,
+        apiKey: config.apiKey,
+        tournamentId: config.tournamentId,
+        matchCode: config.matchCode,
+        matchId: matchIdRef.current || currentMatch?._id || '',
+        sessionToken: sessionTokenRef.current || '',
+        player1: currentMatch?.player1 || current.player1 || '',
+        player2: currentMatch?.player2 || current.player2 || '',
+        ...patch,
+      };
+      await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+    } catch (error) {
+      console.log('[AplusWebLiveCountdownSync] persist failed', error);
+    }
+  }, []);
+
+  const requestJson = useCallback(async (path: string, options: any = {}) => {
+    const config = configRef.current;
+    const response = await fetch(`${config.baseUrl}${path}`, {
+      ...options,
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        'x-live-api-key': config.apiKey,
+        ...((options.headers || {}) as Record<string, string>),
+      },
+    });
+
+    let data: any = null;
+    try {
+      data = await response.json();
+    } catch (_error) {
+      data = null;
+    }
+
+    if (!response.ok) {
+      throw new Error(data?.message || data?.error || `HTTP ${response.status}`);
+    }
+
+    return data;
+  }, []);
+
+  const loadStoredConnection = useCallback(async () => {
+    let stored: StoredConnection | null = null;
+    try {
+      const raw = await AsyncStorage.getItem(STORAGE_KEY);
+      stored = raw ? (JSON.parse(raw) as StoredConnection) : null;
+    } catch (error) {
+      console.log('[AplusWebLiveCountdownSync] load stored failed', error);
+    }
+
+    const config = buildRuntimeConfig(stored);
+    configRef.current = config;
+
+    if (stored?.matchId && stored?.sessionToken && normalizeCode(stored.matchCode) === config.matchCode) {
+      matchIdRef.current = stored.matchId;
+      sessionTokenRef.current = stored.sessionToken;
+      matchRef.current = {
+        _id: stored.matchId,
+        matchCode: stored.matchCode || config.matchCode,
+        player1: stored.player1 || '',
+        player2: stored.player2 || '',
+      };
+    }
+
+    setReady(true);
+  }, []);
+
+  const claimMatch = useCallback(async () => {
+    if (claimingRef.current || !APLUS_LIVE_CONFIG.enabled || Platform.OS !== 'windows') {
+      return;
+    }
+
+    const config = configRef.current;
+    if (!hasRealApiKey(config.apiKey)) {
+      console.log('[AplusWebLiveCountdownSync] Chưa cấu hình apiKey trong APLUS_LIVE_CONFIG.');
+      return;
+    }
+
+    if (sessionTokenRef.current && matchIdRef.current) {
+      return;
+    }
+
+    if (!config.matchCode) {
+      console.log('[AplusWebLiveCountdownSync] Chưa cấu hình matchCode.');
+      return;
+    }
+
+    claimingRef.current = true;
+    try {
+      let tournamentId = config.tournamentId;
+      if (!tournamentId) {
+        const list = await requestJson('/tournaments');
+        const tournaments: Tournament[] = Array.isArray(list?.tournaments) ? list.tournaments : [];
+        const firstTournament = tournaments[0];
+        if (!firstTournament?._id) {
+          throw new Error('Chưa có giải active trên web để tự kết nối.');
+        }
+        tournamentId = firstTournament._id;
+        configRef.current = {
+          ...configRef.current,
+          tournamentId,
+        };
+      }
+
+      const found = await requestJson(
+        `/tournaments/${tournamentId}/matches/by-code/${encodeURIComponent(config.matchCode)}`,
+      );
+      const foundMatch = found?.match as LiveMatch;
+      if (!foundMatch?._id) {
+        throw new Error(`Không tìm thấy trận ${config.matchCode}.`);
+      }
+
+      const deviceId = String(await DeviceInfo.getUniqueId());
+      const deviceName = String((await DeviceInfo.getDeviceName()) || 'Windows Scoreboard');
+      const claimed = await requestJson(`/matches/${foundMatch._id}/claim`, {
+        method: 'POST',
+        body: JSON.stringify({
+          deviceId,
+          deviceName,
+          appVersion: deviceVersion,
+        }),
+      });
+
+      const claimedMatch = claimed?.match || foundMatch;
+      const token = String(claimed?.sessionToken || '');
+      if (!token) {
+        throw new Error('Backend không trả về session token.');
+      }
+
+      matchRef.current = claimedMatch;
+      matchIdRef.current = claimedMatch._id;
+      sessionTokenRef.current = token;
+      finishSentRef.current = false;
+      releasedRef.current = false;
+      lastPayloadSignatureRef.current = '';
+
+      await persistConnection({
+        tournamentId,
+        matchId: claimedMatch._id,
+        matchCode: claimedMatch.matchCode || config.matchCode,
+        sessionToken: token,
+        player1: claimedMatch.player1 || '',
+        player2: claimedMatch.player2 || '',
+      });
+
+      console.log(
+        `[AplusWebLiveCountdownSync] Đã kết nối trận ${claimedMatch.matchCode || config.matchCode}`,
+      );
+    } catch (error) {
+      console.log('[AplusWebLiveCountdownSync] claim failed:', getErrorMessage(error));
+    } finally {
+      claimingRef.current = false;
+    }
+  }, [deviceVersion, persistConnection, requestJson]);
+
+  const buildScorePayload = useCallback(() => {
+    const score1 = getPlayerScore(props.playerSettings, 0);
+    const score2 = getPlayerScore(props.playerSettings, 1);
+    const timerPayload = buildTimerPayload(props);
+
+    return {
+      score1,
+      score2,
+      status: props.winner ? 'finished' : props.isStarted ? 'playing' : 'upcoming',
+      isLive: Boolean(props.isStarted && !props.winner),
+      ...timerPayload,
+      ...buildLiveMetaPayload(props),
+    };
+  }, [props]);
+
+  const syncScoreToWeb = useCallback(async (force = false) => {
+    const config = configRef.current;
+    const token = sessionTokenRef.current;
+    const liveMatchId = matchIdRef.current;
+
+    if (!hasRealApiKey(config.apiKey) || !token || !liveMatchId) {
+      return;
+    }
+
+    const payload = buildScorePayload();
+    const signature = JSON.stringify(payload);
+    if (!force && signature === lastPayloadSignatureRef.current) {
+      return;
+    }
+
+    const isFinished = payload.status === 'finished';
+    const endpoint = isFinished && !finishSentRef.current
+      ? `/matches/${liveMatchId}/finish`
+      : `/matches/${liveMatchId}/score`;
+    const method = isFinished && !finishSentRef.current ? 'POST' : 'PATCH';
+
+    try {
+      const data = await requestJson(endpoint, {
+        method,
+        headers: {
+          'x-live-session-token': token,
+        },
+        body: JSON.stringify(payload),
+      });
+
+      lastPayloadSignatureRef.current = signature;
+      if (isFinished) {
+        finishSentRef.current = true;
+      }
+      if (data?.match) {
+        matchRef.current = data.match;
+      }
+    } catch (error) {
+      const message = getErrorMessage(error);
+      console.log('[AplusWebLiveCountdownSync] sync failed:', message);
+      if (
+        message.includes('hết hạn') ||
+        message.includes('không hợp lệ') ||
+        message.includes('401') ||
+        message.includes('409')
+      ) {
+        matchIdRef.current = '';
+        sessionTokenRef.current = '';
+        matchRef.current = null;
+        lastPayloadSignatureRef.current = '';
+        finishSentRef.current = false;
+        await persistConnection({
+          matchId: '',
+          sessionToken: '',
+        });
+        void claimMatch();
+      }
+    }
+  }, [buildScorePayload, claimMatch, persistConnection, requestJson]);
+
+  const releaseMatch = useCallback(async () => {
+    if (releasedRef.current) {
+      return;
+    }
+    releasedRef.current = true;
+
+    const config = configRef.current;
+    const token = sessionTokenRef.current;
+    const liveMatchId = matchIdRef.current;
+
+    if (!hasRealApiKey(config.apiKey) || !token || !liveMatchId || finishSentRef.current) {
+      return;
+    }
+
+    try {
+      await requestJson(`/matches/${liveMatchId}/release`, {
+        method: 'POST',
+        headers: {
+          'x-live-session-token': token,
+        },
+      });
+    } catch (error) {
+      console.log('[AplusWebLiveCountdownSync] release failed:', getErrorMessage(error));
+    }
+  }, [requestJson]);
+
+  useEffect(() => {
+    if (Platform.OS !== 'windows' || !APLUS_LIVE_CONFIG.enabled) {
+      return;
+    }
+    void loadStoredConnection();
+  }, [loadStoredConnection]);
+
+  useEffect(() => {
+    if (!ready || Platform.OS !== 'windows' || !APLUS_LIVE_CONFIG.enabled) {
+      return;
+    }
+    void claimMatch();
+  }, [claimMatch, ready]);
+
+  useEffect(() => {
+    if (!ready || Platform.OS !== 'windows' || !APLUS_LIVE_CONFIG.enabled) {
+      return;
+    }
+    void syncScoreToWeb(false);
+  }, [
+    props.countdownTime,
+    props.isPaused,
+    props.isMatchPaused,
+    props.isStarted,
+    props.poolBreakEnabled,
+    props.winner,
+    props.playerSettings,
+    ready,
+    syncScoreToWeb,
+  ]);
+
+  useEffect(() => {
+    if (!ready || Platform.OS !== 'windows' || !APLUS_LIVE_CONFIG.enabled) {
+      return;
+    }
+
+    const timer = setInterval(() => {
+      void syncScoreToWeb(true);
+    }, Math.max(1000, Number(APLUS_LIVE_CONFIG.syncIntervalMs) || 2500));
+
+    return () => clearInterval(timer);
+  }, [ready, syncScoreToWeb]);
+
+  useEffect(() => {
+    return () => {
+      void releaseMatch();
+    };
+  }, [releaseMatch]);
+
+  return null;
+};
+
+export default memo(AplusWebLiveCountdownSync);
