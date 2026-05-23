@@ -1,5 +1,5 @@
 import React from 'react';
-import {Pressable, ScrollView, Text, View} from 'react-native';
+import {ActivityIndicator, Pressable, ScrollView, Text, TextInput, View} from 'react-native';
 
 import images from 'assets';
 import Image from 'components/Image';
@@ -121,17 +121,81 @@ const GameSettings = (props: Props) => {
               style={styles.panelScroll}
               showsVerticalScrollIndicator={false}
               contentContainerStyle={styles.playerScrollContent}>
+              <View style={styles.aplusLivePanel}>
+                <View style={styles.aplusLiveHeaderRow}>
+                  <Text style={styles.aplusLiveTitle}>Kết nối web Aplus</Text>
+                  {(viewModel.aplusLoadingTournaments || viewModel.aplusLoadingMatch) ? (
+                    <ActivityIndicator color={'#FFFFFF'} size="small" />
+                  ) : null}
+                </View>
+
+                <View style={styles.aplusLiveRow}>
+                  <Pressable
+                    onPress={viewModel.onPrevAplusTournament}
+                    style={({pressed}) => [
+                      styles.aplusMiniButton,
+                      pressed && styles.buttonPressed,
+                    ]}>
+                    <Text style={styles.aplusMiniButtonText}>‹</Text>
+                  </Pressable>
+
+                  <View style={styles.aplusTournamentBox}>
+                    <Text style={styles.aplusTournamentLabel}>Tên giải</Text>
+                    <Text style={styles.aplusTournamentName} numberOfLines={1}>
+                      {viewModel.selectedAplusTournament?.name || 'Chưa chọn giải'}
+                    </Text>
+                  </View>
+
+                  <Pressable
+                    onPress={viewModel.onNextAplusTournament}
+                    style={({pressed}) => [
+                      styles.aplusMiniButton,
+                      pressed && styles.buttonPressed,
+                    ]}>
+                    <Text style={styles.aplusMiniButtonText}>›</Text>
+                  </Pressable>
+
+                  <Pressable
+                    onPress={viewModel.onLoadAplusTournaments}
+                    style={({pressed}) => [
+                      styles.aplusReloadButton,
+                      pressed && styles.buttonPressed,
+                    ]}>
+                    <Text style={styles.aplusReloadText}>Tải giải</Text>
+                  </Pressable>
+                </View>
+
+                <View style={styles.aplusLiveRow}>
+                  <TextInput
+                    value={viewModel.aplusMatchNumber}
+                    onChangeText={viewModel.onChangeAplusMatchNumber}
+                    placeholder="Số trận"
+                    placeholderTextColor={'rgba(255,255,255,0.45)'}
+                    keyboardType="number-pad"
+                    style={styles.aplusMatchInput}
+                  />
+
+                  <Pressable
+                    onPress={viewModel.onLoadAplusMatch}
+                    style={({pressed}) => [
+                      styles.aplusLoadMatchButton,
+                      pressed && styles.buttonPressed,
+                    ]}>
+                    <Text style={styles.aplusLoadMatchText}>Lấy trận</Text>
+                  </Pressable>
+                </View>
+
+                <Text style={styles.aplusLiveStatus} numberOfLines={2}>
+                  {viewModel.aplusLiveStatus}
+                </Text>
+              </View>
+
               <PlayerSettings
                 adaptive={adaptive}
                 showTitle={false}
                 gameMode={viewModel.gameMode}
                 category={viewModel.category}
                 playerSettings={viewModel.playerSettings}
-                aplusLivePanel={viewModel.aplusLivePanel}
-                onRefreshAplusTournaments={viewModel.onRefreshAplusTournaments}
-                onSelectAplusTournament={viewModel.onSelectAplusTournament}
-                onChangeAplusMatchCode={viewModel.onChangeAplusMatchCode}
-                onCheckAplusLiveMatch={viewModel.onCheckAplusLiveMatch}
                 onSelectPlayerNumber={viewModel.onSelectPlayerNumber}
                 onSelectPlayerGoal={viewModel.onSelectPlayerGoal}
                 onChangePlayerName={viewModel.onChangePlayerName}

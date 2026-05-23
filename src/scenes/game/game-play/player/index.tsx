@@ -184,12 +184,17 @@ const GamePlayer = (
 
   const addTimeButtonDynamicStyle = isLightPlayerPanel
     ? {
-        borderColor: 'rgba(17,17,17,0.5)',
-        backgroundColor: 'rgba(17,17,17,0.08)',
+        borderColor: 'rgba(17,17,17,0.9)',
+        backgroundColor: 'rgba(255,255,255,0.96)',
+        shadowColor: '#000000',
+        shadowOpacity: 0.22,
+        shadowRadius: 5,
+        shadowOffset: {width: 0, height: 1},
+        elevation: 5,
       }
     : undefined;
-  const addTimeTextDynamicStyle = isLightPlayerPanel
-    ? {color: '#111111'}
+  const addTimeIconDynamicStyle = isLightPlayerPanel
+    ? {tintColor: '#111111'}
     : undefined;
 
   const textColorStyle = {color: primaryTextColor};
@@ -858,6 +863,7 @@ const GamePlayer = (
                   styles.addTimeIcon,
                   isMediumResponsiveLayout ? styles.addTimeIconMedium : undefined,
                   isCompactLayout && styles.addTimeIconCompact,
+                  addTimeIconDynamicStyle,
                   !isActiveCard && styles.addTimeTextInactive,
                 ]}
               />
@@ -1495,11 +1501,16 @@ const createStyles = (adaptive: any, design: any, rules: any) => createGameplayS
     width: 42,
     height: 42,
     borderRadius: 999,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.65)',
-    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderWidth: 1.4,
+    borderColor: 'rgba(255,255,255,0.95)',
+    backgroundColor: 'rgba(255,255,255,0.18)',
     alignItems: 'center',
     justifyContent: 'center',
+    shadowColor: '#000000',
+    shadowOpacity: 0.28,
+    shadowRadius: 4,
+    shadowOffset: {width: 0, height: 1},
+    elevation: 5,
   },
   addTimeButtonMedium: {
     width: 38,
@@ -1513,17 +1524,17 @@ const createStyles = (adaptive: any, design: any, rules: any) => createGameplayS
     opacity: 0.65,
   },
   addTimeIcon: {
-    width: 24,
-    height: 24,
+    width: 26,
+    height: 26,
     tintColor: '#FFFFFF',
   },
   addTimeIconMedium: {
-    width: 22,
-    height: 22,
+    width: 24,
+    height: 24,
   },
   addTimeIconCompact: {
-    width: 20,
-    height: 20,
+    width: 22,
+    height: 22,
   },
   addTimeText: {
     color: '#FFFFFF',

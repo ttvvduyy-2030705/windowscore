@@ -10,18 +10,18 @@
   <Identity
     Name="a08aa9ba-7cb1-4180-8c7e-e115ab1a88c4"
     Publisher="CN=Administrator"
-    Version="1.0.10.0" />
+    Version="1.0.6.0" />
 
   <mp:PhoneIdentity PhoneProductId="a08aa9ba-7cb1-4180-8c7e-e115ab1a88c4" PhonePublisherId="00000000-0000-0000-0000-000000000000"/>
 
   <Properties>
     <DisplayName>Aplus Score</DisplayName>
-    <PublisherDisplayName>Aplus Billiards</PublisherDisplayName>
+    <PublisherDisplayName>Administrator</PublisherDisplayName>
     <Logo>Assets\StoreLogo.png</Logo>
   </Properties>
 
   <Dependencies>
-    <TargetDeviceFamily Name="Windows.Universal" MinVersion="1.0.10.0" MaxVersionTested="10.0.0.0" />
+    <TargetDeviceFamily Name="Windows.Universal" MinVersion="10.0.0.0" MaxVersionTested="10.0.0.0" />
   </Dependencies>
 
   <Resources>
@@ -38,7 +38,7 @@
         Square150x150Logo="Assets\Square150x150Logo.png"
         Square44x44Logo="Assets\Square44x44Logo.png"
         Description="Aplus Score"
-        BackgroundColor="transparent">
+        BackgroundColor="#000000">
         <uap:DefaultTile Wide310x150Logo="Assets\Wide310x150Logo.png"/>
         <uap:SplashScreen Image="Assets\SplashScreen.png" BackgroundColor="#000000" />
       </uap:VisualElements>
@@ -59,4 +59,3 @@
     <DeviceCapability Name="microphone" />
   </Capabilities>
 </Package>
-

@@ -7,7 +7,7 @@ import {useDispatch} from 'react-redux';
 import {screens} from 'scenes/screens';
 import {BilliardCategory} from 'types/category';
 import {Navigation} from 'types/navigation';
-import {Player, PlayerNumber, PlayerSettings} from 'types/player';
+import {PlayerNumber, PlayerSettings} from 'types/player';
 import {
   GameCountDownTime,
   GameExtraTimeBonus,
@@ -21,15 +21,12 @@ import {DEFAULT_PLAYERS, GAME_SETTINGS, PLAYER_SETTINGS} from './constants';
 import {GAME_EXTRA_TIME_BONUS} from 'constants/game-settings';
 import {COUNTRIES, CountryItem} from './player/countries';
 import {
-  AplusLiveScoreError,
-  createAplusLiveSessionFromClaim,
-  fetchAplusLiveTournaments,
-  findAplusLiveMatchByCode,
-  claimAplusLiveMatch,
-  getAplusLiveDeviceName,
-  getOrCreateAplusLiveDeviceId,
+  AplusLiveMatch,
+  AplusTournament,
+  fetchAplusMatchByNumber,
+  fetchAplusTournaments,
+  lockAplusLiveScoreMatch,
 } from 'services/aplusLiveScore';
-import type {AplusLiveMatch, AplusTournamentOption} from 'types/aplusLiveScore';
 
 type LivestreamRouteParams = {
   livestreamPlatform?: 'facebook' | 'youtube' | 'tiktok' | 'device' | null;
@@ -38,6 +35,14 @@ type LivestreamRouteParams = {
   liveAccountName?: string;
   liveAccountId?: string;
   liveSetupToken?: string;
+  tournamentName?: string;
+  selectedTournamentName?: string;
+  competitionName?: string;
+  eventName?: string;
+  leagueName?: string;
+  title?: string;
+  tournament?: {name?: string; title?: string};
+  selectedTournament?: {name?: string; title?: string};
 };
 
 export interface Props extends Navigation, LivestreamRouteParams {
@@ -53,24 +58,6 @@ type SettingsDraftSnapshot = {
   savedAt?: number;
 };
 
-export type AplusLiveConnectStatus =
-  | 'idle'
-  | 'loading'
-  | 'checking'
-  | 'claiming'
-  | 'ready'
-  | 'error';
-
-export type AplusLiveSettingsPanelState = {
-  tournaments: AplusTournamentOption[];
-  selectedTournamentId: string;
-  matchCodeInput: string;
-  connectStatus: AplusLiveConnectStatus;
-  connectError: string;
-  connectMessage: string;
-  previewMatch?: AplusLiveMatch;
-};
-
 const normalizeLivestreamPlatform = (
   value?: string | null,
 ): 'facebook' | 'youtube' | 'tiktok' | 'device' | null => {
@@ -84,6 +71,24 @@ const normalizeLivestreamPlatform = (
   }
 
   return null;
+};
+
+
+const toDisplayText = (value?: unknown) => String(value ?? '').trim();
+
+const getRouteTournamentName = (routeParams?: LivestreamRouteParams | any) => {
+  return (
+    toDisplayText(routeParams?.tournamentName) ||
+    toDisplayText(routeParams?.selectedTournamentName) ||
+    toDisplayText(routeParams?.competitionName) ||
+    toDisplayText(routeParams?.eventName) ||
+    toDisplayText(routeParams?.leagueName) ||
+    toDisplayText(routeParams?.title) ||
+    toDisplayText(routeParams?.tournament?.name) ||
+    toDisplayText(routeParams?.tournament?.title) ||
+    toDisplayText(routeParams?.selectedTournament?.name) ||
+    toDisplayText(routeParams?.selectedTournament?.title)
+  );
 };
 
 const SETTINGS_DRAFT_STORAGE_KEY = '@APLUS_GAME_SETTINGS_DRAFT_V1';
@@ -181,57 +186,6 @@ const createDefaultPlayerCountry = () => ({
   flag: DEFAULT_COUNTRY.code,
 });
 
-
-const normalizeWebCountryCode = (value?: string) => {
-  const cleanValue = String(value || '').trim().toUpperCase();
-
-  if (/^[A-Z]{2}$/.test(cleanValue)) {
-    return cleanValue;
-  }
-
-  return DEFAULT_COUNTRY.code;
-};
-
-const buildAplusLivePlayer = (
-  basePlayer: Player,
-  options: {
-    name?: string;
-    countryCode?: string;
-    score?: string | number;
-  },
-): Player => {
-  const countryCode = normalizeWebCountryCode(options.countryCode);
-  const country = findCountryByCode(countryCode) ?? DEFAULT_COUNTRY;
-  const numericScore = Number(options.score ?? 0);
-
-  return {
-    ...basePlayer,
-    name: String(options.name || basePlayer.name || '').trim(),
-    totalPoint: Number.isFinite(numericScore) ? numericScore : 0,
-    countryCode: country.code,
-    countryName: country.name,
-    flag: country.code,
-  };
-};
-
-const hasAplusLiveConnectionInput = (
-  tournamentId: string,
-  matchCode: string,
-) => Boolean(tournamentId || String(matchCode || '').trim());
-
-
-const formatAplusMatchScore = (match?: AplusLiveMatch) => {
-  const score1 = String(match?.score1 ?? '0').trim() || '0';
-  const score2 = String(match?.score2 ?? '0').trim() || '0';
-  return `${score1} - ${score2}`;
-};
-
-const buildAplusFinishedMatchMessage = (match: AplusLiveMatch) => {
-  const matchCode = match.matchCode ? ` ${match.matchCode}` : '';
-  const players = match.player1 && match.player2 ? ` (${match.player1} vs ${match.player2})` : '';
-  return `Trận${matchCode}${players} đã kết thúc rồi, tỉ số là ${formatAplusMatchScore(match)}.`;
-};
-
 const clampPlayerNumber = (value?: number): PlayerNumber => {
   const numeric = Number(value || 2);
   if (numeric >= 4) {
@@ -296,6 +250,55 @@ const sanitizePlayerSettings = (
   } as PlayerSettings;
 };
 
+const getAplusPlayerCountry = (player?: Partial<PlayerSettings['playingPlayers'][number]>) => {
+  const rawCode = String((player as any)?.countryCode || '').trim().toUpperCase();
+  const matchedCountry = findCountryByCode(rawCode) || DEFAULT_COUNTRY;
+  const safeCode = /^[A-Z]{2}$/.test(rawCode) ? rawCode : matchedCountry.code;
+  const rawFlag = String((player as any)?.flag || '').trim();
+
+  return {
+    countryCode: safeCode,
+    countryName: String((player as any)?.countryName || matchedCountry.name || safeCode),
+    flag: isRemoteUri(rawFlag) ? rawFlag : safeCode,
+  };
+};
+
+const applyAplusMatchToPlayerSettings = (
+  previousSettings: PlayerSettings,
+  match: AplusLiveMatch,
+  currentCategory: BilliardCategory,
+): PlayerSettings => {
+  const currentPlayerNumber = clampPlayerNumber(previousSettings.playerNumber);
+  const basePlayers = buildPlayersForCount(
+    currentPlayerNumber,
+    currentCategory,
+    previousSettings.playingPlayers,
+  );
+  const matchPlayers = [match.player1, match.player2];
+
+  return {
+    ...previousSettings,
+    // Chỉ cập nhật thông tin người chơi từ web.
+    // Không tự đổi mục tiêu, số người, mode hay category để người dùng tự chỉnh.
+    playingPlayers: basePlayers.map((player, index) => {
+      const webPlayer = matchPlayers[index] || {};
+      const webName = toDisplayText((webPlayer as any)?.name);
+
+      if (!webName && index > 1) {
+        return player;
+      }
+
+      const webCountry = getAplusPlayerCountry(webPlayer as any);
+
+      return {
+        ...player,
+        name: webName || player.name || i18n.t(`player${index + 1}`),
+        ...webCountry,
+      };
+    }),
+  } as PlayerSettings;
+};
+
 
 const GameSettingsViewModel = (props: Props) => {
   const dispatch = useDispatch();
@@ -313,6 +316,7 @@ const GameSettingsViewModel = (props: Props) => {
   const liveAccountName = routeParams.liveAccountName || '';
   const liveAccountId = routeParams.liveAccountId || '';
   const liveSetupToken = routeParams.liveSetupToken || '';
+  const selectedTournamentName = getRouteTournamentName(routeParams);
   const restoredDraftRef = useRef(false);
   const runtimeDraft = getSettingsDraftSync();
 
@@ -328,19 +332,15 @@ const GameSettingsViewModel = (props: Props) => {
       ? sanitizePlayerSettings(runtimeDraft.playerSettings, runtimeDraft?.category ?? '9-ball')
       : PLAYER_SETTINGS(),
   );
+  const [aplusTournaments, setAplusTournaments] = useState<AplusTournament[]>([]);
+  const [selectedAplusTournamentIndex, setSelectedAplusTournamentIndex] = useState(0);
+  const [aplusMatchNumber, setAplusMatchNumber] = useState('');
+  const [selectedAplusMatch, setSelectedAplusMatch] = useState<AplusLiveMatch | null>(null);
+  const [aplusLiveStatus, setAplusLiveStatus] = useState('Chưa kết nối web Aplus.');
+  const [aplusLoadingTournaments, setAplusLoadingTournaments] = useState(false);
+  const [aplusLoadingMatch, setAplusLoadingMatch] = useState(false);
 
-  const [aplusLiveTournaments, setAplusLiveTournaments] = useState<
-    AplusTournamentOption[]
-  >([]);
-  const [selectedAplusTournamentId, setSelectedAplusTournamentId] = useState('');
-  const [aplusMatchCodeInput, setAplusMatchCodeInput] = useState('');
-  const [aplusLiveConnectStatus, setAplusLiveConnectStatus] =
-    useState<AplusLiveConnectStatus>('idle');
-  const [aplusLiveConnectError, setAplusLiveConnectError] = useState('');
-  const [aplusLiveConnectMessage, setAplusLiveConnectMessage] = useState('');
-  const [aplusPreviewMatch, setAplusPreviewMatch] = useState<
-    AplusLiveMatch | undefined
-  >();
+  const selectedAplusTournament = aplusTournaments[selectedAplusTournamentIndex];
 
   const _resetData = useCallback(() => {
     clearSettingsDraft();
@@ -349,6 +349,9 @@ const GameSettingsViewModel = (props: Props) => {
       setCategory('9-ball');
       setGameSettingsMode(GAME_SETTINGS);
       setPlayerSettings(PLAYER_SETTINGS());
+      setAplusMatchNumber('');
+      setSelectedAplusMatch(null);
+      setAplusLiveStatus('Chưa kết nối web Aplus.');
       clearTimeout(timeout);
     }, 100);
   }, []);
@@ -424,240 +427,105 @@ const GameSettingsViewModel = (props: Props) => {
     };
   }, [category, gameSettingsMode, playerSettings]);
 
-  const isAplusLivePanelAvailable =
-    gameSettingsMode.mode === 'pro' && playerSettings.playerNumber === 2;
+  const onLoadAplusTournaments = useCallback(async () => {
+    if (aplusLoadingTournaments) {
+      return;
+    }
 
-  const loadAplusLiveTournaments = useCallback(async () => {
-    setAplusLiveConnectStatus('loading');
-    setAplusLiveConnectError('');
-    setAplusLiveConnectMessage('');
+    setAplusLoadingTournaments(true);
+    setAplusLiveStatus('Đang tải danh sách giải...');
 
     try {
-      const tournaments = await fetchAplusLiveTournaments();
-      setAplusLiveTournaments(tournaments);
-
-      setSelectedAplusTournamentId(prev => {
-        if (prev && tournaments.some(item => item._id === prev)) {
-          return prev;
-        }
-
-        return tournaments[0]?._id || '';
-      });
-
-      setAplusLiveConnectStatus('idle');
-      setAplusLiveConnectMessage(
+      const tournaments = await fetchAplusTournaments();
+      setAplusTournaments(tournaments);
+      setSelectedAplusTournamentIndex(0);
+      setSelectedAplusMatch(null);
+      setAplusLiveStatus(
         tournaments.length
-          ? `Đã tải ${tournaments.length} giải từ Aplus.`
-          : 'Chưa có giải nào từ Aplus.',
+          ? `Đã tải ${tournaments.length} giải. Chọn giải rồi nhập số trận.`
+          : 'Web chưa trả về giải nào.',
       );
     } catch (error: any) {
-      setAplusLiveConnectStatus('error');
-      setAplusLiveConnectError(
-        error?.message || 'Không tải được danh sách giải Aplus.',
-      );
+      setAplusLiveStatus(error?.message || 'Không tải được danh sách giải.');
+    } finally {
+      setAplusLoadingTournaments(false);
     }
-  }, []);
+  }, [aplusLoadingTournaments]);
 
-  useEffect(() => {
-    if (!isAplusLivePanelAvailable) {
-      setAplusLiveConnectStatus('idle');
-      setAplusLiveConnectError('');
-      setAplusLiveConnectMessage('');
-      setAplusPreviewMatch(undefined);
-      return;
-    }
-
-    if (!aplusLiveTournaments.length) {
-      void loadAplusLiveTournaments();
-    }
-  }, [
-    aplusLiveTournaments.length,
-    isAplusLivePanelAvailable,
-    loadAplusLiveTournaments,
-  ]);
-
-  const onSelectAplusTournament = useCallback((tournamentId: string) => {
-    setSelectedAplusTournamentId(tournamentId);
-    setAplusPreviewMatch(undefined);
-    setAplusLiveConnectError('');
-    setAplusLiveConnectMessage('');
-  }, []);
-
-  const normalizeAplusMatchCode = useCallback((matchCode: string) => {
-    const rawCode = String(matchCode || '').toUpperCase().replace(/[^T0-9]/g, '');
-
-    if (!rawCode) {
-      return '';
-    }
-
-    const hasLeadingT = rawCode.startsWith('T');
-    const digits = rawCode.replace(/T/g, '').replace(/\D/g, '').slice(0, 3);
-
-    if (hasLeadingT && !digits) {
-      return 'T';
-    }
-
-    return digits ? `T${digits}` : '';
-  }, []);
-
-  const onChangeAplusMatchCode = useCallback((matchCode: string) => {
-    const normalizedCode = normalizeAplusMatchCode(matchCode);
-    setAplusMatchCodeInput(normalizedCode);
-    setAplusPreviewMatch(undefined);
-    setAplusLiveConnectError('');
-    setAplusLiveConnectMessage('');
-  }, [normalizeAplusMatchCode]);
-
-  const onCheckAplusLiveMatch = useCallback(async () => {
-    if (!isAplusLivePanelAvailable) {
-      setAplusLiveConnectStatus('error');
-      setAplusLiveConnectError('Kết nối web chỉ dùng cho chế độ Thi đấu và 2 người chơi.');
-      return;
-    }
-
-    if (!/^T\d{1,3}$/.test(aplusMatchCodeInput)) {
-      setAplusLiveConnectStatus('error');
-      setAplusLiveConnectError('Mã trận phải có dạng T + số, ví dụ T01.');
-      return;
-    }
-
-    if (!selectedAplusTournamentId) {
-      setAplusLiveConnectStatus('error');
-      setAplusLiveConnectError('Bạn cần bấm Tải lại và chọn giải trước khi kiểm tra mã trận.');
-      return;
-    }
-
-    setAplusLiveConnectStatus('checking');
-    setAplusLiveConnectError('');
-    setAplusLiveConnectMessage('');
-    setAplusPreviewMatch(undefined);
-
-    try {
-      const result = await findAplusLiveMatchByCode(
-        selectedAplusTournamentId,
-        aplusMatchCodeInput,
-      );
-
-      setAplusPreviewMatch(result.match);
-
-      if (result.match.status === 'finished') {
-        setAplusLiveConnectStatus('error');
-        setAplusLiveConnectError(buildAplusFinishedMatchMessage(result.match));
-        return;
+  const onPrevAplusTournament = useCallback(() => {
+    setSelectedAplusTournamentIndex(prev => {
+      if (!aplusTournaments.length) {
+        return 0;
       }
 
-      setAplusLiveConnectStatus('ready');
-      setAplusLiveConnectMessage(
-        `Đã tìm thấy trận ${result.match.matchCode || aplusMatchCodeInput}: ${
-          result.match.player1
-        } vs ${result.match.player2}`,
+      return prev <= 0 ? aplusTournaments.length - 1 : prev - 1;
+    });
+    setSelectedAplusMatch(null);
+  }, [aplusTournaments.length]);
+
+  const onNextAplusTournament = useCallback(() => {
+    setSelectedAplusTournamentIndex(prev => {
+      if (!aplusTournaments.length) {
+        return 0;
+      }
+
+      return prev >= aplusTournaments.length - 1 ? 0 : prev + 1;
+    });
+    setSelectedAplusMatch(null);
+  }, [aplusTournaments.length]);
+
+  const onChangeAplusMatchNumber = useCallback((value: string) => {
+    const cleanValue = String(value || '').replace(/[^0-9A-Za-z_-]/g, '');
+    setAplusMatchNumber(cleanValue);
+    setSelectedAplusMatch(null);
+  }, []);
+
+  const onLoadAplusMatch = useCallback(async () => {
+    if (aplusLoadingMatch) {
+      return;
+    }
+
+    if (!selectedAplusTournament) {
+      setAplusLiveStatus('Bạn chưa chọn giải. Bấm Tải giải trước.');
+      return;
+    }
+
+    if (!String(aplusMatchNumber || '').trim()) {
+      setAplusLiveStatus('Bạn chưa nhập số trận.');
+      return;
+    }
+
+    setAplusLoadingMatch(true);
+    setAplusLiveStatus('Đang lấy thông tin trận...');
+
+    try {
+      const match = await fetchAplusMatchByNumber(
+        selectedAplusTournament,
+        aplusMatchNumber,
+      );
+      const lockedMatch = await lockAplusLiveScoreMatch(match);
+      setSelectedAplusMatch(lockedMatch);
+      setPlayerSettings(prev => applyAplusMatchToPlayerSettings(prev, lockedMatch, category));
+
+      setAplusLiveStatus(
+        `Đã lấy trận ${lockedMatch.matchNumber}: ${lockedMatch.player1?.name || 'Người chơi 1'} vs ${lockedMatch.player2?.name || 'Người chơi 2'}. Đã cập nhật tên/quốc gia trong mục Người chơi.`,
       );
     } catch (error: any) {
-      setAplusLiveConnectStatus('error');
-      setAplusLiveConnectError(
-        error instanceof AplusLiveScoreError
-          ? error.message
-          : error?.message || 'Không tìm thấy trận Aplus.',
-      );
+      setSelectedAplusMatch(null);
+      setAplusLiveStatus(error?.message || 'Không lấy được thông tin trận.');
+    } finally {
+      setAplusLoadingMatch(false);
     }
-  }, [
-    aplusMatchCodeInput,
-    isAplusLivePanelAvailable,
-    selectedAplusTournamentId,
-  ]);
+  }, [aplusLoadingMatch, selectedAplusTournament, aplusMatchNumber, category]);
 
   const onCancel = useCallback(() => {
     clearSettingsDraft();
     props.goBack();
   }, [props]);
 
-  const onStart = useCallback(async () => {
-    const shouldUseAplusLive = Boolean(
-      isAplusLivePanelAvailable &&
-        hasAplusLiveConnectionInput(
-          selectedAplusTournamentId,
-          aplusMatchCodeInput,
-        ),
-    );
-
-    let claimedMatch: AplusLiveMatch | undefined;
-    let aplusLiveSession: any;
-
-    if (shouldUseAplusLive) {
-      if (!selectedAplusTournamentId) {
-        setAplusLiveConnectStatus('error');
-        setAplusLiveConnectError('Bạn cần chọn giải trước khi bắt đầu trận.');
-        return;
-      }
-
-      if (!/^T\d{1,3}$/.test(aplusMatchCodeInput)) {
-        setAplusLiveConnectStatus('error');
-        setAplusLiveConnectError('Mã trận phải có dạng T + số, ví dụ T01.');
-        return;
-      }
-
-      setAplusLiveConnectStatus('claiming');
-      setAplusLiveConnectError('');
-      setAplusLiveConnectMessage('Đang khóa trận trên web Aplus...');
-
-      try {
-        const matchResult = await findAplusLiveMatchByCode(
-          selectedAplusTournamentId,
-          aplusMatchCodeInput,
-        );
-        const match = matchResult.match;
-
-        if (!match?.player1 || !match?.player2) {
-          setAplusLiveConnectStatus('error');
-          setAplusLiveConnectError(
-            'Trận này chưa đủ thông tin 2 cơ thủ trên web. Hãy nhập cơ thủ ở admin web trước.',
-          );
-          return;
-        }
-
-        if (match.status === 'finished') {
-          setAplusLiveConnectStatus('error');
-          setAplusPreviewMatch(match);
-          setAplusLiveConnectError(buildAplusFinishedMatchMessage(match));
-          return;
-        }
-
-        const deviceId = await getOrCreateAplusLiveDeviceId();
-        const deviceName = await getAplusLiveDeviceName();
-        const claim = await claimAplusLiveMatch(match._id, {
-          deviceId,
-          deviceName,
-          appVersion: 'windows-scoreboard-v1',
-        });
-
-        claimedMatch = claim.match;
-        aplusLiveSession = await createAplusLiveSessionFromClaim(
-          claim,
-          deviceId,
-          deviceName,
-        );
-
-        setAplusPreviewMatch(claim.match);
-        setAplusLiveConnectStatus('ready');
-        setAplusLiveConnectMessage(
-          `Đã khóa trận ${claim.match.matchCode || aplusMatchCodeInput}: ${
-            claim.match.player1
-          } vs ${claim.match.player2}`,
-        );
-      } catch (error: any) {
-        setAplusLiveConnectStatus('error');
-        setAplusLiveConnectError(
-          error instanceof AplusLiveScoreError
-            ? error.message
-            : error?.message || 'Không claim được trận Aplus.',
-        );
-        return;
-      }
-    }
-
-    const sourcePlayers = playerSettings.playingPlayers;
-    const playingPlayers = sourcePlayers.map((player, index) => {
-      const basePlayer = {
+  const onStart = useCallback(() => {
+    const _playingPlayers = playerSettings.playingPlayers.map(player => {
+      return {
         ...player,
         proMode: {
           ...gameSettingsMode,
@@ -666,29 +534,7 @@ const GameSettingsViewModel = (props: Props) => {
           average: 0,
           currentPoint: 0,
         },
-      } as Player;
-
-      if (!claimedMatch) {
-        return basePlayer;
-      }
-
-      if (index === 0) {
-        return buildAplusLivePlayer(basePlayer, {
-          name: claimedMatch.player1,
-          countryCode: claimedMatch.player1Country,
-          score: claimedMatch.score1,
-        });
-      }
-
-      if (index === 1) {
-        return buildAplusLivePlayer(basePlayer, {
-          name: claimedMatch.player2,
-          countryCode: claimedMatch.player2Country,
-          score: claimedMatch.score2,
-        });
-      }
-
-      return basePlayer;
+      };
     });
 
     clearSettingsDraft();
@@ -701,7 +547,6 @@ const GameSettingsViewModel = (props: Props) => {
       shouldCreateYouTubeLive,
       saveToDeviceWhileStreaming,
       liveVisibility,
-      aplusLiveEnabled: Boolean(aplusLiveSession),
     });
 
     if (!shouldCreateYouTubeLive) {
@@ -710,24 +555,36 @@ const GameSettingsViewModel = (props: Props) => {
       });
     }
 
-    const nextPlayerSettings = {
-      ...playerSettings,
-      playerNumber: claimedMatch ? 2 : playerSettings.playerNumber,
-      playingPlayers,
-    } as PlayerSettings;
+    const effectiveTournamentName =
+      selectedAplusMatch?.tournamentName ||
+      selectedAplusTournament?.name ||
+      selectedTournamentName ||
+      undefined;
+    const aplusLiveScore = selectedAplusMatch
+      ? {
+          enabled: true,
+          tournamentId: selectedAplusMatch.tournamentId,
+          tournamentName: effectiveTournamentName,
+          matchId: selectedAplusMatch.id,
+          matchNumber: selectedAplusMatch.matchNumber,
+          sessionToken: selectedAplusMatch.sessionToken,
+          rawMatch: selectedAplusMatch.raw,
+        }
+      : undefined;
 
     const nextGameSettings = {
       category,
       mode: gameSettingsMode,
-      players: nextPlayerSettings,
+      players: {...playerSettings, playingPlayers: _playingPlayers},
       livestreamPlatform,
       saveToDeviceWhileStreaming,
       liveVisibility,
       liveAccountName,
       liveAccountId,
       liveSetupToken,
-      aplusLiveSession,
-      aplusLiveMatch: claimedMatch,
+      tournamentName: effectiveTournamentName,
+      selectedTournamentName: effectiveTournamentName,
+      aplusLiveScore,
     };
 
     dispatch(gameActions.updateGameSettings(nextGameSettings));
@@ -743,8 +600,9 @@ const GameSettingsViewModel = (props: Props) => {
       liveAccountName,
       liveAccountId,
       liveSetupToken,
-      aplusLiveSession,
-      aplusLiveMatch: claimedMatch,
+      tournamentName: effectiveTournamentName,
+      selectedTournamentName: effectiveTournamentName,
+      aplusLiveScore,
     });
 
     _resetData();
@@ -761,9 +619,9 @@ const GameSettingsViewModel = (props: Props) => {
     liveAccountName,
     liveAccountId,
     liveSetupToken,
-    isAplusLivePanelAvailable,
-    selectedAplusTournamentId,
-    aplusMatchCodeInput,
+    selectedTournamentName,
+    selectedAplusMatch,
+    selectedAplusTournament,
   ]);
 
   const onSelectCategory = useCallback(
@@ -1005,15 +863,6 @@ const onSelectGameMode = useCallback(
       gameMode,
       gameSettingsMode,
       playerSettings,
-      aplusLivePanel: {
-        tournaments: aplusLiveTournaments,
-        selectedTournamentId: selectedAplusTournamentId,
-        matchCodeInput: aplusMatchCodeInput,
-        connectStatus: aplusLiveConnectStatus,
-        connectError: aplusLiveConnectError,
-        connectMessage: aplusLiveConnectMessage,
-        previewMatch: aplusPreviewMatch,
-      } as AplusLiveSettingsPanelState,
       extraTimeTurnsEnabled: gameMode === 'time' || gameMode === 'pro',
       countdownEnabled: gameMode !== 'fast',
       warmUpEnabled: gameMode === 'pro',
@@ -1029,10 +878,18 @@ const onSelectGameMode = useCallback(
       onChangePlayerName,
       onChangePlayerPoint,
       onSelectPlayerCountry,
-      onRefreshAplusTournaments: loadAplusLiveTournaments,
-      onSelectAplusTournament,
-      onChangeAplusMatchCode,
-      onCheckAplusLiveMatch,
+      aplusTournaments,
+      selectedAplusTournament,
+      selectedAplusMatch,
+      aplusMatchNumber,
+      aplusLiveStatus,
+      aplusLoadingTournaments,
+      aplusLoadingMatch,
+      onLoadAplusTournaments,
+      onPrevAplusTournament,
+      onNextAplusTournament,
+      onChangeAplusMatchNumber,
+      onLoadAplusMatch,
       onStart,
       onCancel,
     };
@@ -1040,17 +897,6 @@ const onSelectGameMode = useCallback(
     category,
     gameSettingsMode,
     playerSettings,
-    aplusLiveTournaments,
-    selectedAplusTournamentId,
-    aplusMatchCodeInput,
-    aplusLiveConnectStatus,
-    aplusLiveConnectError,
-    aplusLiveConnectMessage,
-    aplusPreviewMatch,
-    loadAplusLiveTournaments,
-    onSelectAplusTournament,
-    onChangeAplusMatchCode,
-    onCheckAplusLiveMatch,
     onSelectCategory,
     onSelectGameMode,
     onSelectExtraTimeBonus,
@@ -1062,6 +908,18 @@ const onSelectGameMode = useCallback(
     onChangePlayerName,
     onChangePlayerPoint,
     onSelectPlayerCountry,
+    aplusTournaments,
+    selectedAplusTournament,
+    selectedAplusMatch,
+    aplusMatchNumber,
+    aplusLiveStatus,
+    aplusLoadingTournaments,
+    aplusLoadingMatch,
+    onLoadAplusTournaments,
+    onPrevAplusTournament,
+    onNextAplusTournament,
+    onChangeAplusMatchNumber,
+    onLoadAplusMatch,
     onStart,
     onCancel,
   ]);

@@ -1,55 +1,34 @@
-import {Platform} from 'react-native';
+// Cấu hình kết nối điểm live giữa app Windows và live API của web Aplus.
+// Source web hiện tại đang dùng VITE_LIVE_API_URL=https://live-api.103.138.88.55.nip.io/api/live
+// Vì BASE_URL đã bao gồm /api/live nên các endpoint bên dưới chỉ bắt đầu từ /tournaments, /matches...
 
-// Sidecar API live score riêng, không cần quyền sửa VPS API cũ của dev.
-// Sidecar sẽ tự proxy dữ liệu giải/trận từ API cũ:
-// https://api-aplus.180.93.36.239.nip.io/api
-//
-// Debug local: chạy aplus-live-sidecar-api ở máy dev bằng port 5010.
-export const APLUS_LIVE_SCORE_DEV_API_BASE_URL =
-  'https://live-api.aplusbilliards.vn/api/live';
+export const APLUS_LIVE_SCORE_BASE_URL = 'https://live-api.103.138.88.55.nip.io/api/live';
 
-// Production: thay URL này bằng domain thật nơi deploy aplus-live-sidecar-api.
-// Ví dụ: https://live-api.aplusbilliards.vn/api/live
-export const APLUS_LIVE_SCORE_RELEASE_API_BASE_URL =
-  'https://live-api.aplusbilliards.vn/api/live';
-
-export const APLUS_LIVE_SCORE_API_BASE_URL = Platform.OS === 'windows'
-  ? __DEV__
-    ? APLUS_LIVE_SCORE_DEV_API_BASE_URL
-    : APLUS_LIVE_SCORE_RELEASE_API_BASE_URL
-  : __DEV__
-    ? APLUS_LIVE_SCORE_DEV_API_BASE_URL
-    : APLUS_LIVE_SCORE_RELEASE_API_BASE_URL;
-
-// Key này phải trùng với LIVE_SCORE_API_KEY trong sidecar API.
+// Giá trị này phải trùng với LIVE_SCORE_API_KEY trong file .env backend/live API.
+// Nếu để sai, app sẽ không tải được giải hoặc báo live API key không hợp lệ.
 export const APLUS_LIVE_SCORE_API_KEY = 'jahsd82ohehbcfjbsc89ay3wbejkhdbc982ybkejhbcf8dasjchbkjf92jdfi8ow2i';
 
-export const APLUS_LIVE_SCORE_REQUEST_TIMEOUT_MS = 10000;
+export const APLUS_LIVE_SCORE_DEVICE_NAME = 'Windows Scoreboard';
 
-export const APLUS_LIVE_SCORE_DEVICE_ID_STORAGE_KEY =
-  '@aplus_live_score_device_id';
+export const APLUS_LIVE_SCORE_ENDPOINTS = {
+  // GET /tournaments
+  tournaments: '/tournaments',
 
-export const APLUS_LIVE_SCORE_DEVICE_NAME_STORAGE_KEY =
-  '@aplus_live_score_device_name';
+  // GET /tournaments/:tournamentId/matches/by-code/:matchCode
+  matchByCode: '/tournaments/:tournamentId/matches/by-code/:matchCode',
 
-export const APLUS_LIVE_SCORE_SESSION_STORAGE_KEY =
-  '@aplus_live_score_session';
+  // POST /matches/:matchId/claim
+  claimMatch: '/matches/:matchId/claim',
 
-export const normalizeAplusLiveScoreBaseUrl = (value: string) =>
-  value.trim().replace(/\/+$/, '');
+  // PATCH /matches/:matchId/score
+  updateScore: '/matches/:matchId/score',
 
-export const isConfiguredAplusLiveScoreBaseUrl = (value: string) => {
-  if (!value) {
-    return false;
-  }
+  // POST /matches/:matchId/heartbeat
+  heartbeat: '/matches/:matchId/heartbeat',
 
-  if (
-    value.includes('YOUR_LIVE_SIDECAR_DOMAIN') ||
-    value.includes('YOUR_APLUS_LIVE_SCORE_BACKEND_URL') ||
-    value.includes('example.com')
-  ) {
-    return false;
-  }
+  // POST /matches/:matchId/finish
+  finishMatch: '/matches/:matchId/finish',
 
-  return /^https?:\/\/.+/i.test(value);
+  // POST /matches/:matchId/release
+  releaseMatch: '/matches/:matchId/release',
 };

@@ -1,155 +1,282 @@
-import colors from 'configuration/colors';
 import {StyleSheet} from 'react-native';
 import {scale as responsiveScale} from 'utils/responsive';
+import {getSelectedFont} from 'configuration/fonts';
 
-const RADIUS = responsiveScale(18);
+const borderColor = '#FFFFFF';
+const headerGrey = '#676767';
+const runGrey = '#CCCCCC';
+const heavyFont = getSelectedFont('Nunito-Regular', 'black');
+
+const whiteBoldText = {
+  color: '#FFFFFF',
+  fontFamily: heavyFont,
+  fontWeight: '900' as const,
+  includeFontPadding: false,
+};
 
 const styles = StyleSheet.create({
   container: {
-    borderTopWidth: 1,
-    borderRightWidth: responsiveScale(20),
-    borderColor: '#757670',
-    backgroundColor: '#757670',
-    borderRadius: RADIUS,
+    width: '100%',
+    minWidth: responsiveScale(280),
+    borderRadius: responsiveScale(18),
     overflow: 'hidden',
+    backgroundColor: '#000000',
+    borderWidth: responsiveScale(3),
+    borderColor,
   },
-
-  totalTurnWrapper: {
-    backgroundColor: '#757670',
-    marginRight: responsiveScale(4),
-  },
-
-  totalTurnWrapperCompact: {
-    marginRight: responsiveScale(2),
-  },
-
 
   containerCompact: {
-    borderRightWidth: responsiveScale(10),
     borderRadius: responsiveScale(12),
   },
 
-  flagBadge: {
-    width: responsiveScale(34),
-    height: responsiveScale(22),
-    borderRadius: responsiveScale(4),
-    backgroundColor: colors.white,
+  boardContent: {
+    position: 'relative',
+    width: '100%',
+    backgroundColor: '#000000',
+  },
+
+  headerRow: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    backgroundColor: headerGrey,
+  },
+
+  headerTitleCell: {
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingLeft: responsiveScale(12),
+    paddingRight: responsiveScale(12),
+    backgroundColor: headerGrey,
+  },
+
+  headerTitleText: {
+    flex: 1,
+    minWidth: 0,
+    ...whiteBoldText,
+    fontSize: responsiveScale(23),
+    lineHeight: responsiveScale(27),
+    textTransform: 'uppercase',
+  },
+
+  headerTitleTextCompact: {
+    fontSize: responsiveScale(17),
+    lineHeight: responsiveScale(21),
+  },
+
+  headerGoalText: {
+    marginLeft: responsiveScale(8),
+    ...whiteBoldText,
+    fontSize: responsiveScale(21),
+    lineHeight: responsiveScale(25),
+  },
+
+  headerGoalTextCompact: {
+    fontSize: responsiveScale(15),
+    lineHeight: responsiveScale(19),
+  },
+
+  headerTurnGroupCell: {
+    minWidth: 0,
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    marginRight: responsiveScale(8),
+    backgroundColor: headerGrey,
+  },
+
+  headerInnText: {
+    ...whiteBoldText,
+    fontSize: responsiveScale(21),
+    lineHeight: responsiveScale(25),
+    textAlign: 'center',
+  },
+
+  headerInnTextCompact: {
+    fontSize: responsiveScale(15),
+    lineHeight: responsiveScale(19),
+  },
+
+  playersTable: {
+    backgroundColor: '#000000',
+  },
+
+  playerRow: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    backgroundColor: '#000000',
+  },
+
+  playerNameCell: {
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingLeft: responsiveScale(11),
+    paddingRight: responsiveScale(10),
+    backgroundColor: '#000000',
+  },
+
+  playerNameText: {
+    flex: 1,
+    minWidth: 0,
+    ...whiteBoldText,
+    fontSize: responsiveScale(34),
+    lineHeight: responsiveScale(38),
+    textTransform: 'uppercase',
+  },
+
+  playerNameTextCompact: {
+    fontSize: responsiveScale(25),
+    lineHeight: responsiveScale(29),
+  },
+
+  flagBadge: {
+    width: responsiveScale(54),
+    height: responsiveScale(36),
+    borderRadius: responsiveScale(8),
     overflow: 'hidden',
+    backgroundColor: '#EA2B2B',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: responsiveScale(12),
   },
 
   flagBadgeCompact: {
-    width: responsiveScale(24),
-    height: responsiveScale(16),
-    marginRight: responsiveScale(4),
-  },
-
-  flagText: {
-    fontSize: responsiveScale(11),
-    lineHeight: responsiveScale(13),
-    textAlign: 'center',
-    includeFontPadding: false,
-  },
-
-  nameWithFlag: {
-    marginRight: responsiveScale(6),
-  },
-
-  nameWithFlagCompact: {
-    marginRight: responsiveScale(3),
-  },
-
-  turnImage: {    width: responsiveScale(40),
-    height: responsiveScale(40),
-    tintColor: colors.red,
-    marginLeft: responsiveScale(10),
-    marginRight: responsiveScale(-5),
-  },
-
-  turnImageCompact: {
-    width: responsiveScale(26),
+    width: responsiveScale(38),
     height: responsiveScale(26),
-    marginLeft: responsiveScale(4),
-    marginRight: responsiveScale(-2),
+    borderRadius: responsiveScale(6),
+    marginRight: responsiveScale(8),
   },
 
-  empty: {
-    width: responsiveScale(40),
-    height: responsiveScale(40),
-    marginLeft: responsiveScale(10),
-  },
-
-  emptyCompact: {
-    width: responsiveScale(26),
-    height: responsiveScale(26),
-    marginLeft: responsiveScale(4),
-  },
-
-  countdownContainer: {
-    backgroundColor: '#757670',
-  },
-
-  linearWrapper: {
-    flex: 1,
-    height: 40,
-    overflow: 'hidden',
-    marginHorizontal: responsiveScale(15),
-  },
-
-  linear: {
-    position: 'absolute',
-    backgroundColor: colors.white,
-    height: 40,
+  flagImage: {
     width: '100%',
-  },
-
-  countdownWrapper: {
     height: '100%',
   },
 
-  countdownWrapperCompact: {
-    minWidth: responsiveScale(30),
+  flagText: {
+    ...whiteBoldText,
+    fontSize: responsiveScale(14),
+    lineHeight: responsiveScale(17),
+    textAlign: 'center',
   },
 
-  currentTotalPoint: {
-    marginBottom: responsiveScale(3),
-    minWidth: responsiveScale(44),
+  scoreCell: {
+    minWidth: 0,
+    backgroundColor: '#000000',
     alignItems: 'center',
+    justifyContent: 'center',
   },
 
-  totalPointWrapper: {
-    backgroundColor: colors.black,
-    minWidth: responsiveScale(74),
+  scoreText: {
+    ...whiteBoldText,
+    textAlign: 'center',
+  },
+
+  runCell: {
+    minWidth: 0,
+    backgroundColor: runGrey,
     alignItems: 'center',
+    justifyContent: 'center',
   },
 
-  totalPointWrapperCompact: {
-    minWidth: responsiveScale(54),
+  currentRunBadge: {
+    width: responsiveScale(50),
+    height: responsiveScale(50),
+    borderRadius: responsiveScale(25),
+    backgroundColor: '#EEF4F7',
+    borderWidth: responsiveScale(1.2),
+    borderColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 
-  totalPointText0: {
-    marginBottom: responsiveScale(-11),
+  currentRunBadgeCompact: {
+    width: responsiveScale(36),
+    height: responsiveScale(36),
+    borderRadius: responsiveScale(18),
   },
 
-  totalPointText1: {
-    marginTop: responsiveScale(4),
-    marginBottom: responsiveScale(-11),
+  currentRunText: {
+    color: '#111111',
+    fontFamily: heavyFont,
+    fontWeight: '900',
+    fontSize: responsiveScale(28),
+    lineHeight: responsiveScale(32),
+    includeFontPadding: false,
+    textAlign: 'center',
   },
 
-  currentTotalPointCompact: {
-    minWidth: responsiveScale(32),
+  currentRunTextCompact: {
+    fontSize: responsiveScale(20),
+    lineHeight: responsiveScale(24),
   },
 
-  currentPointText: {
-    marginBottom: responsiveScale(-11),
+  countdownRow: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#000000',
+    paddingLeft: responsiveScale(10),
+    paddingRight: responsiveScale(8),
   },
 
-  buttonTurns: {
-    borderColor: colors.black,
-    borderWidth: 0.5,
-    backgroundColor: colors.yellow,
+  countdownTrack: {
+    flex: 1,
+    height: responsiveScale(32),
+    backgroundColor: '#111111',
+    borderRadius: responsiveScale(16),
+    overflow: 'hidden',
+    borderWidth: responsiveScale(1.2),
+    borderColor: 'rgba(255,255,255,0.10)',
+  },
+
+  countdownFillClip: {
+    height: '100%',
+    overflow: 'hidden',
+    borderRadius: responsiveScale(16),
+  },
+
+  countdownFill: {
+    width: '100%',
+    height: '100%',
+    borderRadius: responsiveScale(16),
+  },
+
+  countdownTextCell: {
+    width: responsiveScale(62),
+    minWidth: responsiveScale(62),
+    paddingLeft: responsiveScale(8),
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  countdownText: {
+    ...whiteBoldText,
+    fontSize: responsiveScale(34),
+    lineHeight: responsiveScale(38),
+    textAlign: 'center',
+  },
+
+  countdownTextCompact: {
+    fontSize: responsiveScale(24),
+    lineHeight: responsiveScale(28),
+  },
+
+  absoluteLineHorizontal: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    backgroundColor: borderColor,
+    zIndex: 100,
+    elevation: 100,
+  },
+
+  absoluteLineVertical: {
+    position: 'absolute',
+    backgroundColor: borderColor,
+    zIndex: 101,
+    elevation: 101,
   },
 });
 
