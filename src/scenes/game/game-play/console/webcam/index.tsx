@@ -421,6 +421,7 @@ const CaromScoreboardOverlay = memo(({
   }, []);
 
   const shouldShowCarom =
+    (fullscreenMode || liveOutput) &&
     shouldShowMatchOverlay(state.gameSettings, state.playerSettings) &&
     isCaromGame(state.gameSettings?.category);
 

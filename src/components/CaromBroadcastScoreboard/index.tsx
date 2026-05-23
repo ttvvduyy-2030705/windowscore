@@ -86,41 +86,40 @@ const getMetrics = (
   switch (variant) {
     case 'live':
       return {
-        // Live-only Carom sizing: keep the scoreboard at 50% width,
-        // but anchor it back near the original left edge. Pool/logo/camera/
-        // fullscreen/replay do not use this branch.
+        // Live-only Carom sizing: keep the scoreboard compact so it does not
+        // cover too much of the camera feed.
         left: liveCaromLeft,
-        bottom: Math.round(liveHeight * 0.04),
-        width: liveCaromWidth,
-        scale: Math.max(0.62, Math.min(0.78, 0.74 * liveScale)),
+        bottom: Math.round(liveHeight * 0.035),
+        width: Math.round(liveCaromWidth * 0.86),
+        scale: Math.max(0.46, Math.min(0.62, 0.58 * liveScale)),
       };
     case 'fullscreen':
       return compact
         ? {
-            left: s(4),
+            left: s(24),
             bottom: 0,
-            width: s(280),
-            scale: 0.46,
+            width: s(238),
+            scale: 0.39,
           }
         : {
             left: s(6),
             bottom: 0,
-            width: s(360),
-            scale: 0.56,
+            width: s(305),
+            scale: 0.47,
           };
     case 'playback':
       return compact
         ? {
             left: s(10),
             bottom: 0,
-            width: s(360),
-            scale: 0.5,
+            width: s(305),
+            scale: 0.42,
           }
         : {
             left: s(12),
             bottom: 0,
-            width: s(470),
-            scale: 0.58,
+            width: s(398),
+            scale: 0.49,
           };
     case 'camera':
     default:
@@ -130,14 +129,14 @@ const getMetrics = (
             // alignment is handled once in getWindowsScaledBottomCorrection.
             left: s(2),
             bottom: s(0),
-            width: s(186),
-            scale: 0.34,
+            width: s(158),
+            scale: 0.29,
           }
         : {
             left: s(4),
             bottom: s(0),
-            width: s(236),
-            scale: 0.42,
+            width: s(200),
+            scale: 0.35,
           };
   }
 };
@@ -178,8 +177,10 @@ const CaromBroadcastScoreboard = ({
     metrics.scale,
     adaptive,
   );
-  const bottomValue = (bottomOffset ?? metrics.bottom) - visualBottomCorrection;
-
+  const bottomValue =
+  variant === 'camera'
+    ? metrics.bottom - visualBottomCorrection
+    : (bottomOffset ?? metrics.bottom) - visualBottomCorrection;
   if (
     !isCaromGame(category) ||
     players.length < 2 ||
