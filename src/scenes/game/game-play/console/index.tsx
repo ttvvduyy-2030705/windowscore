@@ -229,6 +229,7 @@ const WideActionButton = ({
   extraCompact,
   poolCompact,
   tight,
+  buttonHeight,
 }: {
   label: string;
   icon?: number;
@@ -238,7 +239,17 @@ const WideActionButton = ({
   extraCompact?: boolean;
   poolCompact?: boolean;
   tight?: boolean;
+  buttonHeight?: number;
 }) => {
+  const buttonHeightStyle = buttonHeight
+    ? {
+        height: buttonHeight,
+        minHeight: buttonHeight,
+        maxHeight: buttonHeight,
+        paddingVertical: 0,
+      }
+    : undefined;
+
   return (
     <Button
       onPress={onPress}
@@ -249,6 +260,7 @@ const WideActionButton = ({
         extraCompact ? styles.extraCompactWideButton : undefined,
         tight ? styles.tightWideButton : undefined,
         buttonToneStyle(tone),
+        buttonHeightStyle,
       ]}>
       <ActionButtonContent
         label={label}
@@ -286,6 +298,7 @@ const DualButton = ({
   extraCompact,
   poolCompact,
   tight,
+  buttonHeight,
 }: {
   leftLabel: string;
   rightLabel: string;
@@ -299,7 +312,17 @@ const DualButton = ({
   extraCompact?: boolean;
   poolCompact?: boolean;
   tight?: boolean;
+  buttonHeight?: number;
 }) => {
+  const buttonHeightStyle = buttonHeight
+    ? {
+        height: buttonHeight,
+        minHeight: buttonHeight,
+        maxHeight: buttonHeight,
+        paddingVertical: 0,
+      }
+    : undefined;
+
   return (
     <View
       direction={'row'}
@@ -316,6 +339,7 @@ const DualButton = ({
           extraCompact ? styles.extraCompactDualButton : undefined,
           tight ? styles.tightDualButton : undefined,
           buttonToneStyle(leftTone),
+          buttonHeightStyle,
         ]}>
         <ActionButtonContent
           label={leftLabel}
@@ -347,6 +371,7 @@ const DualButton = ({
           extraCompact ? styles.extraCompactDualButton : undefined,
           tight ? styles.tightDualButton : undefined,
           buttonToneStyle(rightTone),
+          buttonHeightStyle,
         ]}>
         {rightIcon ? (
           <RNView style={styles.dualButtonLabelRow}>
@@ -421,6 +446,7 @@ const TripleButton = ({
   extraCompact,
   poolCompact,
   tight,
+  buttonHeight,
 }: {
   leftLabel: string;
   centerLabel: string;
@@ -438,6 +464,7 @@ const TripleButton = ({
   extraCompact?: boolean;
   poolCompact?: boolean;
   tight?: boolean;
+  buttonHeight?: number;
 }) => {
   const textStyle = [
     styles.tripleButtonText,
@@ -454,6 +481,14 @@ const TripleButton = ({
     tight ? styles.tightActionButtonIcon : undefined,
   ];
   const fitText = !!poolCompact || !!tight || !!compact || !!extraCompact;
+  const buttonHeightStyle = buttonHeight
+    ? {
+        height: buttonHeight,
+        minHeight: buttonHeight,
+        maxHeight: buttonHeight,
+        paddingVertical: 0,
+      }
+    : undefined;
 
   return (
     <View
@@ -471,6 +506,7 @@ const TripleButton = ({
           extraCompact ? styles.extraCompactTripleButton : undefined,
           tight ? styles.tightTripleButton : undefined,
           buttonToneStyle(leftTone),
+          buttonHeightStyle,
         ]}>
         <ActionButtonContent
           label={leftLabel}
@@ -490,6 +526,7 @@ const TripleButton = ({
           extraCompact ? styles.extraCompactTripleButton : undefined,
           tight ? styles.tightTripleButton : undefined,
           buttonToneStyle(centerTone),
+          buttonHeightStyle,
         ]}>
         <ActionButtonContent
           label={centerLabel}
@@ -509,6 +546,7 @@ const TripleButton = ({
           extraCompact ? styles.extraCompactTripleButton : undefined,
           tight ? styles.tightTripleButton : undefined,
           buttonToneStyle(rightTone),
+          buttonHeightStyle,
         ]}>
         <ActionButtonContent
           label={rightLabel}
@@ -697,7 +735,8 @@ const GameConsole = (props: ConsoleViewModelProps) => {
     !useLargeCaromConsole &&
     (useResponsiveCompact || adaptive.isConstrainedLandscape || isHandheldLandscape || isPhonePreset || height <= 900);
   const useCaromCompactButtons = isCarom
-    ? !useLargeCaromConsole && (useResponsiveCompact || useCaromConsoleCompact)
+    ? useLargeCaromConsole ||
+      (!useLargeCaromConsole && (useResponsiveCompact || useCaromConsoleCompact))
     : useResponsiveCompact;
   const useCaromExtraCompactButtons = isCarom
     ? hideCaromCamera || useExtraCompact || (!useLargeCaromConsole && useCaromConsoleCompact && height <= 780)
@@ -708,6 +747,30 @@ const GameConsole = (props: ConsoleViewModelProps) => {
     !hideCaromCamera &&
     !useLargeCaromConsole &&
     (useResponsiveCompact || adaptive.isConstrainedLandscape || isHandheldLandscape || height <= 760);
+
+  // Chỉ giảm nhẹ nút ở màn Carom console lớn.
+  // Màn nhỏ/compact vẫn giữ layout cũ đang ổn, Pool không bị ảnh hưởng.
+  const useCaromConsoleButtonTrim =
+    isCarom &&
+    !props.cameraFullscreen &&
+    !hideCaromCamera &&
+    adaptive.isLandscape &&
+    !useResponsiveCompact &&
+    !useCaromTightLayout &&
+    (isLargeDisplay || useLargeCaromConsole || width >= 1180 || height >= 760);
+
+  const caromConsoleButtonHeight = useCaromConsoleButtonTrim
+    ? useCaromCompactButtons || useLargeCaromConsole || useCaromConsoleCompact
+      ? 40
+      : 56
+    : undefined;
+
+  const caromConsoleActionGap = useCaromConsoleButtonTrim
+    ? useCaromCompactButtons || useLargeCaromConsole || useCaromConsoleCompact
+      ? 2
+      : 4
+    : undefined;
+
   const shouldCapCaromCameraHeight =
     isCarom &&
     !hideCaromCamera &&
@@ -727,7 +790,7 @@ const GameConsole = (props: ConsoleViewModelProps) => {
     }
 
     if (useLargeCaromConsole) {
-      return 52;
+      return 44;
     }
 
     if (hideCaromCamera) {
@@ -751,7 +814,7 @@ const GameConsole = (props: ConsoleViewModelProps) => {
     }
 
     if (useLargeCaromConsole) {
-      return 8;
+      return 4;
     }
 
     if (useCaromTightLayout) {
@@ -933,6 +996,7 @@ const GameConsole = (props: ConsoleViewModelProps) => {
             compact={useCaromCompactButtons}
             extraCompact={useCaromExtraCompactButtons}
             tight={useCaromTightLayout}
+            buttonHeight={caromConsoleButtonHeight}
           />
         );
       }
@@ -951,6 +1015,7 @@ const GameConsole = (props: ConsoleViewModelProps) => {
           compact={useCaromCompactButtons}
           extraCompact={useCaromExtraCompactButtons}
           tight={useCaromTightLayout}
+          buttonHeight={caromConsoleButtonHeight}
         />
       );
     }
@@ -1020,6 +1085,7 @@ const GameConsole = (props: ConsoleViewModelProps) => {
     useCaromCompactButtons,
     useCaromExtraCompactButtons,
     useCaromTightLayout,
+    caromConsoleButtonHeight,
   ]);
 
   const cameraUtilityRows = (
@@ -1040,6 +1106,7 @@ const GameConsole = (props: ConsoleViewModelProps) => {
       poolCompact={usePoolBroadcastLayout}
       extraCompact={isCarom ? useCaromExtraCompactButtons : hideCaromCamera || useExtraCompact}
       tight={isCarom ? useCaromTightLayout : false}
+      buttonHeight={isCarom ? caromConsoleButtonHeight : undefined}
     />
   );
 
@@ -1062,6 +1129,7 @@ const GameConsole = (props: ConsoleViewModelProps) => {
           compact={useCaromCompactButtons}
           extraCompact={useCaromExtraCompactButtons}
           tight={useCaromTightLayout}
+          buttonHeight={caromConsoleButtonHeight}
         />
       );
     }
@@ -1097,6 +1165,7 @@ const GameConsole = (props: ConsoleViewModelProps) => {
     useCaromCompactButtons,
     useCaromExtraCompactButtons,
     useCaromTightLayout,
+    caromConsoleButtonHeight,
   ]);
 
   useEffect(() => {
@@ -1612,6 +1681,12 @@ const GameConsole = (props: ConsoleViewModelProps) => {
             useCaromConsoleCompact ? styles.caromActionStackCompact : undefined,
             useLargeCaromConsole ? styles.caromActionStackLarge : undefined,
             hideCaromCamera ? styles.caromActionStackNoCamera : undefined,
+            caromConsoleActionGap != null
+              ? {
+                  gap: caromConsoleActionGap,
+                  paddingTop: 0,
+                }
+              : undefined,
           ]}
           onLayout={event => {
             debugCaromLayout('[GameConsole] carom actionStack layout', event.nativeEvent.layout);
@@ -2314,8 +2389,8 @@ const createStyles = (adaptive: any, design: any, rules: any) => {
     justifyContent: 'flex-end',
   },
   caromActionStackLarge: {
-    gap: 10,
-    paddingTop: 6,
+    gap: 4,
+    paddingTop: 2,
   },
   topButtonRowWrap: {
     width: '100%',
@@ -2678,8 +2753,8 @@ const createStyles = (adaptive: any, design: any, rules: any) => {
   },
   caromGoalCardLargeDisplay: {},
   caromGoalCardLarge: {
-    minHeight: 58,
-    paddingVertical: 7,
+    minHeight: 44,
+    paddingVertical: 4,
   },
   caromInfoWrap: {
     width: '100%',

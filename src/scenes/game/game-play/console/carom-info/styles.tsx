@@ -51,6 +51,53 @@ const styles = StyleSheet.create({
     backgroundColor: headerGrey,
   },
 
+  headerTitleMarqueeViewport: {
+    flex: 1,
+    minWidth: 0,
+    overflow: 'hidden',
+    justifyContent: 'center',
+  },
+
+  headerTitleMarqueeInner: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    flexShrink: 0,
+  },
+
+  headerTitleMarqueeSegment: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexShrink: 0,
+    minWidth: 0,
+    justifyContent: 'flex-start',
+    overflow: 'visible',
+  },
+
+  headerTitleMeasureText: {
+    position: 'absolute',
+    left: -10000,
+    top: -10000,
+    opacity: 0,
+    zIndex: -1,
+    elevation: -1,
+    flexShrink: 0,
+  },
+
+  headerTitleMarqueeText: {
+    flexShrink: 0,
+    ...whiteBoldText,
+    fontSize: responsiveScale(20),
+    lineHeight: responsiveScale(26),
+    textTransform: 'uppercase',
+    includeFontPadding: true,
+  },
+
+  headerTitleMarqueeTextCompact: {
+    fontSize: responsiveScale(15),
+    lineHeight: responsiveScale(20),
+    includeFontPadding: true,
+  },
+
   headerTitleText: {
     flex: 1,
     minWidth: 0,

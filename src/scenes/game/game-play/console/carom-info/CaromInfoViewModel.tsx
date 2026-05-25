@@ -21,6 +21,16 @@ export interface Props {
   gameSettings: GameSettings;
   playerSettings: PlayerSettings;
   compact?: boolean;
+  /**
+   * Keep the small scoreboard drawn inside the camera independent from the
+   * normal console scoreboard above the camera.
+   */
+  cameraOverlay?: boolean;
+  /**
+   * Fullscreen overlay has its own taller/narrower layout without affecting
+   * the normal console scoreboard or the camera overlay.
+   */
+  fullscreenOverlay?: boolean;
 }
 
 const CaromInfoViewModel = (props: Props) => {

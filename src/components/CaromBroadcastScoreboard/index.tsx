@@ -21,6 +21,12 @@ export interface CaromBroadcastScoreboardProps {
   liveVideoHeight?: number;
 }
 
+// Camera-only tuning. These values only affect the scoreboard drawn inside the camera.
+// The console CaromInfo above the camera stays unchanged.
+const CAROM_CAMERA_LEFT = 8;
+const CAROM_CAMERA_BOTTOM_LIFT = 26;
+const CAROM_CAMERA_WIDTH_FACTOR = 0.72;
+
 const shouldUseCompactMetrics = (variant: Variant, adaptive?: any) => {
   if (!adaptive?.isLandscape) {
     return false;
@@ -96,16 +102,20 @@ const getMetrics = (
     case 'fullscreen':
       return compact
         ? {
-            left: s(24),
+            // Fullscreen Carom only: make the scoreboard visually taller
+            // while keeping it narrower horizontally.
+            left: s(20),
             bottom: 0,
-            width: s(238),
-            scale: 0.39,
+            width: s(210),
+            scale: 0.52,
           }
         : {
-            left: s(6),
+            // Fullscreen Carom only: increase vertical presence and reduce
+            // horizontal span so it looks taller and less wide.
+            left: s(22),
             bottom: 0,
-            width: s(305),
-            scale: 0.47,
+            width: s(260),
+            scale: 0.62,
           };
     case 'playback':
       return compact
@@ -164,7 +174,17 @@ const CaromBroadcastScoreboard = ({
     liveVideoWidth,
     liveVideoHeight,
   );
-  const scaleRootWidth = metrics.width / metrics.scale;
+  const s = adaptive?.s || ((value: number) => value);
+  const isCameraVariant = variant === 'camera';
+  const isFullscreenVariant = variant === 'fullscreen';
+
+  // Camera-only visual tuning. This does not affect the console CaromInfo
+  // because only CaromBroadcastScoreboard passes cameraOverlay to CaromInfo.
+  const cameraBottomLift = isCameraVariant ? Math.round(s(CAROM_CAMERA_BOTTOM_LIFT)) : 0;
+  const cameraLeft = isCameraVariant ? Math.round(s(CAROM_CAMERA_LEFT)) : metrics.left;
+  const cameraWidthFactor = isCameraVariant ? CAROM_CAMERA_WIDTH_FACTOR : 1;
+  const visualWidth = Math.round(metrics.width * cameraWidthFactor);
+  const scaleRootWidth = visualWidth / metrics.scale;
   // React Native Windows ignores transformOrigin here, so a scaled scoreboard
   // visually drifts toward the center. Pull the scaled root back to keep the
   // camera overlay truly left-aligned. Other platforms keep the previous path.
@@ -178,9 +198,8 @@ const CaromBroadcastScoreboard = ({
     adaptive,
   );
   const bottomValue =
-  variant === 'camera'
-    ? metrics.bottom - visualBottomCorrection
-    : (bottomOffset ?? metrics.bottom) - visualBottomCorrection;
+    (bottomOffset ?? metrics.bottom) - visualBottomCorrection + cameraBottomLift;
+
   if (
     !isCaromGame(category) ||
     players.length < 2 ||
@@ -195,11 +214,17 @@ const CaromBroadcastScoreboard = ({
       style={[
         styles.wrapper,
         {
-          left: metrics.left,
+          left: cameraLeft,
           bottom: bottomValue,
-          width: metrics.width,
+          width: visualWidth,
         },
         style,
+        variant === 'camera'
+          ? {
+              bottom: bottomValue,
+              width: visualWidth,
+            }
+          : null,
       ]}>
       <View
         style={[
@@ -220,7 +245,9 @@ const CaromBroadcastScoreboard = ({
           currentPlayerIndex={Math.max(0, Number(currentPlayerIndex || 0))}
           gameSettings={gameSettings}
           playerSettings={playerSettings}
-          compact={variant === 'fullscreen' ? useCompactMetrics : false}
+          compact={isCameraVariant ? true : isFullscreenVariant ? useCompactMetrics : false}
+          cameraOverlay={isCameraVariant}
+          fullscreenOverlay={isFullscreenVariant}
         />
       </View>
     </View>

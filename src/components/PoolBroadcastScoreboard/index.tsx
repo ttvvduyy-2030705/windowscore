@@ -1,4 +1,4 @@
-import React, {memo, useContext, useMemo} from 'react';
+import React, { memo, useContext, useMemo } from 'react';
 import {
   Image,
   StyleProp,
@@ -15,13 +15,14 @@ import {
   getFlagText as getWindowsFlagText,
   normalizePlayerCountry,
 } from 'platform/windows/flags';
-import {PlayerSettings} from 'types/player';
-import {GameSettings} from 'types/settings';
-import {isPool10Game, isPool15Game, isPool9Game} from 'utils/game';
-import {shouldShowMatchOverlay} from 'utils/matchOverlay';
+import { PlayerSettings } from 'types/player';
+import { GameSettings } from 'types/settings';
+import { isPool10Game, isPool15Game, isPool9Game } from 'utils/game';
+import { shouldShowMatchOverlay } from 'utils/matchOverlay';
 import useDesignSystem from 'theme/useDesignSystem';
 import i18n from 'i18n';
-import {LanguageContext} from 'context/language';
+import fonts from 'configuration/fonts';
+import { LanguageContext } from 'context/language';
 
 type Variant = 'camera' | 'fullscreen' | 'playback' | 'live';
 
@@ -37,8 +38,10 @@ export interface PoolBroadcastScoreboardProps {
   liveVideoHeight?: number;
 }
 
-const LEFT_PANEL_COLORS = ['#FF5B57', '#CC1212'];
-const RIGHT_PANEL_COLORS = ['#CC1212', '#FF5B57'];
+const LEFT_PANEL_COLORS = ['#343434', '#681F24', '#D81B23', '#C9161E'];
+const RIGHT_PANEL_COLORS = ['#C9161E', '#D81B23', '#681F24', '#343434'];
+const LEFT_PANEL_LOCATIONS = [0, 0.08, 0.24, 1];
+const RIGHT_PANEL_LOCATIONS = [0, 0.76, 0.92, 1];
 
 const clamp = (value: number, min: number, max: number) => {
   return Math.max(min, Math.min(value, max));
@@ -49,8 +52,29 @@ const safeNumber = (value: any, fallback = 0) => {
   return Number.isFinite(numeric) ? numeric : fallback;
 };
 
-const getFlagSource = (player: any) =>
-  getWindowsFlagImageSource(normalizePlayerCountry(player));
+const getHighResolutionFlagSource = (player: any) => {
+  const normalizedPlayer = normalizePlayerCountry(player);
+  const directImage = String(
+    normalizedPlayer?.flagImage || normalizedPlayer?.image || '',
+  ).trim();
+
+  if (/^(https?:|file:)/i.test(directImage)) {
+    return { uri: directImage };
+  }
+
+  const countryCode = String(normalizedPlayer?.countryCode || normalizedPlayer?.flag || '')
+    .trim()
+    .toLowerCase();
+
+  if (/^[a-z]{2}$/.test(countryCode)) {
+    // Dùng ảnh cờ 320px thay vì asset VN 24x24 để tránh bị mờ khi phóng to.
+    return { uri: `https://flagcdn.com/w320/${countryCode}.png` };
+  }
+
+  return getWindowsFlagImageSource(normalizedPlayer);
+};
+
+const getFlagSource = (player: any) => getHighResolutionFlagSource(player);
 
 const getFlagText = (player: any) =>
   getWindowsFlagText(normalizePlayerCountry(player));
@@ -65,6 +89,30 @@ const getTimerColor = (countdownTime: number) => {
   }
 
   return '#34C759';
+};
+
+const PLAYER_NAME_TEXT_SCALE = 1.5;
+const PLAYER_SCORE_TEXT_SCALE = 1.62;
+const CENTER_LABEL_TEXT_SCALE = 1.5;
+const CENTER_VALUE_TEXT_SCALE = 1.5;
+const BAR_HEIGHT_SCALE = 1.24;
+const CENTER_WIDTH_SCALE = 1.55;
+const FLAG_WIDTH_SCALE = 1.18;
+const SCORE_BOX_WIDTH_SCALE = 1.18;
+const H_PADDING_SCALE = 1.08;
+const NAME_GAP_SCALE = 1.08;
+
+const getResolvedWrapperWidth = (variant: Variant, originalWidth: string) => {
+  if (variant === 'fullscreen') {
+    return '94%';
+  }
+  if (variant === 'camera') {
+    return '90%';
+  }
+  if (variant === 'playback') {
+    return '92%';
+  }
+  return originalWidth;
 };
 
 const shouldUseCompactMetrics = (variant: Variant, adaptive?: any) => {
@@ -106,20 +154,20 @@ const getVariantMetrics = (
 
   if (variant === 'live') {
     return {
-      wrapperWidth: '86%',
-      barHeight: liveSize(54),
+      wrapperWidth: '88%',
+      barHeight: liveSize(62),
       bottomGap: 0,
-      playerNameSize: liveSize(24),
-      playerScoreSize: liveSize(36),
-      centerLabelSize: liveSize(15),
-      centerValueSize: liveSize(26),
-      centerWidth: liveSize(132),
+      playerNameSize: liveSize(28),
+      playerScoreSize: liveSize(42),
+      centerLabelSize: liveSize(18),
+      centerValueSize: liveSize(28),
+      centerWidth: liveSize(158),
       timerWidth: '44%',
-      timerHeight: liveSize(26),
-      timerTextSize: liveSize(14),
-      flagWidth: liveSize(78),
-      scoreMinWidth: liveSize(86),
-      horizontalPadding: liveSize(16),
+      timerHeight: liveSize(0),
+      timerTextSize: liveSize(0),
+      flagWidth: liveSize(96),
+      scoreMinWidth: liveSize(92),
+      horizontalPadding: liveSize(18),
       playerNameGap: liveSize(12),
     };
   }
@@ -127,38 +175,42 @@ const getVariantMetrics = (
   if (variant === 'fullscreen') {
     return compact
       ? {
-          wrapperWidth: '84%',
-          barHeight: s(34),
+          // Small/fullscreen window: keep text bigger, but give the middle
+          // score block enough room so "ĐIỂM 9" is not clipped.
+          wrapperWidth: '88%',
+          barHeight: s(42),
           bottomGap: 0,
-          playerNameSize: fs(12, 0.78, 0.9),
-          playerScoreSize: fs(20, 0.78, 0.92),
-          centerLabelSize: fs(8, 0.76, 0.9),
-          centerValueSize: fs(15, 0.78, 0.92),
-          centerWidth: s(78),
+          playerNameSize: fs(18, 0.84, 0.98),
+          playerScoreSize: fs(30, 0.84, 0.98),
+          centerLabelSize: fs(11, 0.82, 0.96),
+          centerValueSize: fs(18, 0.84, 0.96),
+          centerWidth: s(118),
           timerWidth: '46%',
-          timerHeight: s(15),
-          timerTextSize: fs(9, 0.78, 0.9),
-          flagWidth: s(50),
-          scoreMinWidth: s(42),
-          horizontalPadding: s(8),
-          playerNameGap: s(8),
+          timerHeight: s(0),
+          timerTextSize: fs(0, 0.78, 0.9),
+          flagWidth: s(64),
+          scoreMinWidth: s(58),
+          horizontalPadding: s(10),
+          playerNameGap: s(9),
         }
       : {
-          wrapperWidth: '88%',
-          barHeight: s(38),
+          // Large/fullscreen window: larger than the original, but balanced
+          // so the bar does not overflow or squeeze the center label.
+          wrapperWidth: '90%',
+          barHeight: s(50),
           bottomGap: 0,
-          playerNameSize: fs(15, 0.8, 0.94),
-          playerScoreSize: fs(23, 0.82, 0.96),
-          centerLabelSize: fs(9, 0.82, 0.96),
-          centerValueSize: fs(17, 0.82, 0.96),
-          centerWidth: s(92),
+          playerNameSize: fs(22, 0.86, 1),
+          playerScoreSize: fs(36, 0.86, 1),
+          centerLabelSize: fs(13, 0.84, 0.98),
+          centerValueSize: fs(21, 0.86, 0.98),
+          centerWidth: s(142),
           timerWidth: '44%',
-          timerHeight: s(18),
-          timerTextSize: fs(10, 0.82, 0.96),
-          flagWidth: s(58),
-          scoreMinWidth: s(50),
-          horizontalPadding: s(10),
-          playerNameGap: s(10),
+          timerHeight: s(0),
+          timerTextSize: fs(0, 0.82, 0.96),
+          flagWidth: s(78),
+          scoreMinWidth: s(68),
+          horizontalPadding: s(13),
+          playerNameGap: s(11),
         };
   }
 
@@ -184,38 +236,38 @@ const getVariantMetrics = (
 
   return compact
     ? {
-        wrapperWidth: '78%',
-        barHeight: s(24),
+        wrapperWidth: '86%',
+        barHeight: s(34),
         bottomGap: 0,
-        playerNameSize: fs(8.5, 0.74, 0.86),
-        playerScoreSize: fs(12.5, 0.74, 0.88),
-        centerLabelSize: fs(6.5, 0.72, 0.84),
-        centerValueSize: fs(10.5, 0.74, 0.86),
-        centerWidth: s(58),
+        playerNameSize: fs(12.5, 0.78, 0.94),
+        playerScoreSize: fs(20.5, 0.78, 0.94),
+        centerLabelSize: fs(9.2, 0.76, 0.92),
+        centerValueSize: fs(14, 0.78, 0.92),
+        centerWidth: s(78),
         timerWidth: '48%',
-        timerHeight: s(9),
-        timerTextSize: fs(7, 0.74, 0.86),
-        flagWidth: s(36),
-        scoreMinWidth: s(28),
-        horizontalPadding: s(5),
-        playerNameGap: s(5),
+        timerHeight: s(0),
+        timerTextSize: fs(0, 0.74, 0.86),
+        flagWidth: s(48),
+        scoreMinWidth: s(40),
+        horizontalPadding: s(7),
+        playerNameGap: s(6),
       }
     : {
         wrapperWidth: '88%',
-        barHeight: s(28),
+        barHeight: s(40),
         bottomGap: 0,
-        playerNameSize: fs(11, 0.8, 0.9),
-        playerScoreSize: fs(16, 0.8, 0.92),
-        centerLabelSize: fs(7.5, 0.8, 0.9),
-        centerValueSize: fs(13, 0.8, 0.92),
-        centerWidth: s(68),
+        playerNameSize: fs(16.5, 0.84, 0.98),
+        playerScoreSize: fs(27.5, 0.84, 0.98),
+        centerLabelSize: fs(10.2, 0.82, 0.96),
+        centerValueSize: fs(16.5, 0.84, 0.96),
+        centerWidth: s(96),
         timerWidth: '46%',
-        timerHeight: s(10),
-        timerTextSize: fs(8, 0.8, 0.9),
-        flagWidth: s(42),
-        scoreMinWidth: s(34),
-        horizontalPadding: s(6),
-        playerNameGap: s(6),
+        timerHeight: s(0),
+        timerTextSize: fs(0, 0.8, 0.9),
+        flagWidth: s(60),
+        scoreMinWidth: s(50),
+        horizontalPadding: s(9),
+        playerNameGap: s(8),
       };
 };
 
@@ -244,16 +296,25 @@ const FlagBadge = ({
         {
           width,
         },
-      ]}>
-      {flagSource ? (
-        <Image source={flagSource} resizeMode="contain" style={styles.flagImage} />
-      ) : (
-        <Text
-          style={[styles.flagText, !active && styles.flagTextInactive]}
-          numberOfLines={1}>
-          {flagText}
-        </Text>
-      )}
+      ]}
+    >
+      <View style={styles.flagInner}>
+        {flagSource ? (
+          <Image
+            source={flagSource}
+            resizeMode="cover"
+            fadeDuration={0}
+            style={styles.flagImage}
+          />
+        ) : (
+          <Text
+            style={[styles.flagText, !active && styles.flagTextInactive]}
+            numberOfLines={1}
+          >
+            {flagText}
+          </Text>
+        )}
+      </View>
     </View>
   );
 };
@@ -269,13 +330,13 @@ const PoolBroadcastScoreboard = ({
   liveVideoWidth = 1920,
   liveVideoHeight = 1080,
 }: PoolBroadcastScoreboardProps) => {
-  const {language} = useContext(LanguageContext);
+  const { language } = useContext(LanguageContext);
   void language;
   const category = gameSettings?.category;
   const isSupportedCategory =
     isPool9Game(category) || isPool10Game(category) || isPool15Game(category);
   const playingPlayers = playerSettings?.playingPlayers || [];
-  const {adaptive} = useDesignSystem();
+  const { adaptive } = useDesignSystem();
   const useCompactMetrics = shouldUseCompactMetrics(variant, adaptive);
   const metrics = getVariantMetrics(
     variant,
@@ -295,6 +356,19 @@ const PoolBroadcastScoreboard = ({
     baseCountdown > 0 ? clamp(normalizedCountdown / baseCountdown, 0, 1) : 0;
   const timerColor = getTimerColor(normalizedCountdown);
 
+  const visualBarHeight = Math.round(metrics.barHeight * BAR_HEIGHT_SCALE);
+  const visualCenterWidth = Math.round(metrics.centerWidth * CENTER_WIDTH_SCALE);
+  const visualFlagWidth = Math.round(metrics.flagWidth * FLAG_WIDTH_SCALE);
+  const visualScoreMinWidth = Math.round(metrics.scoreMinWidth * SCORE_BOX_WIDTH_SCALE);
+  const visualHorizontalPadding = Math.round(metrics.horizontalPadding * H_PADDING_SCALE);
+  const visualPlayerNameGap = Math.round(metrics.playerNameGap * NAME_GAP_SCALE);
+  const visualWrapperWidth = getResolvedWrapperWidth(variant, String(metrics.wrapperWidth));
+  const visualTimerHeight = Math.max(metrics.timerHeight || 0, Math.round(visualBarHeight * 0.24), 14);
+  const visualTimerTextSize = Math.max(8, Math.round(visualTimerHeight * 0.48));
+  const visualTimerWidth =
+    variant === 'fullscreen' ? '52%' : variant === 'camera' ? '56%' : variant === 'playback' ? '50%' : metrics.timerWidth;
+  const visualScoreBoxHeight = Math.max(12, Math.round(visualBarHeight * 0.82));
+
   const leftPlayer = playingPlayers[0] || {};
   const rightPlayer = playingPlayers[1] || {};
   const bottomValue = bottomOffset ?? metrics.bottomGap;
@@ -303,42 +377,51 @@ const PoolBroadcastScoreboard = ({
     () => [
       styles.playerName,
       {
-        fontSize: metrics.playerNameSize,
-        lineHeight: Math.round(metrics.playerNameSize * 1.16),
+        fontSize: metrics.playerNameSize * PLAYER_NAME_TEXT_SCALE,
+        lineHeight: Math.round(metrics.playerNameSize * PLAYER_NAME_TEXT_SCALE * 1.04),
       },
     ],
     [metrics.playerNameSize],
   );
 
   const playerScoreStyle = useMemo(
-  () => [
-    styles.playerScore,
-    {
-      fontSize: metrics.playerScoreSize,
-      lineHeight: Math.round(metrics.playerScoreSize * 1.04),
-      transform: [{translateY: -1}],
-    },
-  ],
-  [metrics.playerScoreSize],
-);
+    () => {
+      const fontSize = metrics.playerScoreSize * PLAYER_SCORE_TEXT_SCALE * 1.04;
 
-const centerGoalTextStyle = useMemo(
-  () => ({
-    fontSize: metrics.centerLabelSize * 1.5,
-    lineHeight: Math.round(metrics.centerLabelSize * 1.14),
-  }),
-  [metrics.centerLabelSize],
-);
+      return [
+        styles.playerScore,
+        {
+          fontSize,
+          lineHeight: Math.round(fontSize * 1.02),
+          transform: [{ translateY: 3 }],
+        },
+      ];
+    },
+    [metrics.playerScoreSize],
+  );
+
+  const centerRaceTextStyle = useMemo(
+    () => {
+      const fontSize = metrics.centerValueSize * CENTER_VALUE_TEXT_SCALE;
+
+      return {
+        fontSize,
+        lineHeight: Math.round(fontSize * 1.02),
+      };
+    },
+    [metrics.centerValueSize],
+  );
 
   const scoreBoxStyle = useMemo(
     () => [
       styles.scoreBox,
       {
-        minWidth: metrics.scoreMinWidth,
-        minHeight: Math.max(12, metrics.barHeight - 2),
+        minWidth: visualScoreMinWidth,
+        height: visualScoreBoxHeight,
+        minHeight: visualScoreBoxHeight,
       },
     ],
-    [metrics.barHeight, metrics.scoreMinWidth],
+    [visualScoreBoxHeight, visualScoreMinWidth],
   );
 
   if (
@@ -355,118 +438,150 @@ const centerGoalTextStyle = useMemo(
       style={[
         styles.wrapper,
         {
-          width: metrics.wrapperWidth as any,
+          width: visualWrapperWidth as any,
           bottom: bottomValue,
         },
         style,
-      ]}>
-      <View style={[styles.topBar, {height: metrics.barHeight}]}>
-        <FlagBadge
-          player={leftPlayer}
-          width={metrics.flagWidth}
-          active={currentPlayerIndex === 0}
-          side="left"
-        />
-
+      ]}
+    >
+      <View style={[styles.topBar, { height: visualBarHeight }]}>
         <LinearGradient
           colors={LEFT_PANEL_COLORS}
-          start={{x: 0, y: 0.5}}
-          end={{x: 1, y: 0.5}}
+          locations={LEFT_PANEL_LOCATIONS}
+          start={{ x: 0, y: 0.5 }}
+          end={{ x: 1, y: 0.5 }}
           style={[
-            styles.playerPanel,
-            styles.playerPanelLeft,
-            currentPlayerIndex === 0 && styles.activePlayerPanel,
-            {
-              paddingLeft: metrics.horizontalPadding + metrics.playerNameGap,
-              paddingRight: metrics.horizontalPadding,
-            },
-          ]}>
-          <Text
-            style={[playerNameStyle, styles.playerNameLeft]}
-            numberOfLines={1}>
-            {leftPlayer?.name?.trim() || 'Player 1'}
-          </Text>
-          <View style={scoreBoxStyle}>
-            <Text style={playerScoreStyle} numberOfLines={1}>
-              {safeNumber(leftPlayer?.totalPoint, 0)}
+            styles.sidePanel,
+            styles.sidePanelLeft,
+            currentPlayerIndex === 0 && styles.activeSidePanel,
+          ]}
+        >
+          <FlagBadge
+            player={leftPlayer}
+            width={visualFlagWidth}
+            active={currentPlayerIndex === 0}
+            side="left"
+          />
+
+          <View
+            style={[
+              styles.playerPanel,
+              styles.playerPanelLeft,
+              {
+                paddingLeft: visualPlayerNameGap,
+                paddingRight: visualHorizontalPadding,
+              },
+            ]}
+          >
+            <Text
+              style={[playerNameStyle, styles.playerNameLeft]}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.62}
+            >
+              {leftPlayer?.name?.trim() || ''}
             </Text>
+            <View style={scoreBoxStyle}>
+              <Text style={playerScoreStyle} numberOfLines={1}>
+                {safeNumber(leftPlayer?.totalPoint, 0)}
+              </Text>
+            </View>
           </View>
         </LinearGradient>
 
         <View
           style={[
             styles.centerPanelWrap,
-            {width: metrics.centerWidth, minWidth: metrics.centerWidth},
-          ]}>
+            { width: visualCenterWidth, minWidth: visualCenterWidth },
+          ]}
+        >
           <View style={styles.centerPanel}>
-  <Text
-    style={[styles.centerLabel, centerGoalTextStyle]}
-    numberOfLines={1}
-    adjustsFontSizeToFit
-    minimumFontScale={0.8}>
-    {String(i18n.t('goal'))}
-  </Text>
-  <Text
-    style={[styles.centerValue, centerGoalTextStyle]}
-    numberOfLines={1}
-    adjustsFontSizeToFit
-    minimumFontScale={0.8}>
-    {goal}
-  </Text>
-</View>
+            <Text
+              style={[styles.centerRaceText, centerRaceTextStyle]}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.76}
+            >
+              {`RACE TO ${goal}`}
+            </Text>
+          </View>
         </View>
 
         <LinearGradient
           colors={RIGHT_PANEL_COLORS}
-          start={{x: 0, y: 0.5}}
-          end={{x: 1, y: 0.5}}
+          locations={RIGHT_PANEL_LOCATIONS}
+          start={{ x: 0, y: 0.5 }}
+          end={{ x: 1, y: 0.5 }}
           style={[
-            styles.playerPanel,
-            styles.playerPanelRight,
-            currentPlayerIndex === 1 && styles.activePlayerPanel,
-            {
-              paddingLeft: metrics.horizontalPadding,
-              paddingRight: metrics.horizontalPadding + metrics.playerNameGap,
-            },
-          ]}>
-          <View style={scoreBoxStyle}>
-            <Text style={playerScoreStyle} numberOfLines={1}>
-              {safeNumber(rightPlayer?.totalPoint, 0)}
+            styles.sidePanel,
+            styles.sidePanelRight,
+            currentPlayerIndex === 1 && styles.activeSidePanel,
+          ]}
+        >
+          <View
+            style={[
+              styles.playerPanel,
+              styles.playerPanelRight,
+              {
+                paddingLeft: visualHorizontalPadding,
+                paddingRight: visualPlayerNameGap,
+              },
+            ]}
+          >
+            <View style={scoreBoxStyle}>
+              <Text style={playerScoreStyle} numberOfLines={1}>
+                {safeNumber(rightPlayer?.totalPoint, 0)}
+              </Text>
+            </View>
+            <Text
+              style={[playerNameStyle, styles.playerNameRight]}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.62}
+            >
+              {rightPlayer?.name?.trim() || ''}
             </Text>
           </View>
-          <Text
-            style={[playerNameStyle, styles.playerNameRight]}
-            numberOfLines={1}>
-            {rightPlayer?.name?.trim() || 'Player 2'}
-          </Text>
+
+          <FlagBadge
+            player={rightPlayer}
+            width={visualFlagWidth}
+            active={currentPlayerIndex === 1}
+            side="right"
+          />
         </LinearGradient>
-
-        <FlagBadge
-          player={rightPlayer}
-          width={metrics.flagWidth}
-          active={currentPlayerIndex === 1}
-          side="right"
-        />
       </View>
-
-      <View
-        style={[
-          styles.timerTrack,
-          {height: metrics.timerHeight, width: metrics.timerWidth as any},
-        ]}>
+      {visualTimerHeight > 0 ? (
         <View
           style={[
-            styles.timerFill,
-            {
-              width: `${fillRatio * 100}%`,
-              backgroundColor: timerColor,
-            },
+            styles.timerTrack,
+            { height: visualTimerHeight, width: visualTimerWidth as any },
           ]}
-        />
-        <Text style={[styles.timerText, {fontSize: metrics.timerTextSize}]}>
-          {baseCountdown > 0 ? `${normalizedCountdown}s` : '--'}
-        </Text>
-      </View>
+        >
+          <View
+            style={[
+              styles.timerFill,
+              {
+                width: `${fillRatio * 100}%`,
+                backgroundColor: timerColor,
+              },
+            ]}
+          />
+          <Text
+            style={[
+              styles.timerText,
+              {
+                fontSize: visualTimerTextSize,
+                lineHeight: visualTimerHeight,
+                height: visualTimerHeight,
+              },
+            ]}
+            numberOfLines={1}
+          >
+            {baseCountdown > 0 ? `${normalizedCountdown}s` : '--'}
+          </Text>
+        </View>
+      ) : null}
     </View>
   );
 };
@@ -481,29 +596,44 @@ const styles = StyleSheet.create({
   topBar: {
     flexDirection: 'row',
     alignItems: 'stretch',
-    borderRadius: 10,
+    borderRadius: 999,
     overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.9)',
-    backgroundColor: '#161616',
+    backgroundColor: '#3A3A3A',
+    borderWidth: 0,
+    shadowColor: '#000000',
+    shadowOpacity: 0.28,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 6,
   },
   flagPlaceholder: {
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'hidden',
+    backgroundColor: 'transparent',
+    paddingHorizontal: 7,
+    paddingVertical: 3,
   },
   flagPlaceholderLeft: {
-    backgroundColor: '#FF5B57',
-    borderRightWidth: 1,
-    borderRightColor: '#FF5B57',
+    borderTopLeftRadius: 999,
+    borderBottomLeftRadius: 999,
   },
   flagPlaceholderRight: {
-    backgroundColor: '#FF5B57',
-    borderLeftWidth: 1,
-    borderLeftColor: '#FF5B57',
+    borderTopRightRadius: 999,
+    borderBottomRightRadius: 999,
   },
   flagPlaceholderActive: {
-    backgroundColor: '#FF5B57',
+    backgroundColor: 'transparent',
+  },
+  flagInner: {
+    width: '100%',
+    height: '88%',
+    borderRadius: 6,
+    overflow: 'hidden',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'transparent',
+    borderWidth: 0,
   },
   flagImage: {
     width: '100%',
@@ -518,18 +648,31 @@ const styles = StyleSheet.create({
   flagTextInactive: {
     opacity: 0.55,
   },
+  sidePanel: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    minWidth: 0,
+  },
+  sidePanelLeft: {
+    borderTopLeftRadius: 999,
+    borderBottomLeftRadius: 999,
+  },
+  sidePanelRight: {
+    borderTopRightRadius: 999,
+    borderBottomRightRadius: 999,
+  },
+  activeSidePanel: {
+    opacity: 1,
+  },
   playerPanel: {
-  flex: 1,
-  flexDirection: 'row',
-  alignItems: 'center',
-  minWidth: 0,
-
-  // Giữ sẵn border cho cả 2 bên để 2 ô điểm có cùng chiều cao layout.
-  borderTopWidth: 2,
-  borderBottomWidth: 2,
-  borderTopColor: 'transparent',
-  borderBottomColor: 'transparent',
-},
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    minWidth: 0,
+    borderTopWidth: 0,
+    borderBottomWidth: 0,
+  },
   playerPanelLeft: {
     justifyContent: 'space-between',
   },
@@ -537,39 +680,45 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   activePlayerPanel: {
-  borderTopColor: '#FF5B57',
-  borderBottomColor: '#FF5B57',
-},
+    backgroundColor: 'rgba(255,255,255,0.06)',
+  },
   playerName: {
     flex: 1,
     color: '#FFFFFF',
-    fontWeight: '800',
+    fontWeight: '700',
+    fontFamily: fonts.Nunito.bold,
+    letterSpacing: -0.25,
     includeFontPadding: false,
     textAlignVertical: 'center',
   },
   playerNameLeft: {
     textAlign: 'center',
-    marginRight: 8,
+    marginRight: 10,
   },
   playerNameRight: {
     textAlign: 'center',
-    marginLeft: 8,
+    marginLeft: 10,
   },
   scoreBox: {
-    alignSelf: 'stretch',
+    alignSelf: 'center',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 8,
+    marginVertical: 0,
+    paddingHorizontal: 10,
     paddingVertical: 0,
-    backgroundColor: 'rgba(0,0,0,0.28)',
-    borderRadius: 6,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    borderRadius: 12,
+    overflow: 'hidden',
   },
   playerScore: {
     color: '#FFFFFF',
-    fontWeight: '900',
+    fontWeight: '700',
+    fontFamily: fonts.Nunito.bold,
     includeFontPadding: false,
     textAlign: 'center',
     textAlignVertical: 'center',
+    padding: 0,
+    margin: 0,
   },
   centerPanelWrap: {
     flexShrink: 0,
@@ -579,32 +728,45 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 6,
-    backgroundColor: '#161616',
+    paddingHorizontal: 10,
+    backgroundColor: '#181818',
+  },
+  centerRaceText: {
+    width: '100%',
+    color: '#FFFFFF',
+    fontWeight: '700',
+    fontFamily: fonts.Nunito.bold,
+    letterSpacing: 0.1,
+    includeFontPadding: false,
+    textAlign: 'center',
+    textAlignVertical: 'center',
   },
   centerLabel: {
-  color: '#FFFFFF',
-  fontWeight: '900',
-  letterSpacing: 0.1,
-  includeFontPadding: false,
-  textAlignVertical: 'center',
-  marginRight: 3,
-},
-centerValue: {
-  color: '#FFFFFF',
-  fontWeight: '900',
-  letterSpacing: 0.1,
-  includeFontPadding: false,
-  textAlignVertical: 'center',
-},
+    color: '#FFFFFF',
+    fontWeight: '700',
+    fontFamily: fonts.Nunito.bold,
+    letterSpacing: 0.1,
+    includeFontPadding: false,
+    textAlignVertical: 'center',
+    marginRight: 5,
+  },
+  centerValue: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+    fontFamily: fonts.Nunito.bold,
+    letterSpacing: 0.1,
+    includeFontPadding: false,
+    textAlignVertical: 'center',
+  },
   timerTrack: {
     alignSelf: 'center',
-    marginTop: 5,
+    marginTop: 6,
     borderRadius: 999,
     overflow: 'hidden',
     backgroundColor: 'rgba(0,0,0,0.82)',
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.4)',
+    alignItems: 'center',
     justifyContent: 'center',
   },
   timerFill: {
@@ -612,11 +774,15 @@ centerValue: {
     right: undefined,
   },
   timerText: {
+    width: '100%',
     color: '#FFFFFF',
-    fontWeight: '800',
+    fontWeight: '700',
+    fontFamily: fonts.Nunito.bold,
     textAlign: 'center',
     includeFontPadding: false,
     textAlignVertical: 'center',
+    padding: 0,
+    margin: 0,
   },
 });
 

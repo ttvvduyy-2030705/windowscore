@@ -1,5 +1,14 @@
-import React, {memo, useCallback, useMemo, useState} from 'react';
+import React, {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import {
+  Animated,
+  Easing,
   Image as RNImage,
   LayoutChangeEvent,
   Text as RNText,
@@ -109,6 +118,156 @@ const getLayoutMetrics = (rawWidth: number, forceCompact?: boolean) => {
     scoreRunX,
   };
 };
+
+
+
+const MarqueeText = ({
+  text,
+  textStyle,
+  compact = false,
+  gap = 10,
+  pxPerSecond = 32,
+}: {
+  text: string;
+  textStyle: any;
+  compact?: boolean;
+  gap?: number;
+  pxPerSecond?: number;
+}) => {
+  const scrollX = useRef(new Animated.Value(0)).current;
+  const animationRef = useRef<any>(null);
+  const [viewportWidth, setViewportWidth] = useState(0);
+  const [measuredTextWidth, setMeasuredTextWidth] = useState(0);
+
+  const displayText = String(text || '').trim();
+  const normalizedLength = displayText.length;
+
+  // RN Windows có lúc đo text ngắn hơn thực tế, nên dùng fallback rộng hơn.
+  // Quan trọng: tuyệt đối không dùng ellipsize tail cho chữ chạy.
+  const estimatedCharWidth = compact ? 10.5 : 14;
+  const estimatedTextWidth = Math.ceil(normalizedLength * estimatedCharWidth);
+  const safeTextWidth = Math.max(measuredTextWidth, estimatedTextWidth);
+  const shouldScroll =
+    viewportWidth > 0 &&
+    normalizedLength > 12 &&
+    safeTextWidth > viewportWidth - 4;
+
+  // Một segment = đúng chiều rộng chữ + khoảng cách nhỏ.
+  // Chạy từ 0 đến -segmentWidth thì segment kế tiếp nối vào ngay.
+  const textBoxWidth = shouldScroll ? safeTextWidth + 8 : 0;
+  const segmentWidth = shouldScroll ? textBoxWidth + gap : 0;
+  const segmentCount = shouldScroll ? 5 : 1;
+
+  useEffect(() => {
+    let mounted = true;
+
+    animationRef.current?.stop?.();
+    animationRef.current = null;
+    scrollX.stopAnimation();
+    scrollX.setValue(0);
+
+    if (!shouldScroll || segmentWidth <= 0) {
+      return undefined;
+    }
+
+    const duration = Math.max(
+      5000,
+      Math.round((segmentWidth / Math.max(16, pxPerSecond)) * 1000),
+    );
+
+    const run = () => {
+      if (!mounted) {
+        return;
+      }
+
+      scrollX.setValue(0);
+      animationRef.current = Animated.timing(scrollX, {
+        toValue: -segmentWidth,
+        duration,
+        easing: Easing.linear,
+        useNativeDriver: false,
+      });
+
+      animationRef.current.start(({finished}: {finished: boolean}) => {
+        if (finished && mounted) {
+          requestAnimationFrame(run);
+        }
+      });
+    };
+
+    const timer = setTimeout(run, 250);
+
+    return () => {
+      mounted = false;
+      clearTimeout(timer);
+      animationRef.current?.stop?.();
+      animationRef.current = null;
+      scrollX.stopAnimation();
+      scrollX.setValue(0);
+    };
+  }, [displayText, pxPerSecond, scrollX, segmentWidth, shouldScroll]);
+
+  return (
+    <RNView
+      onLayout={event => {
+        const width = Math.round(event.nativeEvent.layout.width || 0);
+        setViewportWidth(current =>
+          Math.abs(current - width) > 1 ? width : current,
+        );
+      }}
+      style={styles.headerTitleMarqueeViewport}>
+      <RNText
+        pointerEvents="none"
+        onLayout={event => {
+          const width = Math.ceil(event.nativeEvent.layout.width || 0);
+          if (width > 0) {
+            setMeasuredTextWidth(current =>
+              Math.abs(current - width) > 1 ? width : current,
+            );
+          }
+        }}
+        style={[textStyle, styles.headerTitleMeasureText]}
+        numberOfLines={1}
+        ellipsizeMode="clip">
+        {displayText}
+      </RNText>
+
+      {!shouldScroll ? (
+        <RNText style={textStyle} numberOfLines={1} ellipsizeMode="clip">
+          {displayText}
+        </RNText>
+      ) : (
+        <Animated.View
+          pointerEvents="none"
+          style={[
+            styles.headerTitleMarqueeInner,
+            {
+              width: segmentWidth * segmentCount,
+              transform: [{translateX: scrollX}],
+            },
+          ]}>
+          {Array.from({length: segmentCount}).map((_, index) => (
+            <RNView
+              key={`title-marquee-loop-${index}`}
+              style={[
+                styles.headerTitleMarqueeSegment,
+                {width: segmentWidth},
+              ]}>
+              <RNText
+                style={[textStyle, {width: textBoxWidth}]}
+                numberOfLines={1}
+                ellipsizeMode="clip">
+                {displayText}
+              </RNText>
+              <RNView style={{width: gap, flexShrink: 0}} />
+            </RNView>
+          ))}
+        </Animated.View>
+      )}
+    </RNView>
+  );
+};
+
 
 const CaromInfo = (props: Props) => {
   const viewModel = CaromInfoViewModel(props);
@@ -226,9 +385,14 @@ const CaromInfo = (props: Props) => {
       <RNView style={[styles.boardContent, {height: metrics.totalHeight}]}>
         <RNView style={[styles.headerRow, {height: metrics.headerHeight}]}>
           <RNView style={[styles.headerTitleCell, {width: metrics.nameWidth}]}>
-            <RNText style={[styles.headerTitleText, metrics.compact ? styles.headerTitleTextCompact : undefined]} numberOfLines={1}>
-              {tournamentTitle}
-            </RNText>
+            <MarqueeText
+              text={tournamentTitle}
+              compact={metrics.compact}
+              textStyle={[
+                styles.headerTitleMarqueeText,
+                metrics.compact ? styles.headerTitleMarqueeTextCompact : undefined,
+              ]}
+            />
             <RNText style={[styles.headerGoalText, metrics.compact ? styles.headerGoalTextCompact : undefined]} numberOfLines={1}>
               [{goalText}]
             </RNText>

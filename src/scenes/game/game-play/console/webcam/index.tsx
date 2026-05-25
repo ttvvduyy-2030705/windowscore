@@ -1349,6 +1349,12 @@ const handleZoomSliderComplete = useCallback(
   );
 };
 
+  const renderCameraScoreboardOverlay = () => {
+    // Camera thường không hiện bảng điểm Pool/Carom.
+    // Fullscreen và livestream vẫn dùng renderScoreboardOverlay / PoolScoreboardOverlay riêng bên dưới.
+    return null;
+  };
+
   const renderThumbnailGroup = (
     imageUris: string[],
     positionStyle: any,
@@ -1580,33 +1586,49 @@ const handleZoomSliderComplete = useCallback(
   const fullscreenScoreboardBottom = 0;
 
   const renderFullscreenBranding = () => {
-    const source = images.logoFilled || images.logo;
-    if (
-      suppressReactMatchOverlayForNativeLive ||
-      !source ||
-      !shouldShowCameraMatchOverlay
-    ) {
-      return null;
-    }
+  const topLeftLogos =
+    thumbnailOverlay.enabled && thumbnailOverlay.topLeft?.length
+      ? thumbnailOverlay.topLeft
+      : [];
+  const fallbackSource = images.logoSmall || images.logoFilled || images.logo;
 
-    return (
-      <RNView
-        pointerEvents="none"
-        style={[
-          styles.fullscreenBrandWrap,
-          {
-            top: fullscreenChromeOffsets.top,
-            left: fullscreenChromeOffsets.left,
-          },
-        ]}>
+  if (
+    suppressReactMatchOverlayForNativeLive ||
+    !shouldShowCameraMatchOverlay ||
+    (!topLeftLogos.length && !fallbackSource)
+  ) {
+    return null;
+  }
+
+  return (
+    <RNView
+      pointerEvents="none"
+      style={[
+        styles.fullscreenBrandWrap,
+        {
+          top: fullscreenChromeOffsets.top,
+          left: fullscreenChromeOffsets.left,
+        },
+      ]}>
+      {topLeftLogos.length ? (
+        topLeftLogos.map((uri, index) => (
+          <RNImage
+            key={`${uri}-${index}`}
+            source={{uri}}
+            resizeMode="contain"
+            style={styles.fullscreenBrandImage}
+          />
+        ))
+      ) : (
         <RNImage
-          source={source}
+          source={fallbackSource}
           resizeMode="contain"
           style={styles.fullscreenBrandImage}
         />
-      </RNView>
-    );
-  };
+      )}
+    </RNView>
+  );
+};
 
   const renderEmbeddedChrome = () => {
     return (
@@ -1784,7 +1806,7 @@ const handleZoomSliderComplete = useCallback(
             ? renderThumbnailOverlay(true, {skipTopLeft: true})
             : renderThumbnailOverlay(false)
           : null}
-        {!fullscreenMode ? renderScoreboardOverlay(false) : null}
+        {!fullscreenMode ? renderCameraScoreboardOverlay() : null}
         {shouldShowOuterLogoOverlay ? (
           <RNView
             pointerEvents="none"
@@ -2407,5 +2429,3 @@ const createStyles = (adaptive: any, design: any, rules: any, safeInsets: any) =
 });
 
 export default memo(WebCam);
-
-
