@@ -27,6 +27,14 @@ const CAROM_CAMERA_LEFT = 8;
 const CAROM_CAMERA_BOTTOM_LIFT = 26;
 const CAROM_CAMERA_WIDTH_FACTOR = 0.72;
 
+// Fullscreen-only tuning for Carom.
+// Use one shared set of numbers for both small fullscreen and large fullscreen
+// so the two screen sizes follow the same visual proportions.
+const CAROM_FULLSCREEN_LEFT = 22;
+const CAROM_FULLSCREEN_WIDTH = 345;
+const CAROM_FULLSCREEN_SCALE = 0.70;
+const CAROM_FULLSCREEN_BOTTOM = 0;
+
 const shouldUseCompactMetrics = (variant: Variant, adaptive?: any) => {
   if (!adaptive?.isLandscape) {
     return false;
@@ -100,23 +108,14 @@ const getMetrics = (
         scale: Math.max(0.46, Math.min(0.62, 0.58 * liveScale)),
       };
     case 'fullscreen':
-      return compact
-        ? {
-            // Fullscreen Carom only: make the scoreboard visually taller
-            // while keeping it narrower horizontally.
-            left: s(20),
-            bottom: 0,
-            width: s(210),
-            scale: 0.52,
-          }
-        : {
-            // Fullscreen Carom only: increase vertical presence and reduce
-            // horizontal span so it looks taller and less wide.
-            left: s(22),
-            bottom: 0,
-            width: s(260),
-            scale: 0.62,
-          };
+      return {
+        // Fullscreen Carom only. Small and large fullscreen now share the same
+        // proportions: taller rows/text, with a little more name space.
+        left: s(CAROM_FULLSCREEN_LEFT),
+        bottom: s(CAROM_FULLSCREEN_BOTTOM),
+        width: s(CAROM_FULLSCREEN_WIDTH),
+        scale: CAROM_FULLSCREEN_SCALE,
+      };
     case 'playback':
       return compact
         ? {
@@ -176,7 +175,6 @@ const CaromBroadcastScoreboard = ({
   );
   const s = adaptive?.s || ((value: number) => value);
   const isCameraVariant = variant === 'camera';
-  const isFullscreenVariant = variant === 'fullscreen';
 
   // Camera-only visual tuning. This does not affect the console CaromInfo
   // because only CaromBroadcastScoreboard passes cameraOverlay to CaromInfo.
@@ -245,9 +243,8 @@ const CaromBroadcastScoreboard = ({
           currentPlayerIndex={Math.max(0, Number(currentPlayerIndex || 0))}
           gameSettings={gameSettings}
           playerSettings={playerSettings}
-          compact={isCameraVariant ? true : isFullscreenVariant ? useCompactMetrics : false}
+          compact={isCameraVariant}
           cameraOverlay={isCameraVariant}
-          fullscreenOverlay={isFullscreenVariant}
         />
       </View>
     </View>

@@ -1724,8 +1724,10 @@ const handleZoomSliderComplete = useCallback(
           style={[
             styles.fullscreenScoreboardWrap,
             {
-              left: Math.max(overlaySafeInsets.left + adaptive.s(10), adaptive.s(10)),
-              right: Math.max(overlaySafeInsets.right + adaptive.s(56), adaptive.s(60)),
+              // Căn giữa bảng điểm Pool theo đúng toàn bộ màn hình.
+              // Trước đây right lớn hơn left để né thanh zoom, nên bảng bị lệch.
+              left: Math.max(overlaySafeInsets.left, adaptive.s(0)),
+              right: Math.max(overlaySafeInsets.right, adaptive.s(0)),
               bottom: 0,
             },
           ]}>

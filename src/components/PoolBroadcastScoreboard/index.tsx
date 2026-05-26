@@ -438,13 +438,19 @@ const PoolBroadcastScoreboard = ({
       style={[
         styles.wrapper,
         {
-          width: visualWrapperWidth as any,
           bottom: bottomValue,
         },
         style,
       ]}
     >
-      <View style={[styles.topBar, { height: visualBarHeight }]}>
+      <View
+        style={[
+          styles.topBar,
+          {
+            width: visualWrapperWidth as any,
+            height: visualBarHeight,
+          },
+        ]}>
         <LinearGradient
           colors={LEFT_PANEL_COLORS}
           locations={LEFT_PANEL_LOCATIONS}
@@ -589,7 +595,10 @@ const PoolBroadcastScoreboard = ({
 const styles = StyleSheet.create({
   wrapper: {
     position: 'absolute',
-    alignSelf: 'center',
+    left: 0,
+    right: 0,
+    width: '100%',
+    alignItems: 'center',
     zIndex: 12,
     elevation: 12,
   },
