@@ -6,6 +6,7 @@
 #include "WindowsVideoStorageModule.h"
 #include "WindowsVideoPlayerViewManager.h"
 #include "WindowsFfmpegLiveModule.h"
+#include "WindowsRemoteControlModule.h"
 
 using namespace winrt::Microsoft::ReactNative;
 

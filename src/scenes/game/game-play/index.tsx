@@ -31,6 +31,7 @@ import useDesignSystem from 'theme/useDesignSystem';
 import useScreenSystemUI, {configureSystemUI} from 'theme/systemUI';
 import {createGameplayLayoutRules} from './layoutRules';
 import {LanguageContext} from 'context/language';
+import RemoteControl from 'utils/remote';
 
 const buildTitle = (category?: string, mode?: string) => {
   return `${i18n.t(category || '').toUpperCase()} - ${i18n
@@ -536,6 +537,11 @@ const GamePlay = () => {
     getCameraFullscreen(),
   );
   const [remoteEnabled, setRemoteEnabled] = useState(false);
+
+  const onToggleRemote = (value: boolean) => {
+    setRemoteEnabled(value);
+    RemoteControl.instance.setEnabled?.(value);
+  };
 
   useEffect(() => {
     return subscribeCameraFullscreen(setIsCameraFullscreen);
@@ -1144,19 +1150,21 @@ const GamePlay = () => {
         ]}
         flex={'1'}>
         {!isCameraFullscreen ? (
-          <TopMatchHeader
-            title={title}
-            soundEnabled={viewModel.soundEnabled}
-            onToggleSound={viewModel.onToggleSound}
-            remoteEnabled={remoteEnabled}
-            onToggleRemote={setRemoteEnabled}
-            proModeEnabled={displayProModeEnabled}
-            onToggleProMode={viewModel.onToggleProMode}
-            gameSettings={viewModel.gameSettings}
-            totalPlayers={totalPlayers}
-            centerTimeText={headerTimeText}
-            compactTitleLeft={true}
-          />
+          <>
+            <TopMatchHeader
+              title={title}
+              soundEnabled={viewModel.soundEnabled}
+              onToggleSound={viewModel.onToggleSound}
+              remoteEnabled={remoteEnabled}
+              onToggleRemote={onToggleRemote}
+              proModeEnabled={displayProModeEnabled}
+              onToggleProMode={viewModel.onToggleProMode}
+              gameSettings={viewModel.gameSettings}
+              totalPlayers={totalPlayers}
+              centerTimeText={headerTimeText}
+              compactTitleLeft={true}
+            />
+          </>
         ) : null}
 
         <View flex={'1'} style={isCameraFullscreen ? localStyles.fullscreenFill : undefined}>

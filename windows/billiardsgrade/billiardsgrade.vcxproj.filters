@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="Current" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
     <ApplicationDefinition Include="App.xaml" />
@@ -16,6 +16,7 @@
     <ClCompile Include="WindowsVideoStorageModule.cpp" />
     <ClCompile Include="WindowsVideoPlayerViewManager.cpp" />
     <ClCompile Include="WindowsFfmpegLiveModule.cpp" />
+    <ClCompile Include="WindowsRemoteControlModule.cpp" />
     <ClCompile Include="AutolinkedNativeModules.g.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -27,6 +28,7 @@
     <ClInclude Include="WindowsVideoStorageModule.h" />
     <ClInclude Include="WindowsVideoPlayerViewManager.h" />
     <ClInclude Include="WindowsFfmpegLiveModule.h" />
+    <ClInclude Include="WindowsRemoteControlModule.h" />
     <ClInclude Include="AutolinkedNativeModules.g.h" />
   </ItemGroup>
   <ItemGroup>

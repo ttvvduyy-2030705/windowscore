@@ -1,11 +1,11 @@
-// Cấu hình kết nối điểm live giữa app Windows và live API của web Aplus.
-// Source web hiện tại đang dùng VITE_LIVE_API_URL=https://live-api.103.138.88.55.nip.io/api/live
-// Vì BASE_URL đã bao gồm /api/live nên các endpoint bên dưới chỉ bắt đầu từ /tournaments, /matches...
+// Cáº¥u hÃ¬nh káº¿t ná»‘i Ä‘iá»ƒm live giá»¯a app Windows vÃ  live API cá»§a web Aplus.
+// Source web hiá»‡n táº¡i Ä‘ang dÃ¹ng VITE_LIVE_API_URL=https://live-api.aplusbilliards.vn/api/live
+// VÃ¬ BASE_URL Ä‘Ã£ bao gá»“m /api/live nÃªn cÃ¡c endpoint bÃªn dÆ°á»›i chá»‰ báº¯t Ä‘áº§u tá»« /tournaments, /matches...
 
-export const APLUS_LIVE_SCORE_BASE_URL = 'https://live-api.103.138.88.55.nip.io/api/live';
+export const APLUS_LIVE_SCORE_BASE_URL = 'https://live-api.aplusbilliards.vn/api/live';
 
-// Giá trị này phải trùng với LIVE_SCORE_API_KEY trong file .env backend/live API.
-// Nếu để sai, app sẽ không tải được giải hoặc báo live API key không hợp lệ.
+// GiÃ¡ trá»‹ nÃ y pháº£i trÃ¹ng vá»›i LIVE_SCORE_API_KEY trong file .env backend/live API.
+// Náº¿u Ä‘á»ƒ sai, app sáº½ khÃ´ng táº£i Ä‘Æ°á»£c giáº£i hoáº·c bÃ¡o live API key khÃ´ng há»£p lá»‡.
 export const APLUS_LIVE_SCORE_API_KEY = 'jahsd82ohehbcfjbsc89ay3wbejkhdbc982ybkejhbcf8dasjchbkjf92jdfi8ow2i';
 
 export const APLUS_LIVE_SCORE_DEVICE_NAME = 'Windows Scoreboard';
@@ -32,3 +32,4 @@ export const APLUS_LIVE_SCORE_ENDPOINTS = {
   // POST /matches/:matchId/release
   releaseMatch: '/matches/:matchId/release',
 };
+

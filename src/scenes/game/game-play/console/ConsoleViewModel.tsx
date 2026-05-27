@@ -12,6 +12,7 @@ import {Player, PlayerSettings} from 'types/player';
 import {GameSettings, GameSettingsMode} from 'types/settings';
 import {formatTotalTime} from 'utils/date';
 import {isPool10Game, isPool15FreeGame, isPool15OnlyGame} from 'utils/game';
+import RemoteControl from 'utils/remote';
 
 export interface ConsoleViewModelProps {
   gameSettings: GameSettings;
@@ -111,7 +112,11 @@ const ConsoleViewModel = (props: ConsoleViewModelProps) => {
 
   const onToggleValue = useCallback(
     (setValue: React.Dispatch<React.SetStateAction<boolean>>) => () => {
-      setValue(prev => !prev);
+      setValue(prev => {
+        const next = !prev;
+        RemoteControl.instance.setEnabled?.(next);
+        return next;
+      });
     },
     [],
   );

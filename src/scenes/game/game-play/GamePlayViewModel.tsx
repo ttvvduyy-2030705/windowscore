@@ -75,7 +75,10 @@ import {
   updateWindowsFfmpegOverlay,
   type WindowsFfmpegLiveConfig,
 } from 'services/livestream/WindowsFfmpegLiveEngine';
-import {pushAplusLiveScoreUpdate} from 'services/aplusLiveScore';
+import {
+  heartbeatAplusLiveScoreMatch,
+  pushAplusLiveScoreUpdate,
+} from 'services/aplusLiveScore';
 
 let countdownInterval: NodeJS.Timeout, warmUpCountdownInterval: NodeJS.Timeout;
 const {CameraService} = NativeModules;
@@ -4182,6 +4185,29 @@ const GamePlayViewModel = () => {
     isStarted,
     isPaused,
     isMatchPaused,
+  ]);
+
+  useEffect(() => {
+    const config = gameSettings?.aplusLiveScore;
+
+    if (!config?.enabled || !config.matchId) {
+      return;
+    }
+
+    const heartbeat = () => {
+      void heartbeatAplusLiveScoreMatch(config).catch(error => {
+        console.log('[AplusLiveScore] heartbeat failed:', error?.message || error);
+      });
+    };
+
+    heartbeat();
+    const interval = setInterval(heartbeat, 20000);
+
+    return () => clearInterval(interval);
+  }, [
+    gameSettings?.aplusLiveScore?.enabled,
+    gameSettings?.aplusLiveScore?.matchId,
+    gameSettings?.aplusLiveScore?.sessionToken,
   ]);
 
   return useMemo(() => {

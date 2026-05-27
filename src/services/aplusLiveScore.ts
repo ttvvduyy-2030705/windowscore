@@ -43,6 +43,9 @@ type LiveScorePayload = {
   playerSettings?: PlayerSettings;
   totalTurns?: number;
   totalTime?: number;
+  countdownTime?: number;
+  countdownBaseTime?: number;
+  targetScore?: number;
   currentPlayerIndex?: number;
   winner?: Player | null;
   isStarted?: boolean;
@@ -78,6 +81,67 @@ const getDeviceId = async () => {
   return 'windows-scoreboard-device';
 };
 
+type AplusLiveScoreSessionCacheEntry = {
+  sessionToken: string;
+  lockExpiresAt?: string;
+  updatedAt: number;
+};
+
+const aplusLiveScoreSessionCache = new Map<string, AplusLiveScoreSessionCacheEntry>();
+
+const rememberAplusLiveScoreSession = (
+  matchId?: string,
+  sessionToken?: string,
+  lockExpiresAt?: string,
+) => {
+  const safeMatchId = toText(matchId);
+  const safeToken = toText(sessionToken);
+
+  if (!safeMatchId || !safeToken) {
+    return;
+  }
+
+  aplusLiveScoreSessionCache.set(safeMatchId, {
+    sessionToken: safeToken,
+    lockExpiresAt: toText(lockExpiresAt) || undefined,
+    updatedAt: Date.now(),
+  });
+};
+
+const forgetAplusLiveScoreSession = (matchId?: string) => {
+  const safeMatchId = toText(matchId);
+  if (safeMatchId) {
+    aplusLiveScoreSessionCache.delete(safeMatchId);
+  }
+};
+
+const getCachedAplusLiveScoreSessionToken = (
+  config?: Pick<AplusLiveScoreConfig, 'matchId' | 'sessionToken'>,
+) => {
+  const safeMatchId = toText(config?.matchId);
+  const cachedToken = safeMatchId
+    ? toText(aplusLiveScoreSessionCache.get(safeMatchId)?.sessionToken)
+    : '';
+
+  return cachedToken || toText(config?.sessionToken);
+};
+
+const isLiveSessionTokenError = (error: unknown) => {
+  const message = String((error as Error)?.message || error || '').toLowerCase();
+
+  return (
+    message.includes('session') ||
+    message.includes('token') ||
+    message.includes('phiên') ||
+    message.includes('phien') ||
+    message.includes('thiếu live session') ||
+    message.includes('thieu live session') ||
+    message.includes('hết hạn') ||
+    message.includes('het han') ||
+    message.includes('expired')
+  );
+};
+
 const readJsonSafe = async (response: Response) => {
   const text = await response.text();
   if (!text) {
@@ -110,6 +174,13 @@ const requestJson = async (
     headers['x-live-session-token'] = sessionToken;
   }
 
+  console.log('[AplusLiveScore][HTTP_START]', {
+    method,
+    url,
+    hasSessionToken: Boolean(sessionToken),
+    body: method === 'GET' ? undefined : body,
+  });
+
   const response = await fetch(url, {
     method,
     headers,
@@ -119,6 +190,13 @@ const requestJson = async (
   const data = await readJsonSafe(response);
 
   if (!response.ok) {
+    console.log('[AplusLiveScore][HTTP_ERROR]', {
+      method,
+      url,
+      status: response.status,
+      data,
+    });
+
     throw new Error(
       typeof data === 'string'
         ? data
@@ -126,7 +204,75 @@ const requestJson = async (
     );
   }
 
+  console.log('[AplusLiveScore][HTTP_OK]', {
+    method,
+    url,
+    status: response.status,
+    data,
+  });
+
   return data;
+};
+
+const claimAplusLiveScoreSession = async (
+  config: Pick<AplusLiveScoreConfig, 'matchId' | 'lockExpiresAt'>,
+) => {
+  const matchId = toText(config?.matchId);
+
+  if (!matchId) {
+    throw new Error('Thiếu matchId để claim phiên live score.');
+  }
+
+  const deviceId = await getDeviceId();
+  const appVersion = typeof DeviceInfo.getVersion === 'function'
+    ? DeviceInfo.getVersion()
+    : '';
+
+  console.log('[AplusLiveScore][CLAIM_SESSION_START]', {matchId, deviceId});
+
+  const data = await requestJson(
+    'POST',
+    APLUS_LIVE_SCORE_ENDPOINTS.claimMatch,
+    {matchId},
+    {
+      deviceId,
+      deviceName: APLUS_LIVE_SCORE_DEVICE_NAME,
+      appVersion,
+    },
+  );
+
+  const sessionToken = toText(data?.sessionToken);
+  const lockExpiresAt = toText(data?.lockExpiresAt) || toText(config?.lockExpiresAt);
+
+  if (!sessionToken) {
+    throw new Error('Live API claim thành công nhưng thiếu sessionToken.');
+  }
+
+  rememberAplusLiveScoreSession(matchId, sessionToken, lockExpiresAt);
+
+  console.log('[AplusLiveScore][CLAIM_SESSION_OK]', {
+    matchId,
+    hasSessionToken: true,
+    lockExpiresAt,
+  });
+
+  return {
+    sessionToken,
+    lockExpiresAt,
+    rawMatch: data?.match,
+  };
+};
+
+const getOrClaimAplusLiveScoreSessionToken = async (
+  config: AplusLiveScoreConfig,
+) => {
+  const cachedToken = getCachedAplusLiveScoreSessionToken(config);
+  if (cachedToken) {
+    return cachedToken;
+  }
+
+  const claimed = await claimAplusLiveScoreSession(config);
+  return claimed.sessionToken;
 };
 
 const getArrayFromResponse = (data: any): any[] => {
@@ -304,11 +450,16 @@ export const lockAplusLiveScoreMatch = async (
   );
 
   const claimedMatch = data?.match || match.raw;
+  const sessionToken = toText(data?.sessionToken);
+  const lockExpiresAt = toText(data?.lockExpiresAt);
+
+  rememberAplusLiveScoreSession(match.id, sessionToken, lockExpiresAt);
+
   return {
     ...match,
     raw: claimedMatch || match.raw,
-    sessionToken: toText(data?.sessionToken),
-    lockExpiresAt: toText(data?.lockExpiresAt),
+    sessionToken,
+    lockExpiresAt,
   };
 };
 
@@ -328,12 +479,32 @@ export const isAplusLiveScoreEnabled = (gameSettings?: any) => {
 export const pushAplusLiveScoreUpdate = async ({
   gameSettings,
   playerSettings,
+  totalTurns,
+  totalTime,
+  countdownTime,
+  countdownBaseTime,
+  targetScore,
+  currentPlayerIndex,
   winner,
   isStarted,
+  isPaused,
+  isMatchPaused,
 }: LiveScorePayload) => {
   const config = getAplusLiveScoreConfig(gameSettings);
 
-  if (!config || !config.sessionToken || !playerSettings?.playingPlayers?.length) {
+  if (!config) {
+    console.log('[AplusLiveScore][PUSH_BLOCKED_NO_CONFIG]', {
+      hasAplusLiveScore: Boolean((gameSettings as any)?.aplusLiveScore),
+      aplusLiveScore: (gameSettings as any)?.aplusLiveScore,
+    });
+    return;
+  }
+
+  if (!playerSettings?.playingPlayers?.length) {
+    console.log('[AplusLiveScore][PUSH_BLOCKED_NO_PLAYERS]', {
+      matchId: config.matchId,
+      playingPlayersLength: playerSettings?.playingPlayers?.length,
+    });
     return;
   }
 
@@ -341,32 +512,141 @@ export const pushAplusLiveScoreUpdate = async ({
   const score1 = Number(players[0]?.totalPoint || 0);
   const score2 = Number(players[1]?.totalPoint || 0);
 
-  await requestJson(
-    'PATCH',
-    APLUS_LIVE_SCORE_ENDPOINTS.updateScore,
-    {matchId: config.matchId},
-    {
-      score1,
-      score2,
-      status: winner ? 'finished' : isStarted ? 'playing' : 'upcoming',
-      isLive: Boolean(isStarted && !winner),
-    },
-    config.sessionToken,
+  const resolvedCountdownTime = Math.max(0, Math.round(Number(countdownTime ?? 0)));
+  const resolvedCountdownBaseTime = Math.max(
+    resolvedCountdownTime,
+    Math.round(
+      Number(
+        countdownBaseTime ??
+          (gameSettings as any)?.mode?.countdownTime ??
+          (gameSettings as any)?.countdownTime ??
+          resolvedCountdownTime ??
+          0,
+      ),
+    ),
   );
+
+  const targetScoreRaw =
+    targetScore ??
+    (gameSettings as any)?.players?.goal?.goal ??
+    (gameSettings as any)?.goal ??
+    (gameSettings as any)?.targetScore ??
+    (playerSettings as any)?.goal ??
+    (playerSettings as any)?.targetScore ??
+    0;
+  const resolvedTargetScore = Math.round(Number(targetScoreRaw || 0));
+  const resolvedTurnCount = Math.max(0, Math.round(Number(totalTurns ?? 0)));
+  const liveCountdownIsRunning = Boolean(isStarted && !isPaused && !isMatchPaused && !winner);
+
+  const payload = {
+    score1,
+    score2,
+    status: winner ? 'finished' : isStarted ? 'playing' : 'upcoming',
+    isLive: Boolean(isStarted && !winner),
+
+    turnCount: resolvedTurnCount,
+    liveTurnCount: resolvedTurnCount,
+    totalTurns: resolvedTurnCount,
+    totalTime: Math.max(0, Math.round(Number(totalTime ?? 0))),
+    currentPlayerIndex: Number.isFinite(Number(currentPlayerIndex))
+      ? Number(currentPlayerIndex)
+      : undefined,
+
+    targetScore: resolvedTargetScore > 0 ? resolvedTargetScore : undefined,
+    liveTargetScore: resolvedTargetScore > 0 ? resolvedTargetScore : undefined,
+
+    liveCountdownTime: resolvedCountdownTime,
+    liveCountdownBaseTime: resolvedCountdownBaseTime,
+    liveCountdownIsRunning,
+    liveCountdownStatus: winner ? 'finished' : liveCountdownIsRunning ? 'running' : 'paused',
+    liveCountdownUpdatedAt: new Date().toISOString(),
+  };
+
+  console.log('[AplusLiveScore][PUSH_SCORE_START]', {
+    matchId: config.matchId,
+    matchNumber: config.matchNumber,
+    tournamentId: config.tournamentId,
+    payload,
+  });
+
+  const sendScore = (sessionToken: string) =>
+    requestJson(
+      'PATCH',
+      APLUS_LIVE_SCORE_ENDPOINTS.updateScore,
+      {matchId: config.matchId},
+      payload,
+      sessionToken,
+    );
+
+  let sessionToken = await getOrClaimAplusLiveScoreSessionToken(config);
+
+  try {
+    const result = await sendScore(sessionToken);
+    rememberAplusLiveScoreSession(config.matchId, sessionToken, config.lockExpiresAt);
+
+    console.log('[AplusLiveScore][PUSH_SCORE_OK]', {
+      matchId: config.matchId,
+      result,
+    });
+  } catch (error) {
+    if (!isLiveSessionTokenError(error)) {
+      throw error;
+    }
+
+    console.log('[AplusLiveScore][PUSH_SCORE_RECLAIM]', {
+      matchId: config.matchId,
+      reason: (error as Error)?.message || error,
+    });
+
+    forgetAplusLiveScoreSession(config.matchId);
+    const claimed = await claimAplusLiveScoreSession(config);
+    sessionToken = claimed.sessionToken;
+
+    const result = await sendScore(sessionToken);
+    rememberAplusLiveScoreSession(config.matchId, sessionToken, claimed.lockExpiresAt);
+
+    console.log('[AplusLiveScore][PUSH_SCORE_OK_AFTER_RECLAIM]', {
+      matchId: config.matchId,
+      result,
+    });
+  }
 };
 
 export const heartbeatAplusLiveScoreMatch = async (config?: AplusLiveScoreConfig) => {
-  if (!config?.matchId || !config.sessionToken) {
+  if (!config?.matchId) {
     return;
   }
 
-  await requestJson(
-    'POST',
-    APLUS_LIVE_SCORE_ENDPOINTS.heartbeat,
-    {matchId: config.matchId},
-    {},
-    config.sessionToken,
-  );
+  const sendHeartbeat = (sessionToken: string) =>
+    requestJson(
+      'POST',
+      APLUS_LIVE_SCORE_ENDPOINTS.heartbeat,
+      {matchId: config.matchId},
+      {},
+      sessionToken,
+    );
+
+  let sessionToken = await getOrClaimAplusLiveScoreSessionToken(config);
+
+  try {
+    await sendHeartbeat(sessionToken);
+    rememberAplusLiveScoreSession(config.matchId, sessionToken, config.lockExpiresAt);
+  } catch (error) {
+    if (!isLiveSessionTokenError(error)) {
+      throw error;
+    }
+
+    console.log('[AplusLiveScore][HEARTBEAT_RECLAIM]', {
+      matchId: config.matchId,
+      reason: (error as Error)?.message || error,
+    });
+
+    forgetAplusLiveScoreSession(config.matchId);
+    const claimed = await claimAplusLiveScoreSession(config);
+    sessionToken = claimed.sessionToken;
+    await sendHeartbeat(sessionToken);
+    rememberAplusLiveScoreSession(config.matchId, sessionToken, claimed.lockExpiresAt);
+  }
 };
 
 export const finishAplusLiveScoreMatch = async (
@@ -374,21 +654,28 @@ export const finishAplusLiveScoreMatch = async (
   score1?: number,
   score2?: number,
 ) => {
-  if (!config?.matchId || !config.sessionToken) {
+  if (!config?.matchId) {
     return;
   }
+
+  const sessionToken = await getOrClaimAplusLiveScoreSessionToken(config);
 
   await requestJson(
     'POST',
     APLUS_LIVE_SCORE_ENDPOINTS.finishMatch,
     {matchId: config.matchId},
     {score1, score2},
-    config.sessionToken,
+    sessionToken,
   );
 };
 
 export const releaseAplusLiveScoreMatch = async (config?: AplusLiveScoreConfig) => {
-  if (!config?.matchId || !config.sessionToken) {
+  if (!config?.matchId) {
+    return;
+  }
+
+  const sessionToken = getCachedAplusLiveScoreSessionToken(config);
+  if (!sessionToken) {
     return;
   }
 
@@ -397,6 +684,8 @@ export const releaseAplusLiveScoreMatch = async (config?: AplusLiveScoreConfig) 
     APLUS_LIVE_SCORE_ENDPOINTS.releaseMatch,
     {matchId: config.matchId},
     {},
-    config.sessionToken,
+    sessionToken,
   );
+
+  forgetAplusLiveScoreSession(config.matchId);
 };

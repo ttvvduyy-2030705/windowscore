@@ -11,6 +11,7 @@ import DeviceInfo from 'react-native-device-info';
 
 import {StackScreens} from 'scenes';
 import {LanguageContext} from 'context/language';
+import {PreviewVideoProvider} from 'context/bluetooth';
 import {loadLanguage, setLanguage} from 'i18n';
 import {navigationRef} from 'utils/navigation';
 import Loading from 'components/Loading';
@@ -88,13 +89,15 @@ const AppWindows = (): React.JSX.Element => {
                   language: currentLanguage,
                   onChangeCurrentLanguage,
                 }}>
-                {isLoading ? (
-                  <RNView style={styles.bootLoadingScreen}>
-                    <Loading isLoading />
-                  </RNView>
-                ) : (
-                  <StackScreens />
-                )}
+                <PreviewVideoProvider>
+                  {isLoading ? (
+                    <RNView style={styles.bootLoadingScreen}>
+                      <Loading isLoading />
+                    </RNView>
+                  ) : (
+                    <StackScreens />
+                  )}
+                </PreviewVideoProvider>
               </LanguageContext.Provider>
             </NavigationContainer>
           </PersistGate>

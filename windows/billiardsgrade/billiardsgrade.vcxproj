@@ -116,6 +116,7 @@
     <ClInclude Include="WindowsVideoStorageModule.h" />
     <ClInclude Include="WindowsVideoPlayerViewManager.h" />
     <ClInclude Include="WindowsFfmpegLiveModule.h" />
+    <ClInclude Include="WindowsRemoteControlModule.h" />
     <ClInclude Include="AutolinkedNativeModules.g.h" />
     <ClInclude Include="pch.h" />
     <ClInclude Include="App.h">
@@ -152,6 +153,7 @@
     <ClCompile Include="WindowsVideoStorageModule.cpp" />
     <ClCompile Include="WindowsVideoPlayerViewManager.cpp" />
     <ClCompile Include="WindowsFfmpegLiveModule.cpp" />
+    <ClCompile Include="WindowsRemoteControlModule.cpp" />
     <ClCompile Include="AutolinkedNativeModules.g.cpp" />
     <ClCompile Include="pch.cpp">
       <PrecompiledHeader>Create</PrecompiledHeader>
