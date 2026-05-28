@@ -32,3 +32,4 @@ coverage/
 !.yarn/releases
 !.yarn/sdks
 !.yarn/versions
+windows/billiardsgrade/Assets/ffmpeg/ffmpeg.exe 
