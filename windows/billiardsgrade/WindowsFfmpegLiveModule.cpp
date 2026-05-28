@@ -8,6 +8,7 @@
 #include <mutex>
 #include <sstream>
 #include <string>
+#include <cwctype>
 #include <thread>
 #include <vector>
 
@@ -21,6 +22,14 @@
 
 #ifndef STARTF_USESTDHANDLES
 #define STARTF_USESTDHANDLES 0x00000100
+#endif
+
+#ifndef CREATE_NEW_PROCESS_GROUP
+#define CREATE_NEW_PROCESS_GROUP 0x00000200
+#endif
+
+#ifndef BELOW_NORMAL_PRIORITY_CLASS
+#define BELOW_NORMAL_PRIORITY_CLASS 0x00004000
 #endif
 
 #ifndef STD_INPUT_HANDLE
@@ -84,17 +93,206 @@ namespace
         return ToUtf8(message) + " (" + std::to_string(error) + ")";
     }
 
+    bool FileExists(std::wstring const &path)
+    {
+        if (path.empty())
+        {
+            return false;
+        }
+        DWORD attrs = GetFileAttributesW(path.c_str());
+        return attrs != INVALID_FILE_ATTRIBUTES && !(attrs & FILE_ATTRIBUTE_DIRECTORY);
+    }
+
+    std::wstring Trim(std::wstring value)
+    {
+        value.erase(value.begin(), std::find_if(value.begin(), value.end(), [](wchar_t ch) { return !std::iswspace(ch); }));
+        value.erase(std::find_if(value.rbegin(), value.rend(), [](wchar_t ch) { return !std::iswspace(ch); }).base(), value.end());
+        return value;
+    }
+
+    std::wstring GetDirectoryName(std::wstring const &path)
+    {
+        auto pos = path.find_last_of(L"\\/");
+        if (pos == std::wstring::npos)
+        {
+            return L"";
+        }
+        return path.substr(0, pos);
+    }
+
+    std::wstring GetModuleDirectory()
+    {
+        std::wstring buffer(32768, L'\0');
+        DWORD len = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+        if (len == 0)
+        {
+            return L"";
+        }
+        buffer.resize(len);
+        return GetDirectoryName(buffer);
+    }
+
+    bool IsAbsolutePath(std::wstring const &value)
+    {
+        return value.size() >= 3 && std::iswalpha(value[0]) && value[1] == L':' && (value[2] == L'\\' || value[2] == L'/');
+    }
+
+    std::wstring JoinPath(std::wstring const &dir, std::wstring const &name)
+    {
+        if (dir.empty())
+        {
+            return name;
+        }
+        wchar_t last = dir.back();
+        if (last == L'\\' || last == L'/')
+        {
+            return dir + name;
+        }
+        return dir + L"\\" + name;
+    }
+
+    std::wstring GetEnvironmentString(std::wstring const &name)
+    {
+        DWORD needed = GetEnvironmentVariableW(name.c_str(), nullptr, 0);
+        if (needed == 0)
+        {
+            return L"";
+        }
+        std::wstring value(needed, L'\0');
+        DWORD len = GetEnvironmentVariableW(name.c_str(), value.data(), needed);
+        if (len == 0)
+        {
+            return L"";
+        }
+        value.resize(len);
+        return value;
+    }
+
+    std::wstring SearchPathForExecutable(std::wstring const &exeName)
+    {
+        // SearchPathW is not available in this React Native Windows/UWP build,
+        // so resolve PATH manually. This keeps the module buildable and avoids
+        // relying on the shell to expand ffmpeg.exe.
+        auto pathValue = GetEnvironmentString(L"PATH");
+        if (pathValue.empty())
+        {
+            pathValue = GetEnvironmentString(L"Path");
+        }
+        if (pathValue.empty())
+        {
+            return L"";
+        }
+
+        size_t start = 0;
+        while (start <= pathValue.size())
+        {
+            auto end = pathValue.find(L';', start);
+            auto part = pathValue.substr(start, end == std::wstring::npos ? std::wstring::npos : end - start);
+            part = Trim(part);
+            if (!part.empty() && part.front() == L'"' && part.back() == L'"' && part.size() >= 2)
+            {
+                part = part.substr(1, part.size() - 2);
+            }
+
+            if (!part.empty())
+            {
+                auto candidate = JoinPath(part, exeName);
+                if (FileExists(candidate))
+                {
+                    return candidate;
+                }
+            }
+
+            if (end == std::wstring::npos)
+            {
+                break;
+            }
+            start = end + 1;
+        }
+
+        return L"";
+    }
+
+    std::wstring GetEnvPath(std::wstring const &name)
+    {
+        DWORD needed = GetEnvironmentVariableW(name.c_str(), nullptr, 0);
+        if (needed == 0)
+        {
+            return L"";
+        }
+        std::wstring value(needed, L'\0');
+        DWORD len = GetEnvironmentVariableW(name.c_str(), value.data(), needed);
+        if (len == 0)
+        {
+            return L"";
+        }
+        value.resize(len);
+        return value;
+    }
+
     std::wstring NormalizeFfmpegPath(std::string const &value)
     {
-        auto trimmed = value;
-        trimmed.erase(trimmed.begin(), std::find_if(trimmed.begin(), trimmed.end(), [](unsigned char ch) { return !std::isspace(ch); }));
-        trimmed.erase(std::find_if(trimmed.rbegin(), trimmed.rend(), [](unsigned char ch) { return !std::isspace(ch); }).base(), trimmed.end());
-        if (trimmed.empty())
+        auto requested = Trim(ToWide(value));
+        std::replace(requested.begin(), requested.end(), L'/', L'\\');
+
+        auto lower = requested;
+        std::transform(lower.begin(), lower.end(), lower.begin(), [](wchar_t ch) { return static_cast<wchar_t>(std::towlower(ch)); });
+
+        const bool wantsAuto = requested.empty() || lower == L"ffmpeg" || lower == L"ffmpeg.exe" || lower == L"path:ffmpeg";
+        const auto moduleDir = GetModuleDirectory();
+
+        std::vector<std::wstring> candidates;
+        if (!wantsAuto)
         {
-            trimmed = "ffmpeg.exe";
+            candidates.push_back(requested);
+            if (!IsAbsolutePath(requested) && !moduleDir.empty())
+            {
+                candidates.push_back(moduleDir + L"\\" + requested);
+            }
         }
-        std::replace(trimmed.begin(), trimmed.end(), '/', '\\');
-        return ToWide(trimmed);
+
+        if (!moduleDir.empty())
+        {
+            candidates.push_back(moduleDir + L"\\Assets\\ffmpeg\\ffmpeg.exe");
+            candidates.push_back(moduleDir + L"\\ffmpeg.exe");
+        }
+        candidates.push_back(L"C:\\ffmpeg\\bin\\ffmpeg.exe");
+
+        auto localAppData = GetEnvPath(L"LOCALAPPDATA");
+        if (!localAppData.empty())
+        {
+            candidates.push_back(localAppData + L"\\Microsoft\\WinGet\\Links\\ffmpeg.exe");
+        }
+        auto userProfile = GetEnvPath(L"USERPROFILE");
+        if (!userProfile.empty())
+        {
+            candidates.push_back(userProfile + L"\\AppData\\Local\\Microsoft\\WinGet\\Links\\ffmpeg.exe");
+        }
+
+        auto searched = SearchPathForExecutable(L"ffmpeg.exe");
+        if (!searched.empty())
+        {
+            candidates.push_back(searched);
+        }
+
+        for (auto const &candidate : candidates)
+        {
+            if (FileExists(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        if (!requested.empty() && !wantsAuto)
+        {
+            return requested;
+        }
+        return L"ffmpeg.exe";
+    }
+
+    std::string NormalizeFfmpegPathForResult(std::string const &value)
+    {
+        return ToUtf8(NormalizeFfmpegPath(value));
     }
 
     std::wstring Quote(std::wstring value)
@@ -406,7 +604,7 @@ namespace winrt::billiardsgrade::implementation
             {
                 auto path = NormalizeFfmpegPath(ffmpegPath);
                 auto output = RunProcessAndCapture(path, {"-version"}, 8000);
-                result["ffmpegPath"] = JSValue(ffmpegPath.empty() ? "ffmpeg.exe" : ffmpegPath);
+                result["ffmpegPath"] = JSValue(ToUtf8(path));
                 result["available"] = JSValue(output.started && !output.timedOut && output.exitCode == 0);
                 result["version"] = JSValue(FirstLine(output.output));
                 result["error"] = JSValue(output.error.empty() ? (output.timedOut ? "ffmpeg -version timed out" : "") : output.error);
@@ -415,7 +613,7 @@ namespace winrt::billiardsgrade::implementation
             catch (std::exception const &ex)
             {
                 result["available"] = JSValue(false);
-                result["ffmpegPath"] = JSValue(ffmpegPath.empty() ? "ffmpeg.exe" : ffmpegPath);
+                result["ffmpegPath"] = JSValue(NormalizeFfmpegPathForResult(ffmpegPath));
                 result["version"] = JSValue("");
                 result["error"] = JSValue(ex.what());
                 promise.Resolve(result);
@@ -448,9 +646,10 @@ namespace winrt::billiardsgrade::implementation
 
     void WindowsFfmpegLiveModule::Start(JSValueObject payload, ReactPromise<JSValueObject> promise) noexcept
     {
-        // JSValueObject is move-only in this RNW version, so never copy it into
-        // the background lambda. Extract the primitive values on the caller
-        // thread and capture only STL values.
+        // Extract JS values on the RN caller thread. The FFmpeg process is then
+        // launched in a detached/native way with no stdout/stderr pipes. Keeping
+        // long-running pipe reader threads attached to RNW can destabilize the app
+        // when gameplay starts updating quickly.
         auto requestedFfmpegPath = StringFromPayload(payload, "ffmpegPath");
         auto requestedArgs = ArgsFromPayload(payload);
 
@@ -461,11 +660,16 @@ namespace winrt::billiardsgrade::implementation
                 std::lock_guard<std::mutex> lock(g_processMutex);
                 if (g_processActive && g_processInfo.hProcess)
                 {
-                    result["status"] = JSValue("live");
-                    result["pid"] = JSValue(static_cast<double>(g_processInfo.dwProcessId));
-                    result["error"] = JSValue("FFmpeg live process is already running");
-                    promise.Resolve(result);
-                    return;
+                    DWORD exitCode = 0;
+                    if (GetExitCodeProcess(g_processInfo.hProcess, &exitCode) && exitCode == STILL_ACTIVE)
+                    {
+                        result["status"] = JSValue("live");
+                        result["pid"] = JSValue(static_cast<double>(g_processInfo.dwProcessId));
+                        result["error"] = JSValue("FFmpeg live process is already running");
+                        promise.Resolve(result);
+                        return;
+                    }
+                    ResetActiveProcessHandles();
                 }
 
                 auto ffmpegPath = NormalizeFfmpegPath(requestedFfmpegPath);
@@ -479,38 +683,8 @@ namespace winrt::billiardsgrade::implementation
                     return;
                 }
 
-                SECURITY_ATTRIBUTES sa{};
-                sa.nLength = sizeof(SECURITY_ATTRIBUTES);
-                sa.bInheritHandle = TRUE;
-                sa.lpSecurityDescriptor = nullptr;
-
-                HANDLE stdinRead = nullptr;
-                HANDLE stdinWrite = nullptr;
-                HANDLE stderrRead = nullptr;
-                HANDLE stderrWrite = nullptr;
-
-                if (!CreatePipe(&stdinRead, &stdinWrite, &sa, 0) || !CreatePipe(&stderrRead, &stderrWrite, &sa, 0))
-                {
-                    result["status"] = JSValue("error");
-                    result["pid"] = JSValue(0.0);
-                    result["error"] = JSValue("CreatePipe failed: " + WindowsErrorMessage(GetLastError()));
-                    CloseHandleIfValid(stdinRead);
-                    CloseHandleIfValid(stdinWrite);
-                    CloseHandleIfValid(stderrRead);
-                    CloseHandleIfValid(stderrWrite);
-                    promise.Resolve(result);
-                    return;
-                }
-
-                SetHandleInformation(stdinWrite, HANDLE_FLAG_INHERIT, 0);
-                SetHandleInformation(stderrRead, HANDLE_FLAG_INHERIT, 0);
-
                 STARTUPINFOW si{};
                 si.cb = sizeof(si);
-                si.dwFlags = STARTF_USESTDHANDLES;
-                si.hStdInput = stdinRead;
-                si.hStdOutput = stderrWrite;
-                si.hStdError = stderrWrite;
 
                 PROCESS_INFORMATION pi{};
                 auto command = BuildCommandLine(ffmpegPath, args);
@@ -522,42 +696,33 @@ namespace winrt::billiardsgrade::implementation
                     commandLine.data(),
                     nullptr,
                     nullptr,
-                    TRUE,
-                    CREATE_NO_WINDOW,
+                    FALSE,
+                    CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP | BELOW_NORMAL_PRIORITY_CLASS,
                     nullptr,
                     nullptr,
                     &si,
                     &pi);
-
-                CloseHandleIfValid(stdinRead);
-                CloseHandleIfValid(stderrWrite);
 
                 if (!ok)
                 {
                     result["status"] = JSValue("error");
                     result["pid"] = JSValue(0.0);
                     result["error"] = JSValue("CreateProcessW failed: " + WindowsErrorMessage(GetLastError()));
-                    CloseHandleIfValid(stdinWrite);
-                    CloseHandleIfValid(stderrRead);
                     promise.Resolve(result);
                     return;
                 }
 
-                g_processInfo = pi;
-                g_stdinWrite = stdinWrite;
-                g_stderrRead = stderrRead;
-                g_stderrSummary.clear();
-                g_processActive = true;
+                // CRASH-FIX v10: do not wait/probe the newly created FFmpeg process here.
+                // Some GPU encoder/device failures terminate ffmpeg with an access violation
+                // immediately after CreateProcessW. Waiting on that crash from the RNW native
+                // module and then retrying encoders has repeatedly destabilized the gameplay app.
+                // Launch FFmpeg in a fire-and-forget style and let the app remain isolated.
 
-                HANDLE readForThread = g_stderrRead;
-                std::thread([readForThread]() {
-                    char buffer[2048];
-                    DWORD bytesRead = 0;
-                    while (ReadFile(readForThread, buffer, sizeof(buffer), &bytesRead, nullptr) && bytesRead > 0)
-                    {
-                        AppendStderrSummary(std::string(buffer, buffer + bytesRead));
-                    }
-                }).detach();
+                g_processInfo = pi;
+                g_stdinWrite = nullptr;
+                g_stderrRead = nullptr;
+                g_stderrSummary = "FFmpeg started fire-and-forget; stderr is intentionally not captured for app stability.";
+                g_processActive = true;
 
                 result["status"] = JSValue("live");
                 result["pid"] = JSValue(static_cast<double>(pi.dwProcessId));
@@ -584,18 +749,10 @@ namespace winrt::billiardsgrade::implementation
                 DWORD exitCode = 0;
                 if (g_processActive && g_processInfo.hProcess)
                 {
-                    if (g_stdinWrite)
+                    if (GetExitCodeProcess(g_processInfo.hProcess, &exitCode) && exitCode == STILL_ACTIVE)
                     {
-                        DWORD written = 0;
-                        const char quit[] = "q\n";
-                        WriteFile(g_stdinWrite, quit, static_cast<DWORD>(sizeof(quit) - 1), &written, nullptr);
-                    }
-
-                    auto wait = WaitForSingleObject(g_processInfo.hProcess, 3000);
-                    if (wait != WAIT_OBJECT_0)
-                    {
-                        TerminateProcess(g_processInfo.hProcess, 1);
-                        WaitForSingleObject(g_processInfo.hProcess, 1500);
+                        TerminateProcess(g_processInfo.hProcess, 0);
+                        WaitForSingleObject(g_processInfo.hProcess, 2000);
                     }
                     GetExitCodeProcess(g_processInfo.hProcess, &exitCode);
                 }
