@@ -1,21 +1,15 @@
-import { NativeModules, Platform } from "react-native";
-import RNFS from "react-native-fs";
-import { Bitrate, Fps, Resolution } from "types/webcam";
-import i18n from "i18n";
+import {NativeModules, Platform} from 'react-native';
+import RNFS from 'react-native-fs';
+import {Bitrate, Fps, Resolution} from 'types/webcam';
+import i18n from 'i18n';
 
-export const WINDOWS_FFMPEG_CONFIG_STORAGE_KEY =
-  "@APLUS_WINDOWS_FFMPEG_LIVE_CONFIG_V1";
-export const DEFAULT_YOUTUBE_RTMP_URL = "rtmp://a.rtmp.youtube.com/live2";
+export const WINDOWS_FFMPEG_CONFIG_STORAGE_KEY = '@APLUS_WINDOWS_FFMPEG_LIVE_CONFIG_V1';
+export const DEFAULT_YOUTUBE_RTMP_URL = 'rtmps://a.rtmps.youtube.com/live2';
 
-export type WindowsFfmpegLiveState =
-  | "stopped"
-  | "starting"
-  | "live"
-  | "stopping"
-  | "error";
+export type WindowsFfmpegLiveState = 'stopped' | 'starting' | 'live' | 'stopping' | 'error';
 
 export type WindowsFfmpegLiveConfig = {
-  platform?: "youtube";
+  platform?: 'youtube';
   rtmpUrl: string;
   streamKey: string;
   ffmpegPath?: string;
@@ -27,13 +21,14 @@ export type WindowsFfmpegLiveConfig = {
   resolution?: Resolution | string;
   fps?: Fps | string | number;
   bitrate?: Bitrate | string;
-  overlayMode?: "png" | "drawtext" | "none";
+  overlayMode?: 'png' | 'drawtext' | 'none';
   /**
    * auto = production-safe mode. For app stability this build uses libx264 only.
    * Hardware encoders are intentionally skipped because some FFmpeg/GPU driver
    * combinations crash immediately and can destabilize the RNW gameplay app.
    */
-  videoEncoder?: "auto" | "h264_nvenc" | "h264_amf" | "h264_qsv" | "libx264";
+  videoEncoder?: 'auto' | 'h264_nvenc' | 'h264_amf' | 'h264_qsv' | 'libx264';
+  directShowInputMode?: 'default' | 'mjpeg720' | 'mjpeg1080' | 'yuyv720';
 };
 
 export type WindowsFfmpegOverlaySnapshot = {
@@ -64,7 +59,10 @@ type NativeWindowsFfmpegLiveModule = {
   listDevices?: (ffmpegPath?: string) => Promise<{
     videoDevices?: string[];
     audioDevices?: string[];
+    ffmpegPath?: string;
     error?: string;
+    outputPreview?: string;
+    rawOutput?: string;
   }>;
   start?: (payload: {
     ffmpegPath?: string;
@@ -73,6 +71,7 @@ type NativeWindowsFfmpegLiveModule = {
   }) => Promise<{
     pid?: number;
     status?: string;
+    exitCode?: number;
     error?: string;
   }>;
   stop?: () => Promise<{
@@ -86,31 +85,32 @@ type NativeWindowsFfmpegLiveModule = {
     stderrSummary?: string;
     error?: string;
   }>;
+  releaseCameraForExternalUse?: () => Promise<boolean | {released?: boolean; ok?: boolean}>;
 };
 
-let liveState: WindowsFfmpegLiveState = "stopped";
+let liveState: WindowsFfmpegLiveState = 'stopped';
 let currentConfig: WindowsFfmpegLiveConfig | null = null;
-let lastOverlayPath = "";
+let lastOverlayPath = '';
 let auditLogged = false;
-let lastOverlayWriteSignature = "";
+let lastOverlayWriteSignature = '';
 let lastOverlayWriteAt = 0;
 let lastOverlayLogAt = 0;
 
-const SCREEN_CAPTURE_SENTINEL = "__APLUS_SCREEN_CAPTURE__";
+const SCREEN_CAPTURE_SENTINEL = '__APLUS_SCREEN_CAPTURE__';
+const DESKTOP_CAPTURE_LABEL = 'desktop-gdigrab-live-capture';
 
 const isScreenCaptureSentinel = (value?: string | null) =>
-  String(value || "").trim() === SCREEN_CAPTURE_SENTINEL;
+  String(value || '').trim() === SCREEN_CAPTURE_SENTINEL;
 
 const getNativeModule = (): NativeWindowsFfmpegLiveModule | null => {
   const modules = NativeModules as any;
   return modules?.WindowsFfmpegLiveModule || null;
 };
 
-const normalizePath = (value?: string | null) =>
-  String(value || "").replace(/\\/g, "/");
+const normalizePath = (value?: string | null) => String(value || '').replace(/\\/g, '/');
 
 const quoteArg = (value: string) => {
-  const safeValue = String(value || "");
+  const safeValue = String(value || '');
   if (!safeValue) {
     return '""';
   }
@@ -118,30 +118,31 @@ const quoteArg = (value: string) => {
 };
 
 const toFfmpegSafeText = (value: string) =>
-  String(value || "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-zA-Z0-9 ._\-+/]/g, "")
-    .replace(/\s+/g, " ")
+  String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zA-Z0-9 ._\-+/]/g, '')
+    .replace(/\s+/g, ' ')
     .trim();
 
 const escapeDrawText = (value: string) =>
   toFfmpegSafeText(value)
-    .replace(/\\/g, "\\\\")
-    .replace(/:/g, "\\:")
+    .replace(/\\/g, '\\\\')
+    .replace(/:/g, '\\:')
     .replace(/'/g, "\\'")
-    .replace(/,/g, "\\,")
-    .replace(/%/g, "\\%")
-    .replace(/\[/g, "\\[")
-    .replace(/\]/g, "\\]")
-    .replace(/\r?\n/g, " ");
+    .replace(/,/g, '\\,')
+    .replace(/%/g, '\\%')
+    .replace(/\[/g, '\\[')
+    .replace(/\]/g, '\\]')
+    .replace(/\r?\n/g, ' ');
+
 
 const uniqueValues = (values: Array<string | undefined | null>) => {
   const seen = new Set<string>();
   return values
-    .map((value) => String(value || "").trim())
+    .map(value => String(value || '').trim())
     .filter(Boolean)
-    .filter((value) => {
+    .filter(value => {
       const key = value.toLowerCase();
       if (seen.has(key)) {
         return false;
@@ -151,17 +152,55 @@ const uniqueValues = (values: Array<string | undefined | null>) => {
     });
 };
 
+const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+const getStartupFailureSummary = (status: any) =>
+  String(status?.stderrSummary || status?.error || '').trim();
+
+const looksLikeEarlyFfmpegFailure = (status: any) => {
+  const normalizedStatus = String(status?.status || '').toLowerCase();
+  const summary = getStartupFailureSummary(status).toLowerCase();
+  return (
+    normalizedStatus === 'stopped' ||
+    normalizedStatus === 'error' ||
+    summary.includes('error opening input') ||
+    summary.includes('could not find video device') ||
+    summary.includes('unable to bindtoobject') ||
+    summary.includes('i/o error') ||
+    summary.includes('connection refused') ||
+    summary.includes('server returned') ||
+    summary.includes('failed to update header')
+  );
+};
+
 const normalizeWindowsExecutablePath = (value?: string | null) =>
-  String(value || "")
-    .trim()
-    .replace(/\//g, "\\");
+  String(value || '').trim().replace(/\//g, '\\');
 
 const normalizeNativeFfmpegPath = (value?: string | null) => {
-  const raw = String(value || "").trim();
-  if (!raw || raw === "PATH:ffmpeg") {
-    return "";
+  const raw = String(value || '').trim();
+  if (!raw || raw === 'PATH:ffmpeg') {
+    return '';
   }
-  return normalizeWindowsExecutablePath(raw);
+
+  const normalized = normalizeWindowsExecutablePath(raw);
+  const lower = normalized.toLowerCase();
+
+  // v41 camera-only fix: do not reuse FFmpeg paths that live inside the
+  // RNW/MSIX AppX package or package-private AC folder. The user's logs show
+  // these copies can list DirectShow devices but fail when they actually bind
+  // the webcam. Passing an empty path makes the native module resolve/copy
+  // FFmpeg into the real desktop user's LocalAppData first.
+  const isPackagedOrBuildAsset =
+    lower.includes('\\appx\\assets\\ffmpeg\\') ||
+    (lower.includes('\\windows\\x64\\') && lower.includes('\\appx\\assets\\ffmpeg\\')) ||
+    lower.includes('\\appdata\\local\\packages\\') ||
+    lower.includes('\\ac\\aplusscore\\ffmpeg\\');
+
+  if (isPackagedOrBuildAsset) {
+    return '';
+  }
+
+  return normalized;
 };
 
 const resolveUsableFfmpegPath = async (
@@ -173,7 +212,7 @@ const resolveUsableFfmpegPath = async (
   // Let C++ resolve: bundled Assets\ffmpeg\ffmpeg.exe -> C:\ffmpeg\bin -> PATH.
   const candidates = uniqueValues([
     normalizeNativeFfmpegPath(preferredPath),
-    "",
+    '',
   ]);
 
   if (!nativeModule?.checkFfmpegAvailable) {
@@ -183,12 +222,10 @@ const resolveUsableFfmpegPath = async (
   for (const candidate of candidates) {
     try {
       const result = await nativeModule.checkFfmpegAvailable(candidate);
-      const resolved = normalizeNativeFfmpegPath(
-        result?.ffmpegPath || candidate,
-      );
-      console.log("[LiveFfmpegResolve]", {
-        requested: candidate || "AUTO_NATIVE",
-        resolved: resolved || result?.ffmpegPath || "",
+      const resolved = normalizeNativeFfmpegPath(result?.ffmpegPath || candidate);
+      console.log('[LiveFfmpegResolve]', {
+        requested: candidate || 'AUTO_NATIVE',
+        resolved: resolved || result?.ffmpegPath || '',
         usable: !!result?.available,
         error: result?.error,
       });
@@ -196,8 +233,8 @@ const resolveUsableFfmpegPath = async (
         return resolved || candidate;
       }
     } catch (error: any) {
-      console.log("[LiveFfmpegResolve]", {
-        requested: candidate || "AUTO_NATIVE",
+      console.log('[LiveFfmpegResolve]', {
+        requested: candidate || 'AUTO_NATIVE',
         usable: false,
         error: error?.message || String(error),
       });
@@ -208,9 +245,9 @@ const resolveUsableFfmpegPath = async (
 };
 
 export const maskStreamKey = (value?: string | null) => {
-  const raw = String(value || "").trim();
+  const raw = String(value || '').trim();
   if (!raw) {
-    return "";
+    return '';
   }
   if (raw.length <= 8) {
     return `${raw.slice(0, 2)}****`;
@@ -219,23 +256,21 @@ export const maskStreamKey = (value?: string | null) => {
 };
 
 const normalizeRtmpOutput = (rtmpUrl: string, streamKey: string) => {
-  const cleanUrl = String(rtmpUrl || DEFAULT_YOUTUBE_RTMP_URL)
-    .trim()
-    .replace(/\/+$/g, "");
-  const cleanKey = String(streamKey || "").trim();
+  const cleanUrl = String(rtmpUrl || DEFAULT_YOUTUBE_RTMP_URL).trim().replace(/\/+$/g, '');
+  const cleanKey = String(streamKey || '').trim();
   return `${cleanUrl}/${cleanKey}`;
 };
 
 const resolveDimensions = (config: WindowsFfmpegLiveConfig) => {
   if (config.width && config.height) {
-    return { width: config.width, height: config.height };
+    return {width: config.width, height: config.height};
   }
 
-  if (config.resolution === Resolution.HD || config.resolution === "720p") {
-    return { width: 1280, height: 720 };
+  if (config.resolution === Resolution.HD || config.resolution === '720p') {
+    return {width: 1280, height: 720};
   }
 
-  return { width: 1920, height: 1080 };
+  return {width: 1920, height: 1080};
 };
 
 const resolveFps = (config: WindowsFfmpegLiveConfig) => {
@@ -244,281 +279,81 @@ const resolveFps = (config: WindowsFfmpegLiveConfig) => {
 };
 
 const resolveBitrate = (config: WindowsFfmpegLiveConfig) => {
-  const raw = String(config.bitrate || Bitrate.B5000 || "6000k").trim();
+  const raw = String(config.bitrate || '8000k').trim();
   const numeric = /^\d+k$/i.test(raw)
-    ? Number(raw.replace(/k$/i, ""))
-    : Number(raw.replace(/[^\d.]/g, ""));
+    ? Number(raw.replace(/k$/i, ''))
+    : Number(raw.replace(/[^\d.]/g, ''));
   if (Number.isFinite(numeric) && numeric > 0) {
     return `${Math.round(Math.min(9000, Math.max(2500, numeric)))}k`;
   }
-  return "6000k";
+  return '8000k';
 };
 
 const resolveVideoEncoder = (config: WindowsFfmpegLiveConfig) =>
-  (String(config.videoEncoder || "auto").trim() || "auto") as NonNullable<
-    WindowsFfmpegLiveConfig["videoEncoder"]
-  >;
+  (String(config.videoEncoder || 'auto').trim() || 'auto') as NonNullable<WindowsFfmpegLiveConfig['videoEncoder']>;
 
-const buildEncoderCandidates = (
-  _encoder?: WindowsFfmpegLiveConfig["videoEncoder"],
-) => {
+const resolveDirectShowInputMode = (config: WindowsFfmpegLiveConfig) =>
+  (String(config.directShowInputMode || 'default').trim() || 'default') as NonNullable<WindowsFfmpegLiveConfig['directShowInputMode']>;
+
+const buildDirectShowInputModeCandidates = () =>
+  // v42: the user's PowerShell test proved the camera opens with FFmpeg's
+  // default DirectShow mode: -f dshow -i 'video=2K Web Camera'. Do not retry
+  // forced MJPEG/YUYV modes during production live; they only delay failure and
+  // are not needed once the app releases MediaCapture correctly.
+  ['default'] as Array<NonNullable<WindowsFfmpegLiveConfig['directShowInputMode']>>;
+
+const buildEncoderCandidates = (_encoder?: WindowsFfmpegLiveConfig['videoEncoder']) => {
   // CRASH-FIX v10: use one stable encoder only.
   // The log showed h264_nvenc exiting with 3221225477 (0xC0000005 access violation).
   // Retrying hardware encoders from inside the app makes the gameplay process unstable.
-  // libx264 at 1080p30/6000k keeps quality high and avoids GPU-driver/native crashes.
-  return ["libx264"] as Array<
-    NonNullable<WindowsFfmpegLiveConfig["videoEncoder"]>
-  >;
+  // libx264 1080p30 with ultrafast preset keeps the stream inside the app but lowers CPU spikes.
+  return ['libx264'] as Array<NonNullable<WindowsFfmpegLiveConfig['videoEncoder']>>;
 };
 
 const buildVideoEncoderArgs = (
-  encoder: NonNullable<WindowsFfmpegLiveConfig["videoEncoder"]>,
+  encoder: NonNullable<WindowsFfmpegLiveConfig['videoEncoder']>,
 ) => {
   switch (encoder) {
-    case "h264_nvenc":
-      return [
-        "-c:v",
-        "h264_nvenc",
-        "-preset",
-        "p4",
-        "-tune",
-        "ll",
-        "-rc",
-        "cbr",
-      ];
-    case "h264_amf":
-      return ["-c:v", "h264_amf", "-quality", "balanced", "-rc", "cbr"];
-    case "h264_qsv":
-      return ["-c:v", "h264_qsv", "-preset", "veryfast"];
-    case "libx264":
+    case 'h264_nvenc':
+      return ['-c:v', 'h264_nvenc', '-preset', 'p4', '-tune', 'll', '-rc', 'cbr'];
+    case 'h264_amf':
+      return ['-c:v', 'h264_amf', '-quality', 'balanced', '-rc', 'cbr'];
+    case 'h264_qsv':
+      return ['-c:v', 'h264_qsv', '-preset', 'veryfast'];
+    case 'libx264':
     default:
-      return ["-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency"];
+      return ['-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency', '-threads', '2'];
   }
 };
 
-const getLiveRootDir = () =>
-  normalizePath(
-    `${RNFS.ExternalDirectoryPath || RNFS.DocumentDirectoryPath}/LiveOverlay`,
-  );
+const getLiveRootDir = () => normalizePath(`${RNFS.ExternalDirectoryPath || RNFS.DocumentDirectoryPath}/LiveOverlay`);
+const getNativeLiveOverlayRootDir = () =>
+  normalizePath(`${RNFS.TemporaryDirectoryPath || RNFS.CachesDirectoryPath || RNFS.DocumentDirectoryPath}/AplusScoreLiveOverlay`);
 
 export const getWindowsLiveOverlayPaths = () => {
   const root = getLiveRootDir();
+  const nativeRoot = getNativeLiveOverlayRootDir();
   return {
     root,
+    nativeRoot,
     jsonPath: `${root}/overlay.json`,
+    nativeJsonPath: `${nativeRoot}/overlay.json`,
     htmlPath: `${root}/overlay.html`,
     pngPath: `${root}/overlay.png`,
   };
 };
 
-
-const ensureDir = async (dirPath?: string | null) => {
-  const target = String(dirPath || "").trim();
-  if (!target) {
-    return false;
-  }
-  try {
-    const exists = await RNFS.exists(target);
-    if (!exists) {
-      await RNFS.mkdir(target);
-    }
-    return true;
-  } catch (error: any) {
-    console.log("[WindowsLivePath] ensureDir failed", {
-      dirPath: target,
-      error: error?.message || String(error),
-    });
-    return false;
-  }
-};
-
-const toWindowsPath = (value?: string | null) =>
-  String(value || "").replace(/\//g, "\\");
-
-const buildObsBridgeRunnerScript = () => String.raw`param(
-  [Parameter(Mandatory=$true)][string]$SessionPath
-)
-
-$ErrorActionPreference = 'Stop'
-$root = Split-Path -Parent $SessionPath
-$logPath = Join-Path $root 'obs-bridge-runner.log'
-
-function Write-AplusLog([string]$Message) {
-  $line = "$(Get-Date -Format o) $Message"
-  Add-Content -Path $logPath -Value $line -Encoding UTF8
-}
-
-try {
-  Write-AplusLog "OBS bridge runner started. SessionPath=$SessionPath"
-
-  if (!(Test-Path $SessionPath)) {
-    Write-AplusLog "Session file not found."
-    exit 10
-  }
-
-  $session = Get-Content -Path $SessionPath -Raw -Encoding UTF8 | ConvertFrom-Json
-  $server = [string]$session.server
-  $streamKey = [string]$session.streamKey
-
-  if ([string]::IsNullOrWhiteSpace($server) -or [string]::IsNullOrWhiteSpace($streamKey)) {
-    Write-AplusLog "Missing server or streamKey in session file."
-    exit 11
-  }
-
-  $profileRoot = Join-Path $env:APPDATA 'obs-studio\basic\profiles\AplusScore'
-  New-Item -ItemType Directory -Force -Path $profileRoot | Out-Null
-
-  $service = [ordered]@{
-    type = 'rtmp_custom'
-    settings = [ordered]@{
-      server = $server
-      key = $streamKey
-      use_auth = $false
-    }
-  }
-
-  $servicePath = Join-Path $profileRoot 'service.json'
-  ($service | ConvertTo-Json -Depth 10) | Set-Content -Path $servicePath -Encoding UTF8
-  Write-AplusLog "OBS service profile updated. Server=$server KeyMasked=$($streamKey.Substring(0, [Math]::Min(4, $streamKey.Length)))****"
-
-  $basicPath = Join-Path $profileRoot 'basic.ini'
-  if (!(Test-Path $basicPath)) {
-    @'
-[General]
-Name=AplusScore
-
-[Video]
-BaseCX=1920
-BaseCY=1080
-OutputCX=1920
-OutputCY=1080
-FPSCommon=30
-
-[Output]
-Mode=Simple
-'@ | Set-Content -Path $basicPath -Encoding UTF8
-  }
-
-  $obsCandidates = @(
-    'C:\Program Files\obs-studio\bin\64bit\obs64.exe',
-    'C:\Program Files\OBS Studio\bin\64bit\obs64.exe',
-    'C:\Program Files (x86)\obs-studio\bin\64bit\obs64.exe'
-  )
-
-  $obs = $obsCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
-  if (!$obs) {
-    Write-AplusLog "OBS executable not found. Install OBS Studio first."
-    exit 12
-  }
-
-  $obsDir = Split-Path -Parent $obs
-  Write-AplusLog "Starting OBS: $obs"
-  Start-Process -FilePath $obs -ArgumentList @('--profile','AplusScore','--startstreaming','--minimize-to-tray') -WorkingDirectory $obsDir
-  Write-AplusLog "OBS start command sent."
-  exit 0
-} catch {
-  Write-AplusLog ("ERROR: " + $_.Exception.Message)
-  exit 99
-}
-`;
-
-const writeObsBridgeRunnerScript = async () => {
-  const paths = getWindowsLiveOverlayPaths();
-  await ensureDir(paths.root);
-  const scriptPath = `${paths.root}/start-aplus-obs-live.ps1`;
-  await RNFS.writeFile(scriptPath, buildObsBridgeRunnerScript(), "utf8");
-  return scriptPath;
-};
-
-const startObsBridgeWorker = async (sessionPath: string) => {
-  const nativeModule = getNativeModule();
-  const paths = getWindowsLiveOverlayPaths();
-
-  if (!nativeModule?.start) {
-    console.log("[OBSBridgeWorker] native start missing", {
-      sessionPath,
-    });
-    return {
-      ok: false,
-      error: "WindowsFfmpegLiveModule.start missing; cannot auto-start OBS.",
-    };
-  }
-
-  if (!sessionPath) {
-    return { ok: false, error: "Missing OBS bridge session file." };
-  }
-
-  const scriptPath = await writeObsBridgeRunnerScript();
-  const powershellPath = "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe";
-  const args = [
-    "-NoProfile",
-    "-ExecutionPolicy",
-    "Bypass",
-    "-File",
-    toWindowsPath(scriptPath),
-    "-SessionPath",
-    toWindowsPath(sessionPath),
-  ];
-
-  const commandMasked = [quoteArg(powershellPath), ...args.map(quoteArg)].join(
-    " ",
-  );
-
-  console.log("[OBSBridgeWorker] starting", {
-    scriptPath,
-    sessionPath,
-    logPath: `${paths.root}/obs-bridge-runner.log`,
-    commandMasked,
-  });
-
-  try {
-    const result = await nativeModule.start({
-      ffmpegPath: powershellPath,
-      args,
-      commandMasked,
-    });
-    console.log("[OBSBridgeWorker] start result", result);
-    return {
-      ok: !result?.error,
-      ...result,
-      scriptPath,
-      logPath: `${paths.root}/obs-bridge-runner.log`,
-    };
-  } catch (error: any) {
-    console.log("[OBSBridgeWorker] start failed", {
-      error: error?.message || String(error),
-      scriptPath,
-      sessionPath,
-    });
-    return {
-      ok: false,
-      error: error?.message || String(error),
-      scriptPath,
-      logPath: `${paths.root}/obs-bridge-runner.log`,
-    };
-  }
-};
-
 const isCaromSnapshot = (snapshot?: WindowsFfmpegOverlaySnapshot | null) => {
-  const category = String(snapshot?.category || "").toLowerCase();
-  const mode = String(snapshot?.mode || "").toLowerCase();
-  return (
-    category.includes("carom") ||
-    mode.includes("carom") ||
-    mode.includes("libre")
-  );
+  const category = String(snapshot?.category || '').toLowerCase();
+  const mode = String(snapshot?.mode || '').toLowerCase();
+  return category.includes('carom') || mode.includes('carom') || mode.includes('libre');
 };
 
-const normalizePlayer = (
-  snapshot: WindowsFfmpegOverlaySnapshot | null | undefined,
-  index: number,
-) => {
+const normalizePlayer = (snapshot: WindowsFfmpegOverlaySnapshot | null | undefined, index: number) => {
   const player = snapshot?.players?.[index] || {};
   return {
-    name:
-      String(player.name || `Player ${index + 1}`).trim() ||
-      `Player ${index + 1}`,
-    flag: String(player.flag || "").trim(),
+    name: String(player.name || `Player ${index + 1}`).trim() || `Player ${index + 1}`,
+    flag: String(player.flag || '').trim(),
     score: Number(player.score || 0),
     currentPoint: Number(player.currentPoint || 0),
     highestRate: Number(player.highestRate || 0),
@@ -530,32 +365,25 @@ const normalizePlayer = (
 const buildOverlayParity = (snapshot?: WindowsFfmpegOverlaySnapshot | null) => {
   const players = snapshot?.players || [];
   const hasPlayers = players.length >= 2;
-  const hasFlags = players
-    .slice(0, 2)
-    .some((player) => Boolean(String(player?.flag || "").trim()));
-  const hasTimer =
-    snapshot?.countdownTime !== undefined && snapshot?.countdownTime !== null;
+  const hasFlags = players.slice(0, 2).some(player => Boolean(String(player?.flag || '').trim()));
+  const hasTimer = snapshot?.countdownTime !== undefined && snapshot?.countdownTime !== null;
   const hasTarget = snapshot?.goal !== undefined && snapshot?.goal !== null;
-  const hasTurn =
-    snapshot?.totalTurns !== undefined && snapshot?.totalTurns !== null;
+  const hasTurn = snapshot?.totalTurns !== undefined && snapshot?.totalTurns !== null;
   const hasCaromStats = isCaromSnapshot(snapshot)
-    ? players
-        .slice(0, 2)
-        .some(
-          (player) =>
-            Number(player?.currentPoint || 0) !== 0 ||
-            Number(player?.highestRate || 0) !== 0 ||
-            Number(player?.secondHighestRate || 0) !== 0 ||
-            Number(player?.average || 0) !== 0,
-        )
+    ? players.slice(0, 2).some(player =>
+        Number(player?.currentPoint || 0) !== 0 ||
+        Number(player?.highestRate || 0) !== 0 ||
+        Number(player?.secondHighestRate || 0) !== 0 ||
+        Number(player?.average || 0) !== 0,
+      )
     : true;
 
   const missingFields = [
-    hasPlayers ? "" : "players",
-    hasTimer ? "" : "timer",
-    hasTarget ? "" : "target",
-    hasTurn ? "" : "turn",
-    hasCaromStats ? "" : "caromStats",
+    hasPlayers ? '' : 'players',
+    hasTimer ? '' : 'timer',
+    hasTarget ? '' : 'target',
+    hasTurn ? '' : 'turn',
+    hasCaromStats ? '' : 'caromStats',
   ].filter(Boolean);
 
   return {
@@ -566,8 +394,8 @@ const buildOverlayParity = (snapshot?: WindowsFfmpegOverlaySnapshot | null) => {
     flags: hasFlags,
     target: hasTarget,
     turn: hasTurn,
-    mode: isCaromSnapshot(snapshot) ? "carom" : "pool",
-    windowsOverlayStatus: missingFields.length ? "partial" : "same-data-source",
+    mode: isCaromSnapshot(snapshot) ? 'carom' : 'pool',
+    windowsOverlayStatus: missingFields.length ? 'partial' : 'same-data-source',
     missingFields,
   };
 };
@@ -578,100 +406,83 @@ const logLiveAuditOnce = () => {
   }
   auditLogged = true;
 
-  console.log("[WindowsLiveAudit]", {
+  console.log('[WindowsLiveAudit]', {
     files: [
-      "src/services/livestream/WindowsFfmpegLiveEngine.ts",
-      "windows/billiardsgrade/WindowsFfmpegLiveModule.cpp",
-      "src/scenes/game/game-play/GamePlayViewModel.tsx",
-      "src/services/youtubeLiveFlow.ts",
+      'src/services/livestream/WindowsFfmpegLiveEngine.ts',
+      'windows/billiardsgrade/WindowsFfmpegLiveModule.cpp',
+      'src/scenes/game/game-play/GamePlayViewModel.tsx',
+      'src/services/youtubeLiveFlow.ts',
     ],
-    engine:
-      "Windows local FFmpeg fire-and-forget libx264 ingest + YouTube RTMP",
-    overlaySource:
-      "gameplay playerSettings/gameSettings/countdown snapshot rendered by FFmpeg drawtext/drawbox plus JSON/HTML debug artifact",
-    startFlow: "OAuth/backend session -> FFmpeg local start",
-    stopFlow: "send q to FFmpeg, wait, terminate fallback, backend stop",
+    engine: 'Windows local FFmpeg camera-only DirectShow ingest + YouTube RTMP',
+    overlaySource: 'gameplay playerSettings/gameSettings/countdown snapshot written to overlay.json/html; FFmpeg stream uses no drawtext for crash safety',
+    startFlow: 'OAuth/backend session -> FFmpeg local start',
+    stopFlow: 'send q to FFmpeg, wait, terminate fallback, backend stop',
     usesNgrok: false,
     usesMetro: false,
     usesFfmpeg: true,
   });
 
   [
-    [
-      "Live entry screen",
-      "Windows live-platform -> live-platform-setup -> gameplay",
-      "kept",
-    ],
-    [
-      "Auth / stream key",
-      "OAuth/backend returns RTMP ingest for Windows FFmpeg",
-      "kept",
-    ],
-    [
-      "Camera source",
-      "DirectShow camera if available, otherwise safe generated background; hardware encoders disabled for crash safety",
-      "kept",
-    ],
-    [
-      "Overlay source of truth",
-      "gameplay playerSettings/gameSettings snapshot",
-      "kept",
-    ],
-    [
-      "Overlay rendering",
-      "FFmpeg drawbox/drawtext from snapshot plus JSON/HTML debug artifact",
-      "kept",
-    ],
-    ["Release dependency", "no Metro/ngrok for stream", "kept"],
+    ['Live entry screen', 'Windows live-platform -> live-platform-setup -> gameplay', 'kept'],
+    ['Auth / stream key', 'OAuth/backend returns RTMP ingest for Windows FFmpeg', 'kept'],
+    ['Camera source', 'DirectShow camera-only live; force unmount MediaCapture before YouTube create; desktop capture disabled', 'kept'],
+    ['Overlay source of truth', 'gameplay playerSettings/gameSettings snapshot', 'kept'],
+    ['Overlay rendering', 'JSON/HTML overlay artifact only; FFmpeg drawtext disabled to stop 0xC0000005 crashes', 'changed'],
+    ['Release dependency', 'no Metro/ngrok for stream', 'kept'],
   ].forEach(([item, windowsValue, status]) => {
-    console.log("[WindowsLiveDiff]", { item, windowsValue, status });
+    console.log('[WindowsLiveDiff]', {item, windowsValue, status});
   });
 };
 
 export const getWindowsFfmpegLiveStatus = async () => {
+  const nativeModule = getNativeModule();
+  if (nativeModule?.status) {
+    try {
+      const status = await nativeModule.status();
+      liveState = (status.status || liveState) as WindowsFfmpegLiveState;
+      return status;
+    } catch (error: any) {
+      return {status: liveState, error: error?.message || String(error)};
+    }
+  }
+
   return {
     status: liveState,
-    mode: "obs-bridge",
-    external: true,
-    note: "WindowsScore is not running FFmpeg internally. Use OBS/Aplus Live Worker for streaming.",
+    error:
+      Platform.OS === 'windows'
+        ? i18n.t('ffmpegModuleMissing') as string
+        : i18n.t('ffmpegWindowsOnly') as string,
   };
 };
 
 export const checkFfmpegAvailable = async (ffmpegPath?: string) => {
   const nativeModule = getNativeModule();
 
-  console.log("[LiveFfmpegCheck]", {
-    ffmpegPath: ffmpegPath || "AUTO_NATIVE",
+  console.log('[LiveFfmpegCheck]', {
+    ffmpegPath: ffmpegPath || 'AUTO_NATIVE',
     available: Boolean(nativeModule?.checkFfmpegAvailable),
     version: undefined,
     error: nativeModule?.checkFfmpegAvailable
       ? undefined
-      : "WindowsFfmpegLiveModule missing",
+      : 'WindowsFfmpegLiveModule missing',
   });
 
   if (!nativeModule?.checkFfmpegAvailable) {
     return {
       available: false,
       ffmpegPath: normalizeNativeFfmpegPath(ffmpegPath),
-      version: "",
-      error: i18n.t("ffmpegModuleMissing") as string,
+      version: '',
+      error: i18n.t('ffmpegModuleMissing') as string,
     };
   }
 
-  const resolvedFfmpegPath = await resolveUsableFfmpegPath(
-    nativeModule,
-    ffmpegPath,
-  );
+  const resolvedFfmpegPath = await resolveUsableFfmpegPath(nativeModule, ffmpegPath);
 
   try {
-    const result = await nativeModule.checkFfmpegAvailable(
-      resolvedFfmpegPath || "",
-    );
-    const finalPath = normalizeNativeFfmpegPath(
-      result?.ffmpegPath || resolvedFfmpegPath || ffmpegPath,
-    );
-    console.log("[LiveFfmpegCheck]", {
-      ffmpegPath: finalPath || result?.ffmpegPath || "AUTO_NATIVE",
+    const result = await nativeModule.checkFfmpegAvailable(resolvedFfmpegPath || '');
+    const finalPath = normalizeNativeFfmpegPath(result?.ffmpegPath || resolvedFfmpegPath || ffmpegPath);
+    console.log('[LiveFfmpegCheck]', {
+      ffmpegPath: finalPath || result?.ffmpegPath || 'AUTO_NATIVE',
       available: !!result?.available,
       version: result?.version,
       error: result?.error,
@@ -681,8 +492,8 @@ export const checkFfmpegAvailable = async (ffmpegPath?: string) => {
       ffmpegPath: finalPath,
     };
   } catch (error: any) {
-    console.log("[LiveFfmpegCheck]", {
-      ffmpegPath: resolvedFfmpegPath || ffmpegPath || "AUTO_NATIVE",
+    console.log('[LiveFfmpegCheck]', {
+      ffmpegPath: resolvedFfmpegPath || ffmpegPath || 'AUTO_NATIVE',
       available: false,
       version: undefined,
       error: error?.message || String(error),
@@ -695,6 +506,39 @@ export const checkFfmpegAvailable = async (ffmpegPath?: string) => {
   }
 };
 
+
+const parseFirstDirectShowVideoDeviceFromText = (text?: string): string => {
+  const value = String(text || '');
+  const lines = value.split(/\r?\n/g);
+  for (const line of lines) {
+    const match = line.match(/"([^"]+)"/);
+    if (!match?.[1]) {
+      continue;
+    }
+    const name = match[1].trim();
+    const lower = name.toLowerCase();
+    if (!name || lower.startsWith('@device')) {
+      continue;
+    }
+    // FFmpeg 8.x can print the DirectShow webcam as "2K Web Camera" (none)
+    // when called from the packaged RNW process. The native parser previously
+    // ignored it because it expected the suffix to be "(video)". Treat quoted
+    // non-audio device names as video candidates; audio devices usually include
+    // Microphone/Audio/Realtek in their friendly name.
+    if (
+      lower.includes('microphone') ||
+      lower.includes('audio') ||
+      lower.includes('realtek') ||
+      lower.includes('speaker') ||
+      lower.includes('stereo mix')
+    ) {
+      continue;
+    }
+    return name;
+  }
+  return '';
+};
+
 export const listWindowsFfmpegVideoDevices = async (ffmpegPath?: string) => {
   const nativeModule = getNativeModule();
 
@@ -702,40 +546,61 @@ export const listWindowsFfmpegVideoDevices = async (ffmpegPath?: string) => {
     const result = {
       videoDevices: [] as string[],
       audioDevices: [] as string[],
-      error: "WindowsFfmpegLiveModule.listDevices missing",
+      ffmpegPath: normalizeNativeFfmpegPath(ffmpegPath),
+      error: 'WindowsFfmpegLiveModule.listDevices missing',
     };
-    console.log("[LiveDeviceList]", {
+    console.log('[LiveDeviceList]', {
       ...result,
-      selectedVideoDevice: "",
-      selectedAudioDevice: "",
+      selectedVideoDevice: '',
+      selectedAudioDevice: '',
     });
     return result;
   }
 
   try {
-    const resolvedFfmpegPath = await resolveUsableFfmpegPath(
-      nativeModule,
-      ffmpegPath,
-    );
-    const result = await nativeModule.listDevices(resolvedFfmpegPath || "");
-    console.log("[LiveDeviceList]", {
-      videoDevices: result?.videoDevices || [],
-      audioDevices: result?.audioDevices || [],
-      selectedVideoDevice: "",
-      selectedAudioDevice: "",
+    const resolvedFfmpegPath = await resolveUsableFfmpegPath(nativeModule, ffmpegPath);
+    const result = await nativeModule.listDevices(resolvedFfmpegPath || '');
+    const nativeVideoDevices = Array.isArray(result?.videoDevices) ? result.videoDevices : [];
+    const friendlyVideoDevice = parseFirstDirectShowVideoDeviceFromText(result?.outputPreview || result?.rawOutput || '');
+    // v34: Prefer the DirectShow friendly camera name for the actual FFmpeg input.
+    // FFmpeg can enumerate the alternative @device_pnp moniker from inside the app,
+    // but the same moniker then fails at Start with `Unable to BindToObject`.
+    // The user's PowerShell test proved `video="2K Web Camera"` opens correctly,
+    // so put the friendly name first and keep monikers only as diagnostics/fallback.
+    const videoDevices = uniqueValues([
+      friendlyVideoDevice,
+      ...nativeVideoDevices,
+    ]);
+    const fallbackVideoDevice = friendlyVideoDevice && nativeVideoDevices.length === 0
+      ? friendlyVideoDevice
+      : '';
+    const normalizedResult = {
+      ...result,
+      videoDevices,
+      audioDevices: Array.isArray(result?.audioDevices) ? result.audioDevices : [],
+    };
+    console.log('[LiveDeviceList]', {
+      videoDevices: normalizedResult.videoDevices,
+      audioDevices: normalizedResult.audioDevices,
+      selectedVideoDevice: fallbackVideoDevice || '',
+      selectedAudioDevice: '',
+      ffmpegPath: result?.ffmpegPath || resolvedFfmpegPath || '',
+      outputPreview: result?.outputPreview || '',
+      parserFallback: Boolean(fallbackVideoDevice),
       error: result?.error,
     });
-    return result;
+    return normalizedResult;
   } catch (error: any) {
     const result = {
       videoDevices: [] as string[],
       audioDevices: [] as string[],
+      ffmpegPath: normalizeNativeFfmpegPath(ffmpegPath),
       error: error?.message || String(error),
     };
-    console.log("[LiveDeviceList]", {
+    console.log('[LiveDeviceList]', {
       ...result,
-      selectedVideoDevice: "",
-      selectedAudioDevice: "",
+      selectedVideoDevice: '',
+      selectedAudioDevice: '',
     });
     return result;
   }
@@ -748,25 +613,18 @@ const buildPoolOverlayFilter = (
 ) => {
   const left = normalizePlayer(snapshot, 0);
   const right = normalizePlayer(snapshot, 1);
-  const goalText = escapeDrawText(
-    `Mục tiêu ${Number(snapshot?.goal || 0) || "-"}`,
-  );
+  const goalText = escapeDrawText(`Mục tiêu ${Number(snapshot?.goal || 0) || '-'}`);
   const turnText = escapeDrawText(`Lượt ${Number(snapshot?.totalTurns || 0)}`);
-  const timerValue =
-    snapshot?.countdownTime == null
-      ? "--"
-      : `${Math.max(0, Math.ceil(Number(snapshot.countdownTime || 0)))}s`;
+  const timerValue = snapshot?.countdownTime == null
+    ? '--'
+    : `${Math.max(0, Math.ceil(Number(snapshot.countdownTime || 0)))}s`;
   const timerText = escapeDrawText(timerValue);
-  const leftLabel = escapeDrawText(
-    `${left.flag ? `${left.flag} ` : ""}${left.name}`,
-  );
-  const rightLabel = escapeDrawText(
-    `${right.name}${right.flag ? ` ${right.flag}` : ""}`,
-  );
+  const leftLabel = escapeDrawText(`${left.flag ? `${left.flag} ` : ''}${left.name}`);
+  const rightLabel = escapeDrawText(`${right.name}${right.flag ? ` ${right.flag}` : ''}`);
   const scoreText = escapeDrawText(`${left.score}      ${right.score}`);
   const barHeight = Math.round(height * 0.104);
   const barY = height - Math.round(height * 0.052) - barHeight;
-  const red = "0xC91D24";
+  const red = '0xC91D24';
 
   return [
     `drawbox=x=0:y=0:w=iw:h=110:color=black@0.48:t=fill`,
@@ -780,7 +638,7 @@ const buildPoolOverlayFilter = (
     `drawtext=text='${goalText}':x=(w-text_w)/2-${Math.round(width * 0.035)}:y=${barY + 68}:fontsize=18:fontcolor=white`,
     `drawtext=text='${turnText}':x=(w-text_w)/2+${Math.round(width * 0.045)}:y=${barY + 68}:fontsize=18:fontcolor=white`,
     `drawtext=text='${timerText}':x=(w-text_w)/2:y=${barY + barHeight + 8}:fontsize=20:fontcolor=white`,
-  ].join(",");
+  ].join(',');
 };
 
 const buildCaromOverlayFilter = (
@@ -794,21 +652,15 @@ const buildCaromOverlayFilter = (
   const panelH = Math.round(height * 0.16);
   const panelX = Math.round(width * 0.024);
   const panelY = height - Math.round(height * 0.04) - panelH;
-  const targetText = escapeDrawText(
-    `Target ${Number(snapshot?.goal || 0) || "-"}`,
-  );
+  const targetText = escapeDrawText(`Target ${Number(snapshot?.goal || 0) || '-'}`);
   const turnText = escapeDrawText(`Turn ${Number(snapshot?.totalTurns || 0)}`);
   const timerText = escapeDrawText(
     snapshot?.countdownTime == null
-      ? "--"
+      ? '--'
       : `${Math.max(0, Math.ceil(Number(snapshot.countdownTime || 0)))}s`,
   );
-  const leftLine = escapeDrawText(
-    `${left.flag ? `${left.flag} ` : ""}${left.name}  ${left.score}`,
-  );
-  const rightLine = escapeDrawText(
-    `${right.flag ? `${right.flag} ` : ""}${right.name}  ${right.score}`,
-  );
+  const leftLine = escapeDrawText(`${left.flag ? `${left.flag} ` : ''}${left.name}  ${left.score}`);
+  const rightLine = escapeDrawText(`${right.flag ? `${right.flag} ` : ''}${right.name}  ${right.score}`);
   const leftStats = escapeDrawText(
     `HR1 ${left.highestRate || left.currentPoint || 0}  HR2 ${left.secondHighestRate || 0}  AVG ${left.average || 0}`,
   );
@@ -829,7 +681,7 @@ const buildCaromOverlayFilter = (
     `drawtext=text='${targetText}':x=${panelX + 22}:y=${panelY + panelH - 30}:fontsize=16:fontcolor=white@0.9`,
     `drawtext=text='${turnText}':x=${panelX + Math.round(panelW * 0.48)}:y=${panelY + panelH - 30}:fontsize=16:fontcolor=white@0.9`,
     `drawtext=text='${timerText}':x=${panelX + panelW - 70}:y=${panelY + panelH - 30}:fontsize=16:fontcolor=white@0.9`,
-  ].join(",");
+  ].join(',');
 };
 
 const buildOverlayFilter = (
@@ -847,91 +699,123 @@ export const buildFfmpegCommand = (
   config: WindowsFfmpegLiveConfig,
   snapshot?: WindowsFfmpegOverlaySnapshot | null,
 ) => {
-  const { width, height } = resolveDimensions(config);
+  const {width, height} = resolveDimensions(config);
   const fps = resolveFps(config);
   const bitrate = resolveBitrate(config);
   const videoEncoder = resolveVideoEncoder(config);
+  const directShowInputMode = resolveDirectShowInputMode(config);
   const outputUrl = normalizeRtmpOutput(config.rtmpUrl, config.streamKey);
   const gop = Math.max(30, fps * 2);
-  const cameraDeviceName = String(config.cameraDeviceName || "").trim();
-  const audioDeviceName = String(config.audioDeviceName || "").trim();
-  const ffmpegPath = String(config.ffmpegPath || "ffmpeg").trim() || "ffmpeg";
+  const cameraDeviceName = String(config.cameraDeviceName || '').trim();
+  const audioDeviceName = String(config.audioDeviceName || '').trim();
+  const ffmpegPath = String(config.ffmpegPath || 'ffmpeg').trim() || 'ffmpeg';
   const useScreenCapture = isScreenCaptureSentinel(cameraDeviceName);
 
-  const args: string[] = ["-hide_banner", "-loglevel", "warning"];
+  const args: string[] = [
+    '-hide_banner',
+    '-nostdin',
+    '-loglevel',
+    'info',
+  ];
 
   if (useScreenCapture) {
-    // Safe fallback: use a generated video background instead of gdigrab desktop capture.
-    // gdigrab can crash or destabilize the RNW/UWP app on some machines when the
-    // gameplay screen starts updating. The generated source keeps YouTube live stable
-    // while preserving the scoreboard/overlay, until a real DirectShow camera is available.
+    // Debug-only fallback path. Production v38 does not add the screen sentinel to
+    // camera candidates, so normal YouTube live sends only the physical camera.
     args.push(
-      "-re",
-      "-f",
-      "lavfi",
-      "-i",
-      `color=c=0x101010:s=${width}x${height}:r=${fps}`,
+      '-thread_queue_size',
+      '512',
+      '-f',
+      'gdigrab',
+      '-framerate',
+      String(fps),
+      '-draw_mouse',
+      '0',
+      '-i',
+      'desktop',
     );
   } else {
-    args.push(
-      "-f",
-      "dshow",
-      "-video_size",
-      `${width}x${height}`,
-      "-framerate",
-      String(fps),
-      "-i",
-      `video=${cameraDeviceName}`,
-    );
+    // v22 CAMERA INGEST FIX:
+    // Do not force the DirectShow input to 1920x1080/30 at capture time.
+    // Some USB webcams advertise formats differently to DirectShow; forcing
+    // an unsupported input mode can keep YouTube in "upcoming" because FFmpeg
+    // never produces a stable ingest even though the process exists. Let the
+    // camera open with its native/default mode, then normalize the outgoing
+    // stream with encoder/output settings below.
+    // v36 CAMERA INGEST FIX:
+    // Do not force DirectShow input format/size either. The live log shows the
+    // process dies before YouTube ingest starts, so open the camera with its
+    // default DirectShow mode and normalize the outgoing stream below.
+    // This remains webcam-only: no desktop capture, no fake/test source fallback.
+    // v43: keep the camera input identical to the manual PowerShell command
+    // that successfully opened the user's webcam:
+    //   ffmpeg -hide_banner -f dshow -i 'video=2K Web Camera' -t 5 -f null -
+    // Earlier app builds added rtbufsize/thread_queue/input format options before
+    // -i. They are not required to open DirectShow and make diagnosis harder, so
+    // the live path now opens the camera with the minimal known-good input first,
+    // then normalizes the outgoing stream after capture.
+    args.push('-f', 'dshow');
+
+    // Keep optional modes disabled by default. They are retained only for future
+    // debugging and should not run unless explicitly set.
+    if (directShowInputMode === 'mjpeg720') {
+      args.push('-framerate', String(fps), '-video_size', '1280x720', '-vcodec', 'mjpeg');
+    } else if (directShowInputMode === 'mjpeg1080') {
+      args.push('-framerate', String(fps), '-video_size', '1920x1080', '-vcodec', 'mjpeg');
+    } else if (directShowInputMode === 'yuyv720') {
+      args.push('-framerate', String(fps), '-video_size', '1280x720', '-pixel_format', 'yuyv422');
+    }
+
+    args.push('-i', `video=${cameraDeviceName}`);
   }
 
   if (config.useAudio && audioDeviceName) {
-    args.push("-f", "dshow", "-i", `audio=${audioDeviceName}`);
+    args.push('-thread_queue_size', '512', '-f', 'dshow', '-i', `audio=${audioDeviceName}`);
   } else {
-    args.push(
-      "-f",
-      "lavfi",
-      "-i",
-      "anullsrc=channel_layout=stereo:sample_rate=44100",
-    );
+    args.push('-f', 'lavfi', '-i', 'anullsrc=channel_layout=stereo:sample_rate=44100');
   }
 
-  const overlayFilter = buildOverlayFilter(snapshot, width, height);
-  const videoFilter = overlayFilter;
   const encoderArgs = buildVideoEncoderArgs(videoEncoder);
 
+  // STABILITY v15:
+  // The Windows Event Viewer shows ffmpeg.exe itself crashing with 0xC0000005
+  // at the same offset while running the drawtext/drawbox filter graph from the
+  // packaged AppX path. For this build, do not use FFmpeg drawtext/filter_complex
+  // at all. Stream the camera/test source directly and keep scoreboard state in
+  // overlay.json/html for the web/next overlay pipeline. This is the first
+  // stable in-app live baseline: YouTube must get a stream and the app must not
+  // be killed by FFmpeg filter crashes.
   args.push(
-    "-filter_complex",
-    `[0:v]${videoFilter}[vout]`,
-    "-map",
-    "[vout]",
-    "-map",
-    config.useAudio && audioDeviceName ? "1:a?" : "1:a",
+    '-map',
+    '0:v',
+    '-map',
+    config.useAudio && audioDeviceName ? '1:a?' : '1:a',
+    '-vf',
+    'fps=30,scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,format=yuv420p',
     ...encoderArgs,
-    "-b:v",
+    '-b:v',
     bitrate,
-    "-maxrate",
+    '-maxrate',
     bitrate,
-    "-bufsize",
+    '-bufsize',
     `${Math.max(1, parseInt(bitrate, 10) * 2)}k`,
-    "-pix_fmt",
-    "yuv420p",
-    "-r",
+    '-pix_fmt',
+    'yuv420p',
+    '-r',
     String(fps),
-    "-g",
+    '-g',
     String(gop),
-    "-c:a",
-    "aac",
-    "-b:a",
-    "128k",
-    "-ar",
-    "44100",
-    "-f",
-    "flv",
+    '-c:a',
+    'aac',
+    '-b:a',
+    '128k',
+    '-ar',
+    '44100',
+    '-f',
+    'flv',
     outputUrl,
   );
 
-  const maskedArgs = args.map((arg) =>
+  const maskedArgs = args.map(arg =>
     arg === outputUrl
       ? normalizeRtmpOutput(config.rtmpUrl, maskStreamKey(config.streamKey))
       : arg.includes(config.streamKey)
@@ -939,39 +823,31 @@ export const buildFfmpegCommand = (
         : arg,
   );
 
-  const commandMasked = [
-    quoteArg(ffmpegPath),
-    ...maskedArgs.map(quoteArg),
-  ].join(" ");
+  const commandMasked = [quoteArg(ffmpegPath), ...maskedArgs.map(quoteArg)].join(' ');
 
-  console.log("[LiveFfmpegCommand]", {
-    commandMasked,
-    rtmpUrl: String(config.rtmpUrl || DEFAULT_YOUTUBE_RTMP_URL).replace(
-      /\/+$/g,
-      "",
-    ),
+  console.log('[LiveFfmpegCommand]', {
+    rtmpUrl: String(config.rtmpUrl || DEFAULT_YOUTUBE_RTMP_URL).replace(/\/+$/g, ''),
     streamKeyMasked: maskStreamKey(config.streamKey),
     resolution: `${width}x${height}`,
     fps,
     bitrate,
     videoEncoder,
-    captureSource: useScreenCapture ? "safe-background" : "directshow",
+    captureSource: useScreenCapture ? 'desktop-gdigrab' : 'directshow',
+    cameraInputMode: useScreenCapture ? DESKTOP_CAPTURE_LABEL : `directshow-camera-${directShowInputMode}`,
   });
 
   return {
     ffmpegPath,
     args,
     commandMasked,
-    rtmpUrl: String(config.rtmpUrl || DEFAULT_YOUTUBE_RTMP_URL).replace(
-      /\/+$/g,
-      "",
-    ),
+    rtmpUrl: String(config.rtmpUrl || DEFAULT_YOUTUBE_RTMP_URL).replace(/\/+$/g, ''),
     streamKeyMasked: maskStreamKey(config.streamKey),
     resolution: `${width}x${height}`,
     fps,
     bitrate,
     videoEncoder,
-    captureSource: useScreenCapture ? "safe-background" : "directshow",
+    captureSource: useScreenCapture ? 'desktop-gdigrab' : 'directshow',
+    cameraInputMode: useScreenCapture ? DESKTOP_CAPTURE_LABEL : `directshow-camera-${directShowInputMode}`,
   };
 };
 
@@ -988,7 +864,7 @@ export const updateWindowsFfmpegOverlay = async (
   const payload = {
     ...snapshot,
     updatedAt: now,
-    source: "gameplay-shared-overlay-snapshot-data",
+    source: 'gameplay-shared-overlay-snapshot-data',
     parity: buildOverlayParity(snapshot),
   };
 
@@ -999,7 +875,7 @@ export const updateWindowsFfmpegOverlay = async (
     countdownTime: Math.ceil(Number(snapshot.countdownTime || 0)),
     totalTurns: snapshot.totalTurns,
     goal: snapshot.goal,
-    players: (snapshot.players || []).slice(0, 2).map((player) => ({
+    players: (snapshot.players || []).slice(0, 2).map(player => ({
       name: player?.name,
       flag: player?.flag,
       score: player?.score,
@@ -1010,10 +886,7 @@ export const updateWindowsFfmpegOverlay = async (
     })),
   });
 
-  if (
-    overlaySignature === lastOverlayWriteSignature &&
-    now - lastOverlayWriteAt < 900
-  ) {
+  if (overlaySignature === lastOverlayWriteSignature && now - lastOverlayWriteAt < 900) {
     return true;
   }
 
@@ -1027,30 +900,37 @@ export const updateWindowsFfmpegOverlay = async (
   const players = snapshot.players || [];
   const left = normalizePlayer(snapshot, 0);
   const right = normalizePlayer(snapshot, 1);
-  const timerText =
-    snapshot.countdownTime == null
-      ? "--"
-      : `${Math.max(0, Math.ceil(Number(snapshot.countdownTime || 0)))}s`;
+  const timerText = snapshot.countdownTime == null
+    ? '--'
+    : `${Math.max(0, Math.ceil(Number(snapshot.countdownTime || 0)))}s`;
 
   try {
-    await RNFS.writeFile(
-      paths.jsonPath,
-      JSON.stringify(payload, null, 2),
-      "utf8",
-    );
+    const payloadJson = JSON.stringify(payload, null, 2);
+    await RNFS.writeFile(paths.jsonPath, payloadJson, 'utf8');
+    try {
+      await RNFS.mkdir(paths.nativeRoot);
+      await RNFS.writeFile(paths.nativeJsonPath, payloadJson, 'utf8');
+    } catch (nativeOverlayError) {
+      if (shouldLogOverlay) {
+        console.log('[LiveOverlayNativeCopy] failed', {
+          nativeJsonPath: paths.nativeJsonPath,
+          error: nativeOverlayError,
+        });
+      }
+    }
     await RNFS.writeFile(
       paths.htmlPath,
-      `<!doctype html><html><head><meta charset="utf-8"><style>body{margin:0;background:transparent;color:white;font-family:Arial,sans-serif}.top{position:absolute;left:48px;top:28px;font-weight:900;font-size:36px}.score{position:absolute;left:7%;right:7%;bottom:5.2%;height:104px;background:rgba(201,29,36,.88);display:flex;align-items:center;justify-content:space-between;padding:0 42px;box-sizing:border-box}.name{font-size:28px;font-weight:800}.points{font-size:58px;font-weight:900}.meta{position:absolute;left:0;right:0;bottom:18px;text-align:center;font-size:20px}</style></head><body><div class="top">A+Plus</div><div class="score"><div class="name">${left.flag ? `${left.flag} ` : ""}${left.name}</div><div class="points">${left.score} - ${right.score}</div><div class="name">${right.name}${right.flag ? ` ${right.flag}` : ""}</div></div><div class="meta">Target ${snapshot.goal || "-"} · Turn ${snapshot.totalTurns || 0} · ${timerText}</div></body></html>`,
-      "utf8",
+      `<!doctype html><html><head><meta charset="utf-8"><style>body{margin:0;background:transparent;color:white;font-family:Arial,sans-serif}.top{position:absolute;left:48px;top:28px;font-weight:900;font-size:36px}.score{position:absolute;left:7%;right:7%;bottom:5.2%;height:104px;background:rgba(201,29,36,.88);display:flex;align-items:center;justify-content:space-between;padding:0 42px;box-sizing:border-box}.name{font-size:28px;font-weight:800}.points{font-size:58px;font-weight:900}.meta{position:absolute;left:0;right:0;bottom:18px;text-align:center;font-size:20px}</style></head><body><div class="top">A+Plus</div><div class="score"><div class="name">${left.flag ? `${left.flag} ` : ''}${left.name}</div><div class="points">${left.score} - ${right.score}</div><div class="name">${right.name}${right.flag ? ` ${right.flag}` : ''}</div></div><div class="meta">Target ${snapshot.goal || '-'} · Turn ${snapshot.totalTurns || 0} · ${timerText}</div></body></html>`,
+      'utf8',
     );
     lastOverlayPath = paths.jsonPath;
   } catch (error) {
-    console.log("[LiveOverlay]", {
-      overlayMode: "json/html",
+    console.log('[LiveOverlay]', {
+      overlayMode: 'json/html',
       overlayPath: paths.jsonPath,
       overlayExists: false,
       overlayUpdatedAt: Date.now(),
-      snapshotScore: players.map((player) => player.score),
+      snapshotScore: players.map(player => player.score),
       snapshotMode: snapshot.category,
       error,
     });
@@ -1070,21 +950,23 @@ export const updateWindowsFfmpegOverlay = async (
   const parity = buildOverlayParity(snapshot);
 
   if (shouldLogOverlay) {
-    console.log("[WindowsLiveOverlayParity]", parity);
-    console.log("[WindowsLiveOverlayUpdate]", {
+    console.log('[WindowsLiveOverlayParity]', parity);
+    console.log('[WindowsLiveOverlayUpdate]', {
       overlayPath: paths.jsonPath,
+      nativeOverlayPath: paths.nativeJsonPath,
       updatedAt: payload.updatedAt,
-      scoreSnapshot: players.map((player) => player.score),
+      scoreSnapshot: players.map(player => player.score),
       timerSnapshot: snapshot.countdownTime,
       fileExists: overlayExists,
       fileSize,
     });
-    console.log("[LiveOverlay]", {
-      overlayMode: "drawtext+json/html",
+    console.log('[LiveOverlay]', {
+      overlayMode: 'json/html-only-ffmpeg-drawtext-disabled',
       overlayPath: paths.jsonPath,
+      nativeOverlayPath: paths.nativeJsonPath,
       overlayExists,
       overlayUpdatedAt: payload.updatedAt,
-      snapshotScore: players.map((player) => player.score),
+      snapshotScore: players.map(player => player.score),
       snapshotMode: snapshot.category,
     });
   }
@@ -1092,175 +974,316 @@ export const updateWindowsFfmpegOverlay = async (
   return true;
 };
 
-const writeObsBridgeSessionFile = async (
-  config: WindowsFfmpegLiveConfig,
-  snapshot?: WindowsFfmpegOverlaySnapshot | null,
-) => {
-  const paths = getWindowsLiveOverlayPaths();
-  try {
-    await ensureDir(paths.root);
-    const server = config.rtmpUrl || DEFAULT_YOUTUBE_RTMP_URL;
-    const streamKey = String(config.streamKey || "").trim();
-    const payload = {
-      mode: "obs-bridge",
-      title: "AplusScore OBS Bridge",
-      createdAt: Date.now(),
-      createdAtIso: new Date().toISOString(),
-      server,
-      streamKey,
-      rtmpUrl: server,
-      rtmpUrlWithKey: streamKey
-        ? `${server.replace(/\/+$/g, "")}/${streamKey}`
-        : server,
-      overlayJsonPath: paths.jsonPath,
-      overlayHtmlPath: paths.htmlPath,
-      obsBrowserSourceUrl: `file:///${normalizePath(paths.htmlPath)}`,
-      recommendedObs: {
-        video: "1920x1080",
-        fps: 30,
-        encoder: "NVIDIA NVENC H.264 nếu có, nếu không dùng x264",
-        bitrate: "6000k - 9000k",
-        keyframeInterval: 2,
-      },
-      snapshot: {
-        category: snapshot?.category,
-        mode: snapshot?.mode,
-        score: (snapshot?.players || [])
-          .slice(0, 2)
-          .map((player) => player?.score || 0),
-        timer: snapshot?.countdownTime,
-        turn: snapshot?.totalTurns,
-      },
-    };
-    const sessionPath = `${paths.root}/obs-bridge-session.json`;
-    await RNFS.writeFile(sessionPath, JSON.stringify(payload, null, 2), "utf8");
-    console.log("[OBSBridgeSession]", {
-      sessionPath,
-      overlayHtmlPath: paths.htmlPath,
-      overlayJsonPath: paths.jsonPath,
-      hasStreamKey: Boolean(streamKey),
-      server,
-    });
-    return sessionPath;
-  } catch (error: any) {
-    console.log(
-      "[OBSBridgeSession] write failed",
-      error?.message || String(error),
-    );
-    return "";
-  }
-};
-
 export const startWindowsFfmpegYouTubeLive = async (
   config: WindowsFfmpegLiveConfig,
   snapshot?: WindowsFfmpegOverlaySnapshot | null,
 ) => {
-  if (Platform.OS !== "windows") {
-    return { ok: false, error: i18n.t("ffmpegWindowsOnly") as string };
+  if (Platform.OS !== 'windows') {
+    return {ok: false, error: i18n.t('ffmpegWindowsOnly') as string};
   }
 
-  // OBS Bridge mode:
-  // Do NOT start FFmpeg/camera/native streaming inside the RNW gameplay app.
-  // The app only creates/updates overlay.json + overlay.html and writes the
-  // YouTube RTMP session details for OBS/Aplus Live Worker to use.
-  // This avoids native MediaCapture/FFmpeg/encoder crashes taking down the score app.
-  liveState = "live";
-  currentConfig = {
-    ...config,
-    platform: "youtube",
+  logLiveAuditOnce();
+
+  const normalizedConfig: WindowsFfmpegLiveConfig = {
+    platform: 'youtube',
     rtmpUrl: config.rtmpUrl || DEFAULT_YOUTUBE_RTMP_URL,
-    overlayMode: config.overlayMode || "drawtext",
+    streamKey: config.streamKey,
+    // v41: sanitize saved/debug FFmpeg paths from AppX/Packages. Native will
+    // auto-resolve to a normal desktop LocalAppData copy before DirectShow opens.
+    ffmpegPath: normalizeNativeFfmpegPath(config.ffmpegPath),
+    cameraDeviceName: config.cameraDeviceName,
+    audioDeviceName: config.audioDeviceName,
+    useAudio: config.useAudio ?? false,
+    // Stable detached live process with production-quality 1080p30 output.
+    resolution: config.resolution || Resolution.FullHD,
+    fps: config.fps || Fps.F30,
+    bitrate: config.bitrate || '8000k',
+    overlayMode: 'none',
+    videoEncoder: 'libx264',
   };
 
-  console.log("[LiveWindowsMode]", {
-    selectedMode: "obs-bridge-external-stream",
-    usesMetro: false,
+  console.log('[LiveWindowsMode]', {
+    selectedMode: 'ffmpeg-local',
     usesNgrok: false,
-    usesRenderForAuth: true,
-    usesRenderForStream: false,
-    startsFfmpegInsideApp: false,
-    startsCameraInsideApp: false,
+    usesMetro: false,
+    usesRender: false,
   });
 
-  await updateWindowsFfmpegOverlay(snapshot || { players: [] });
-  const sessionPath = await writeObsBridgeSessionFile(currentConfig, snapshot);
-  const obsWorker = await startObsBridgeWorker(sessionPath);
-
-  console.log("[WindowsLiveAudit]", {
-    engine:
-      "OBS Bridge auto-start. WindowsScore starts OBS externally, not FFmpeg/camera inside app.",
-    files: [
-      "src/services/livestream/WindowsFfmpegLiveEngine.ts",
-      "src/scenes/game/game-play/GamePlayViewModel.tsx",
-      "src/services/youtubeLiveFlow.ts",
-    ],
-    overlaySource:
-      "gameplay playerSettings/gameSettings/countdown snapshot written to overlay.json and overlay.html",
-    startFlow:
-      "OAuth/backend session -> OBS Bridge files -> launch OBS with --startstreaming",
-    stopFlow:
-      "WindowsScore stops bridge state only; OBS can be stopped manually or by future worker command",
-    usesFfmpegInsideApp: false,
-    usesCameraInsideApp: false,
-    sessionPath,
-    obsWorker,
-  });
-
-  console.log("[WindowsLiveDiff]", {
-    item: "Crash isolation",
-    status: "changed",
-    windowsValue:
-      "FFmpeg/camera livestream removed from RNW app process; use OBS external stream",
-  });
-
-  console.log("[LiveFfmpegProcess]", {
-    start: false,
-    pid: undefined,
-    stderrSummary: undefined,
-    status: obsWorker?.ok ? "external-obs-autostarted" : "external-obs-bridge",
-    stopped: true,
-    exitCode: undefined,
-    error: obsWorker?.error,
-  });
-  console.log("[LiveState]", {
-    status: "live",
-    mode: "obs-bridge",
-    sessionPath,
-    obsWorker,
-    overlayPath: getLastWindowsFfmpegOverlayPath(),
-  });
-
-  return {
-    ok: true,
-    pid: undefined,
-    external: true,
-    mode: "obs-bridge",
-    sessionPath,
-    obsWorker,
-    overlayPath: getLastWindowsFfmpegOverlayPath(),
-  };
-};
-
-export const stopWindowsFfmpegYouTubeLive = async (reason = "user-stop") => {
-  if (Platform.OS !== "windows") {
-    return { ok: true, stopped: true };
+  if (!normalizedConfig.streamKey?.trim()) {
+    liveState = 'error';
+    console.log('[LiveState]', {status: 'error', reason: 'missing-stream-key'});
+    return {ok: false, error: i18n.t('ffmpegStreamKeyMissing') as string};
   }
 
-  liveState = "stopped";
-  currentConfig = null;
-  console.log("[LiveState]", { status: "stopped", reason, mode: "obs-bridge" });
-  console.log("[WindowsLiveStop]", {
-    processStopped: true,
-    cleanupDone: true,
-    mode: "obs-bridge",
-    note: "WindowsScore did not start FFmpeg. Stop OBS/Aplus Live Worker separately.",
+  await updateWindowsFfmpegOverlay(snapshot || {players: []});
+
+  const ffmpegCheck = await checkFfmpegAvailable(normalizedConfig.ffmpegPath);
+  if (ffmpegCheck?.available && ffmpegCheck?.ffmpegPath) {
+    normalizedConfig.ffmpegPath = ffmpegCheck.ffmpegPath;
+  }
+
+  if (!ffmpegCheck?.available) {
+    liveState = 'error';
+    console.log('[LiveFfmpegProcess]', {
+      start: false,
+      pid: undefined,
+      stderrSummary: ffmpegCheck?.error,
+      status: 'error',
+      stopped: false,
+      exitCode: undefined,
+      error: ffmpegCheck?.error,
+    });
+    return {
+      ok: false,
+      error:
+        ffmpegCheck?.error ||
+        i18n.t('ffmpegNotFound') as string,
+    };
+  }
+
+  const deviceList = await listWindowsFfmpegVideoDevices(normalizedConfig.ffmpegPath);
+  if (deviceList.ffmpegPath) {
+    normalizedConfig.ffmpegPath = deviceList.ffmpegPath;
+  }
+
+  const cameraCandidates = uniqueValues([
+    normalizedConfig.cameraDeviceName,
+    ...(deviceList.videoDevices || []),
+  ]).filter(device => !device.toLowerCase().startsWith('@device'));
+
+  // v38: camera-only YouTube live. The v37 desktop fallback proved YouTube ingest
+  // works, but it streamed the operator's whole desktop. Production must send only
+  // the selected DirectShow camera. GamePlayViewModel now unmounts/releases the
+  // MediaCapture preview before this function runs so FFmpeg can own the webcam.
+  if (!normalizedConfig.cameraDeviceName?.trim() && cameraCandidates[0]) {
+    normalizedConfig.cameraDeviceName = cameraCandidates[0];
+  }
+
+  if (cameraCandidates.length === 0) {
+    liveState = 'error';
+    const error = 'Không tìm thấy camera Windows để phát YouTube.';
+    console.log('[LiveDeviceList]', {
+      videoDevices: deviceList.videoDevices || [],
+      audioDevices: deviceList.audioDevices || [],
+      ffmpegPath: deviceList.ffmpegPath || normalizedConfig.ffmpegPath || '',
+      selectedVideoDevice: '',
+      candidateCount: 0,
+      selectedAudioDevice: normalizedConfig.audioDeviceName || '',
+      reason: 'camera-only-no-directshow-camera-found',
+    });
+    console.log('[LiveState]', {status: 'error', reason: 'no-camera-device'});
+    return {ok: false, error};
+  }
+
+  console.log('[LiveDeviceList]', {
+    videoDevices: deviceList.videoDevices || [],
+    audioDevices: deviceList.audioDevices || [],
+    ffmpegPath: deviceList.ffmpegPath || normalizedConfig.ffmpegPath || '',
+    selectedVideoDevice: normalizedConfig.cameraDeviceName || cameraCandidates[0] || '',
+    candidateCount: cameraCandidates.length,
+    selectedAudioDevice: normalizedConfig.audioDeviceName || '',
+    reason: 'camera-only-directshow-no-desktop-capture',
   });
-  return { ok: true, stopped: true, external: true, mode: "obs-bridge" };
+
+  const nativeModule = getNativeModule();
+
+  if (!nativeModule?.start) {
+    liveState = 'error';
+    const error = i18n.t('ffmpegStartModuleMissing') as string;
+    console.log('[LiveFfmpegProcess]', {
+      start: false,
+      pid: undefined,
+      stderrSummary: error,
+      status: 'error',
+      stopped: false,
+      exitCode: undefined,
+      error,
+    });
+    return {ok: false, error};
+  }
+
+  const directShowInputModeCandidates = buildDirectShowInputModeCandidates();
+  const encoderCandidates = buildEncoderCandidates(normalizedConfig.videoEncoder);
+  let lastStartError = '';
+
+  for (const cameraDeviceName of cameraCandidates) {
+    for (const directShowInputMode of directShowInputModeCandidates) {
+      for (const videoEncoder of encoderCandidates) {
+        const attemptConfig: WindowsFfmpegLiveConfig = {
+          ...normalizedConfig,
+          cameraDeviceName,
+          directShowInputMode,
+          videoEncoder,
+        };
+      const command = buildFfmpegCommand(attemptConfig, snapshot);
+
+      console.log('[WindowsLiveStart]', {
+        mode: 'ffmpeg-local-youtube-rtmp',
+        rtmpUrl: command.rtmpUrl,
+        streamKeyMasked: command.streamKeyMasked,
+        cameraDevice: isScreenCaptureSentinel(attemptConfig.cameraDeviceName) ? 'desktop' : attemptConfig.cameraDeviceName,
+        captureSource: isScreenCaptureSentinel(attemptConfig.cameraDeviceName) ? 'desktop-gdigrab-live-capture' : 'directshow-camera',
+        overlayEnabled: attemptConfig.overlayMode !== 'none',
+        overlayPath: getLastWindowsFfmpegOverlayPath(),
+        ffmpegAvailable: !!ffmpegCheck?.available,
+        videoEncoder,
+        directShowInputMode,
+        cameraCandidateIndex: cameraCandidates.indexOf(cameraDeviceName) + 1,
+        cameraCandidateCount: cameraCandidates.length,
+        commandPreview: '[hidden to avoid Metro/log pressure]',
+      });
+
+      liveState = 'starting';
+      console.log('[LiveState]', {status: 'starting', videoEncoder, cameraDeviceName, directShowInputMode});
+
+      try {
+        const result = await nativeModule.start({
+          ffmpegPath: command.ffmpegPath || attemptConfig.ffmpegPath || '',
+          args: command.args,
+          commandMasked: command.commandMasked,
+        });
+
+        if (result?.error) {
+          throw new Error(result.error);
+        }
+
+        // Do not mark the app live immediately. The old flow returned success as
+        // soon as CreateProcessW succeeded, so YouTube could stay "upcoming" while
+        // FFmpeg had already exited with DirectShow/RTMP errors. Keep the process
+        // alive for a short sanity window before accepting the live state.
+        let lastStatus: any = null;
+        for (let attempt = 0; attempt < 4; attempt += 1) {
+          await wait(750);
+          lastStatus = await nativeModule.status?.();
+          if (looksLikeEarlyFfmpegFailure(lastStatus)) {
+            const failureSummary = getStartupFailureSummary(lastStatus);
+            throw new Error(failureSummary || 'FFmpeg stopped before YouTube ingest became active');
+          }
+        }
+
+        liveState = 'live';
+        currentConfig = attemptConfig;
+
+        console.log('[LiveFfmpegProcess]', {
+          start: true,
+          pid: result?.pid,
+          stderrSummary: getStartupFailureSummary(lastStatus) || undefined,
+          status: 'live',
+          stopped: false,
+          exitCode: undefined,
+          error: undefined,
+          videoEncoder,
+          directShowInputMode,
+          cameraDeviceName,
+        });
+        console.log('[LiveState]', {status: 'live', videoEncoder, cameraDeviceName, directShowInputMode});
+
+        return {ok: true, pid: result?.pid, videoEncoder};
+      } catch (error: any) {
+        lastStartError = error?.message || String(error);
+        console.log('[LiveFfmpegProcess]', {
+          start: false,
+          pid: undefined,
+          stderrSummary: lastStartError,
+          status: 'retrying',
+          stopped: true,
+          exitCode: undefined,
+          error: lastStartError,
+          videoEncoder,
+          directShowInputMode,
+          cameraDeviceName,
+          nextCamera: cameraCandidates[cameraCandidates.indexOf(cameraDeviceName) + 1] || '',
+          nextEncoder: encoderCandidates[encoderCandidates.indexOf(videoEncoder) + 1] || '',
+        });
+        try {
+          await nativeModule.stop?.();
+        } catch (_stopError) {}
+        await wait(500);
+      }
+      }
+    }
+  }
+
+  liveState = 'error';
+  console.log('[LiveState]', {status: 'error', reason: 'all-camera-or-encoder-candidates-failed'});
+  return {
+    ok: false,
+    error: lastStartError || 'FFmpeg could not start with any camera device or video encoder',
+  };
 };
 
-export const toWindowsFfmpegSnapshot = (
-  snapshot: any,
-): WindowsFfmpegOverlaySnapshot => {
+export const stopWindowsFfmpegYouTubeLive = async (reason = 'user-stop') => {
+  if (Platform.OS !== 'windows') {
+    return {ok: true, stopped: true};
+  }
+
+  const nativeModule = getNativeModule();
+  liveState = 'stopping';
+  console.log('[LiveState]', {status: 'stopping', reason});
+
+  if (!nativeModule?.stop) {
+    liveState = 'stopped';
+    currentConfig = null;
+    console.log('[LiveFfmpegProcess]', {
+      start: false,
+      pid: undefined,
+      stderrSummary: 'WindowsFfmpegLiveModule.stop missing',
+      status: 'stopped',
+      stopped: true,
+      exitCode: undefined,
+      error: undefined,
+    });
+    console.log('[WindowsLiveStop]', {
+      processStopped: true,
+      cleanupDone: true,
+      error: 'WindowsFfmpegLiveModule.stop missing',
+    });
+    console.log('[LiveState]', {status: 'stopped'});
+    return {ok: true, stopped: true};
+  }
+
+  try {
+    const result = await nativeModule.stop();
+    liveState = 'stopped';
+    currentConfig = null;
+    console.log('[LiveFfmpegProcess]', {
+      start: false,
+      pid: undefined,
+      stderrSummary: undefined,
+      status: 'stopped',
+      stopped: true,
+      exitCode: result?.exitCode,
+      error: result?.error,
+    });
+    console.log('[WindowsLiveStop]', {
+      processStopped: !!result?.stopped,
+      cleanupDone: true,
+      error: result?.error,
+    });
+    console.log('[LiveState]', {status: 'stopped'});
+    return {ok: true, stopped: true, exitCode: result?.exitCode};
+  } catch (error: any) {
+    liveState = 'error';
+    console.log('[LiveFfmpegProcess]', {
+      start: false,
+      pid: undefined,
+      stderrSummary: error?.message || String(error),
+      status: 'error',
+      stopped: false,
+      exitCode: undefined,
+      error: error?.message || String(error),
+    });
+    console.log('[WindowsLiveStop]', {
+      processStopped: false,
+      cleanupDone: false,
+      error: error?.message || String(error),
+    });
+    console.log('[LiveState]', {status: 'error'});
+    return {ok: false, error: error?.message || String(error)};
+  }
+};
+
+export const toWindowsFfmpegSnapshot = (snapshot: any): WindowsFfmpegOverlaySnapshot => {
   const players = snapshot?.playerSettings?.playingPlayers || [];
   return {
     category: snapshot?.gameSettings?.category || snapshot?.category,
@@ -1268,24 +1291,15 @@ export const toWindowsFfmpegSnapshot = (
     currentPlayerIndex: snapshot?.currentPlayerIndex,
     countdownTime: snapshot?.countdownTime,
     totalTurns: snapshot?.totalTurns,
-    goal:
-      snapshot?.goal ||
-      snapshot?.gameSettings?.players?.goal?.goal ||
-      snapshot?.playerSettings?.goal?.goal,
+    goal: snapshot?.goal || snapshot?.gameSettings?.players?.goal?.goal || snapshot?.playerSettings?.goal?.goal,
     players: players.map((player: any) => ({
       name: player?.name,
-      flag:
-        typeof player?.flag === "string"
-          ? player.flag
-          : player?.country?.flag ||
-            player?.countryCode ||
-            player?.country ||
-            "",
+      flag: typeof player?.flag === 'string'
+        ? player.flag
+        : player?.country?.flag || player?.countryCode || player?.country || '',
       score: Number(player?.totalPoint || 0),
       currentPoint: Number(player?.proMode?.currentPoint || 0),
-      highestRate: Number(
-        player?.proMode?.highestRate || player?.proMode?.highestRun || 0,
-      ),
+      highestRate: Number(player?.proMode?.highestRate || player?.proMode?.highestRun || 0),
       secondHighestRate: Number(player?.proMode?.secondHighestRate || 0),
       average: Number(player?.proMode?.average || 0),
     })),
@@ -1306,13 +1320,10 @@ export const createWindowsFfmpegSnapshotFromGameState = (params: {
     currentPlayerIndex: params.currentPlayerIndex,
     countdownTime: params.countdownTime,
     totalTurns: params.totalTurns,
-    goal:
-      params.gameSettings?.players?.goal?.goal ||
-      params.playerSettings?.goal?.goal,
+    goal: params.gameSettings?.players?.goal?.goal || params.playerSettings?.goal?.goal,
     playerSettings: params.playerSettings,
   });
 
-export const isWindowsFfmpegLocalLiveRunning = () =>
-  liveState === "live" || liveState === "starting";
+export const isWindowsFfmpegLocalLiveRunning = () => liveState === 'live' || liveState === 'starting';
 export const getCurrentWindowsFfmpegLiveConfig = () => currentConfig;
 export const getLastWindowsFfmpegOverlayPath = () => lastOverlayPath;

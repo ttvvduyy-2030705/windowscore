@@ -216,18 +216,36 @@ const GameSettings = (props: Props) => {
               </Pressable>
 
               <Pressable
+                disabled={viewModel.youtubeLiveLoading}
                 onPress={viewModel.onStart}
                 style={({pressed}) => [
                   styles.footerButton,
                   styles.startButton,
-                  pressed && styles.buttonPressed,
+                  viewModel.youtubeLiveLoading && styles.buttonDisabled,
+                  pressed && !viewModel.youtubeLiveLoading && styles.buttonPressed,
                 ]}>
-                <Text style={styles.startText}>{startText}</Text>
+                {viewModel.youtubeLiveLoading ? (
+                  <ActivityIndicator color={'#FFFFFF'} size="small" />
+                ) : (
+                  <Text style={styles.startText}>{startText}</Text>
+                )}
               </Pressable>
             </View>
           </View>
         </View>
       </View>
+
+      {viewModel.youtubeLiveLoading ? (
+        <View style={styles.liveLoadingOverlay} pointerEvents="auto">
+          <View style={styles.liveLoadingCard}>
+            <ActivityIndicator color={'#FFFFFF'} size="large" />
+            <Text style={styles.liveLoadingTitle}>Đang tải phiên live</Text>
+            <Text style={styles.liveLoadingMessage}>
+              {viewModel.youtubeLiveLoadingMessage || 'Đang chờ YouTube xác nhận live...'}
+            </Text>
+          </View>
+        </View>
+      ) : null}
     </Container>
   );
 };

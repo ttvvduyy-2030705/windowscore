@@ -526,6 +526,15 @@ namespace
 
                 co_await media.StopPreviewAsync();
                 co_await ResumeOnCameraDispatcherAsync();
+                try
+                {
+                    media.Close();
+                    DebugLog(L"preview MediaCapture closed on unload");
+                }
+                catch (hresult_error const &ex)
+                {
+                    DebugLog(L"preview close on unload ignored: " + std::wstring(ex.message().c_str()));
+                }
             }
 
             if (g_mediaCapture == media)
@@ -580,7 +589,10 @@ namespace
             MediaCaptureInitializationSettings settings;
             settings.StreamingCaptureMode(StreamingCaptureMode::AudioAndVideo);
             settings.VideoDeviceId(selected.Id());
-            settings.SharingMode(MediaCaptureSharingMode::ExclusiveControl);
+            // v38: Keep preview in shared-read mode during normal gameplay. When YouTube
+            // camera-only live starts, JS unmounts this view and native release closes
+            // MediaCapture so FFmpeg/DirectShow can own the webcam.
+            settings.SharingMode(MediaCaptureSharingMode::SharedReadOnly);
             settings.MemoryPreference(MediaCaptureMemoryPreference::Auto);
 
             co_await ResumeOnCameraDispatcherAsync();
@@ -669,6 +681,103 @@ namespace winrt::billiardsgrade::implementation
         }
 
         co_return co_await StopRecordingOnCameraDispatcherAsync();
+    }
+    IAsyncOperation<bool> WindowsCameraReleaseForExternalUseAsync()
+    {
+        try
+        {
+            DebugLog(L"external live release requested");
+
+            if (g_cameraDispatcher)
+            {
+                co_await ResumeOnCameraDispatcherAsync();
+            }
+
+            auto media = GetMediaCaptureForCurrentApartment();
+            if (!media)
+            {
+                g_mediaCapture = nullptr;
+                g_mediaCaptureAgile = {};
+                g_previewReady = false;
+                DebugLog(L"external live release: no active MediaCapture");
+                co_return true;
+            }
+
+            if (g_isRecording || g_recordingStarting)
+            {
+                try
+                {
+                    co_await media.StopRecordAsync();
+                    co_await ResumeOnCameraDispatcherAsync();
+                    DebugLog(L"external live release: recording stopped");
+                }
+                catch (hresult_error const &ex)
+                {
+                    DebugLog(L"external live release: stop record ignored: " + std::wstring(ex.message().c_str()));
+                }
+            }
+
+            g_isRecording = false;
+            g_recordingStarting = false;
+            g_recordingStopping = false;
+            g_currentRecordingFile = nullptr;
+
+            try
+            {
+                co_await media.StopPreviewAsync();
+                co_await ResumeOnCameraDispatcherAsync();
+                DebugLog(L"external live release: preview stopped");
+            }
+            catch (hresult_error const &ex)
+            {
+                DebugLog(L"external live release: stop preview ignored: " + std::wstring(ex.message().c_str()));
+            }
+
+            try
+            {
+                media.Close();
+                DebugLog(L"external live release: MediaCapture closed");
+            }
+            catch (hresult_error const &ex)
+            {
+                DebugLog(L"external live release: close ignored: " + std::wstring(ex.message().c_str()));
+            }
+
+            g_mediaCapture = nullptr;
+            g_mediaCaptureAgile = {};
+            g_previewReady = false;
+
+            // Give Windows/DirectShow a short moment to publish the webcam back to the system
+            // before FFmpeg tries BindToObject. Without this wait the device can still be
+            // visible in list_devices but fail to open with I/O error.
+            co_await winrt::resume_after(std::chrono::milliseconds(600));
+            DebugLog(L"external live release completed");
+            co_return true;
+        }
+        catch (hresult_error const &ex)
+        {
+            g_isRecording = false;
+            g_recordingStarting = false;
+            g_recordingStopping = false;
+            g_currentRecordingFile = nullptr;
+            g_mediaCapture = nullptr;
+            g_mediaCaptureAgile = {};
+            g_previewReady = false;
+            DebugLog(L"external live release error: " + std::wstring(ex.message().c_str()));
+            throw;
+        }
+        catch (...)
+        {
+            g_isRecording = false;
+            g_recordingStarting = false;
+            g_recordingStopping = false;
+            g_currentRecordingFile = nullptr;
+            g_mediaCapture = nullptr;
+            g_mediaCaptureAgile = {};
+            g_previewReady = false;
+            DebugLog(L"external live release error: unknown");
+            throw hresult_error(E_FAIL, L"Windows camera release for external live failed");
+        }
     }
     winrt::hstring WindowsCameraViewManager::Name() noexcept
     {

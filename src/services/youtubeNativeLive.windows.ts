@@ -1,3 +1,4 @@
+import RNFS from 'react-native-fs';
 type SourceType = 'phone' | 'webcam';
 
 export type YouTubeNativeOverlayPlayer = {
@@ -45,6 +46,19 @@ type StartOptions = {
   rotationDegrees?: number;
 };
 
+
+const normalizePath = (value?: string | null) => String(value || '').replace(/\\/g, '/');
+const getNativeLiveOverlayRootDir = () =>
+  normalizePath(`${RNFS.TemporaryDirectoryPath || RNFS.CachesDirectoryPath || RNFS.DocumentDirectoryPath}/AplusScoreLiveOverlay`);
+const getWindowsLiveOverlayPaths = () => {
+  const nativeRoot = getNativeLiveOverlayRootDir();
+  return {
+    nativeRoot,
+    nativeSnapshotPath: `${nativeRoot}/overlay-snapshot.png`,
+    nativeSnapshotMetaPath: `${nativeRoot}/overlay-snapshot.json`,
+  };
+};
+
 export const isYouTubeNativeLiveEngineMounted = () => false;
 
 export const isYouTubeNativePreviewViewAvailable = () => false;
@@ -83,13 +97,70 @@ export const stopYouTubeNativeRecord = async (): Promise<string | null> => {
 export const updateYouTubeNativeOverlay = async (
   payload: YouTubeNativeOverlayPayload,
 ) => {
-  console.log('[Windows Live Overlay] skipped', {
-    visible: !!payload?.visible,
-    mode: payload?.variant || 'unknown',
-    hasSnapshot: Boolean(payload?.snapshotUri),
-  });
+  const paths = getWindowsLiveOverlayPaths();
+  try {
+    await RNFS.mkdir(paths.nativeRoot);
+  } catch (_error) {}
 
-  return false;
+  try {
+    const visible = !!payload?.visible;
+    const sourceUri = String(payload?.snapshotUri || '').trim();
+    const normalizedSource = sourceUri
+      .replace(/^file:\/\//i, '')
+      .replace(/\\/g, '/')
+      .replace(/\/+$/g, '');
+    const hasSnapshot = visible && /\.png$/i.test(normalizedSource);
+    const sourceDir = hasSnapshot
+      ? normalizedSource.replace(/\/[^/]+$/g, '')
+      : '';
+    const sourceMetaPath = sourceDir ? `${sourceDir}/overlay-snapshot.json` : '';
+
+    // v62: keep the captured fullscreen overlay PNG in its original TempState
+    // folder and write metadata next to it. v60 could treat a trailing slash as
+    // a directory and attempted to write react-fullscreen-overlay.png/overlay-snapshot.json.
+    const meta = {
+      visible: hasSnapshot,
+      variant: payload?.variant || 'pool',
+      source: payload?.source || 'gameplay-shared-overlay-snapshot',
+      snapshotPath: hasSnapshot ? normalizedSource : '',
+      snapshotWidth: Number(payload?.snapshotWidth || 0),
+      snapshotHeight: Number(payload?.snapshotHeight || 0),
+      updatedAt: Number(payload?.updatedAt || Date.now()),
+    };
+    const metaJson = JSON.stringify(meta, null, 2);
+
+    if (sourceMetaPath) {
+      await RNFS.writeFile(sourceMetaPath, metaJson, 'utf8');
+    }
+
+    try {
+      await RNFS.writeFile(paths.nativeSnapshotMetaPath, metaJson, 'utf8');
+    } catch (mirrorError) {
+      console.log('[Windows Live Overlay] mirror meta write skipped', {
+        nativeSnapshotMetaPath: paths.nativeSnapshotMetaPath,
+        error: mirrorError,
+      });
+    }
+
+    console.log('[Windows Live Overlay]', {
+      visible: hasSnapshot,
+      mode: payload?.variant || 'unknown',
+      hasSnapshot,
+      nativeSnapshotPath: hasSnapshot ? normalizedSource : '',
+      nativeSnapshotMetaPath: sourceMetaPath || paths.nativeSnapshotMetaPath,
+      copyMode: 'direct-tempstate-path-v62',
+    });
+
+    return true;
+  } catch (error) {
+    console.log('[Windows Live Overlay] failed', {
+      visible: !!payload?.visible,
+      mode: payload?.variant || 'unknown',
+      hasSnapshot: Boolean(payload?.snapshotUri),
+      error,
+    });
+    return false;
+  }
 };
 
 export const switchYouTubeNativeCamera = async () => {

@@ -59,7 +59,7 @@ const WindowsOnlyUnusedNativeLivePreview = (_props: any) => null;
 
 const BASE_ZOOM_STEPS = [1, 2, 5, 10];
 
-const DEBUG_CAMERA = true;
+const DEBUG_CAMERA = false;
 const LIVE_OVERLAY_SNAPSHOT_WIDTH = 1920;
 const LIVE_OVERLAY_SNAPSHOT_HEIGHT = 1080;
 const LIVE_OVERLAY_SNAPSHOT_MIN_INTERVAL_MS = 450;
@@ -178,7 +178,7 @@ type YouTubeNativeCaptureModule = {
 
 const getYouTubeNativeCaptureModule = (): YouTubeNativeCaptureModule | null => {
   const modules = NativeModules as any;
-  return modules?.YouTubeLiveModule || null;
+  return modules?.WindowsFfmpegLiveModule || modules?.YouTubeLiveModule || null;
 };
 
 const captureNativeYouTubeOverlayRef = async (viewRef: any): Promise<string> => {
@@ -189,7 +189,7 @@ const captureNativeYouTubeOverlayRef = async (viewRef: any): Promise<string> => 
 
   const captureModule = getYouTubeNativeCaptureModule();
   if (!captureModule?.captureOverlayView) {
-    throw new Error('YouTubeLiveModule.captureOverlayView is not available');
+    throw new Error('WindowsFfmpegLiveModule.captureOverlayView is not available');
   }
 
   const capturedUri = await captureModule.captureOverlayView(
@@ -199,7 +199,7 @@ const captureNativeYouTubeOverlayRef = async (viewRef: any): Promise<string> => 
   );
 
   if (!capturedUri) {
-    throw new Error('native overlay capture returned an empty snapshot uri');
+    throw new Error('native React fullscreen overlay capture returned an empty uri');
   }
 
   return String(capturedUri);
@@ -588,7 +588,7 @@ const WebCam = forwardRef<WebCamHandle, WebCamComponentProps>((props, ref) => {
         }
       }
 
-      if (__DEV__) {
+      if (false) {
         console.log('[WebCam] thumbnail overlay loaded', {
           enabled,
           enabledFromStorage,
@@ -623,12 +623,9 @@ const WebCam = forwardRef<WebCamHandle, WebCamComponentProps>((props, ref) => {
   }, [isFullscreen]);
 
   useEffect(() => {
+    // Load thumbnail overlay once. Polling AsyncStorage every second caused
+    // unnecessary RNW render/log pressure during Windows YouTube Live.
     loadThumbnailOverlay();
-    const thumbnailSync = setInterval(loadThumbnailOverlay, 1000);
-
-    return () => {
-      clearInterval(thumbnailSync);
-    };
   }, [loadThumbnailOverlay]);
 
   // Livestream must not push a separate native/canvas scoreboard model.
@@ -713,7 +710,13 @@ const WebCam = forwardRef<WebCamHandle, WebCamComponentProps>((props, ref) => {
     (!effectiveCameraReady || viewModel.refreshing);
   const shouldShowLogoPlaceholder =
     isCameraPremiumLocked || shouldShowPhonePlaceholder || shouldShowExternalPlaceholder;
-  const shouldRenderVideoComponent = !isCameraPremiumLocked && (!viewModel.refreshing || useYouTubeNativePreview);
+  // v51: keep preview visible during Windows YouTube live. Native live capture now
+  // runs in parallel using its own shared-read MediaCapture reader.
+  const releaseCameraPreviewForFfmpegLive = false;
+  const shouldRenderVideoComponent =
+    !isCameraPremiumLocked &&
+    !releaseCameraPreviewForFfmpegLive &&
+    (!viewModel.refreshing || useYouTubeNativePreview);
   const shouldRenderPreview = !isCameraPremiumLocked && shouldRenderVideoComponent && effectiveCameraReady;
   const shouldShowOuterLogoOverlay = false;
 
@@ -963,13 +966,19 @@ const handleZoomSliderComplete = useCallback(
     viewModel.onSwitchCamera();
   };
 
+  // v56: Do NOT switch the visible Windows camera to the unused native preview branch.
+  // That branch renders a placeholder/null view on Windows and made the in-game camera
+  // turn black during YouTube live. Keep the normal <Video /> preview mounted.
   const useYouTubeNativePreview = false;
+  // Still publish the offscreen fullscreen-style overlay snapshot for the live encoder.
+  const shouldPublishWindowsLiveOverlaySnapshot =
+    Platform.OS === 'windows' && !!props.youtubeLivePreviewActive;
   // Native live no longer owns any scoreboard/logo overlay. Keep the same
   // React overlay used by normal camera/fullscreen/replay visible during live.
   const suppressReactMatchOverlayForNativeLive = false;
   const shouldPublishGameplayOverlaySnapshot =
     ENABLE_YOUTUBE_OVERLAY_SNAPSHOT_CAPTURE &&
-    useYouTubeNativePreview &&
+    shouldPublishWindowsLiveOverlaySnapshot &&
     (shouldShowPoolSnapshotOverlay || shouldShowCaromSnapshotOverlay);
   const liveOverlaySnapshotReady =
     liveOverlaySnapshotLayout.width > 0 && liveOverlaySnapshotLayout.height > 0;
@@ -1157,7 +1166,7 @@ const handleZoomSliderComplete = useCallback(
       liveOverlaySnapshotTimerRef.current = null;
     }
 
-    if (!useYouTubeNativePreview) {
+    if (!shouldPublishWindowsLiveOverlaySnapshot) {
       lastLiveOverlaySnapshotSignatureRef.current = '';
       lastLiveOverlaySnapshotAtRef.current = 0;
       void updateYouTubeNativeOverlay({
@@ -1299,7 +1308,7 @@ const handleZoomSliderComplete = useCallback(
     liveOverlaySnapshotSignature,
     shouldPublishGameplayOverlaySnapshot,
     shouldShowCaromSnapshotOverlay,
-    useYouTubeNativePreview,
+    shouldPublishWindowsLiveOverlaySnapshot,
     isFullscreen,
   ]);
 
@@ -1544,6 +1553,16 @@ const handleZoomSliderComplete = useCallback(
       shouldRenderPreview,
     });
 
+    if (releaseCameraPreviewForFfmpegLive) {
+      return (
+        <RNView style={styles.cameraStageRoot}>
+          <RNView pointerEvents="none" style={styles.fallbackVisibleStage}>
+            {fullLogoPlaceholder}
+          </RNView>
+        </RNView>
+      );
+    }
+
     return (
       <RNView style={styles.cameraStageRoot}>
         {shouldRenderVideoComponent ? (
@@ -1749,7 +1768,7 @@ const handleZoomSliderComplete = useCallback(
 
     if (
       !ENABLE_YOUTUBE_OVERLAY_SNAPSHOT_CAPTURE ||
-      !useYouTubeNativePreview ||
+      !shouldPublishWindowsLiveOverlaySnapshot ||
       (!shouldShowPoolSnapshotOverlay && !shouldShowCaromSnapshotOverlay)
     ) {
       return null;
@@ -1934,6 +1953,9 @@ const createStyles = (adaptive: any, design: any, rules: any, safeInsets: any) =
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: colors.black,
+    position: 'relative',
+    zIndex: 10,
+    elevation: 10,
   },
 
   fullscreenStageSlot: {
@@ -2130,16 +2152,19 @@ const createStyles = (adaptive: any, design: any, rules: any, safeInsets: any) =
 
   liveOverlaySnapshotSource: {
     position: 'absolute',
-    // Keep the live snapshot source mounted independently from the camera/fullscreen
-    // clip, but outside the visible screen so it never creates a second overlay.
-    left: -LIVE_OVERLAY_SNAPSHOT_WIDTH * 2,
-    top: -LIVE_OVERLAY_SNAPSHOT_HEIGHT * 2,
+    // v59: keep the React fullscreen overlay snapshot source INSIDE the visible
+    // XAML tree. RenderTargetBitmap on RNW can return blank/empty when the target
+    // view is parked far offscreen or behind a negative z-index. The camera stage
+    // is rendered above this hidden source, so users do not see a duplicate overlay,
+    // but native capture can still render the exact React fullscreen overlay.
+    left: 0,
+    top: 0,
     width: LIVE_OVERLAY_SNAPSHOT_WIDTH,
     height: LIVE_OVERLAY_SNAPSHOT_HEIGHT,
     backgroundColor: 'transparent',
     overflow: 'hidden',
-    zIndex: -1,
-    elevation: -1,
+    zIndex: 0,
+    elevation: 0,
   },
 
   thumbnailOverlay: {

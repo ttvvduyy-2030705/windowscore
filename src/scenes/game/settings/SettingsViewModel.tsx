@@ -2,6 +2,7 @@ import {PLAYER_COLOR} from 'constants/player';
 import {gameActions} from 'data/redux/actions/game';
 import i18n from 'i18n';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import {Alert, Platform} from 'react-native';
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {useDispatch} from 'react-redux';
 import {screens} from 'scenes/screens';
@@ -27,6 +28,19 @@ import {
   fetchAplusTournaments,
   lockAplusLiveScoreMatch,
 } from 'services/aplusLiveScore';
+import {
+  createYouTubeLiveSession,
+  getYouTubeLiveStatus,
+  stopYouTubeLiveSession,
+} from 'services/youtubeLiveFlow';
+import {
+  DEFAULT_YOUTUBE_RTMP_URL,
+  createWindowsFfmpegSnapshotFromGameState,
+  getWindowsFfmpegLiveStatus,
+  startWindowsFfmpegYouTubeLive,
+  stopWindowsFfmpegYouTubeLive,
+  type WindowsFfmpegLiveConfig,
+} from 'services/livestream/WindowsFfmpegLiveEngine';
 
 type LivestreamRouteParams = {
   livestreamPlatform?: 'facebook' | 'youtube' | 'tiktok' | 'device' | null;
@@ -73,6 +87,130 @@ const normalizeLivestreamPlatform = (
   return null;
 };
 
+
+
+const normalizeYouTubeIngestUrlForFfmpeg = (value?: string) =>
+  String(value || DEFAULT_YOUTUBE_RTMP_URL).trim().replace(/\/+$/g, '');
+
+const resolveYouTubeIngestion = (session?: any) => {
+  const streamUrl = String(session?.streamUrl || '').trim();
+  const streamName = String(session?.streamName || '').trim();
+  const streamUrlWithKey = String(session?.streamUrlWithKey || '').trim();
+
+  if (streamUrl && streamName) {
+    return {
+      rtmpUrl: normalizeYouTubeIngestUrlForFfmpeg(streamUrl),
+      streamKey: streamName,
+    };
+  }
+
+  if (streamUrlWithKey) {
+    const clean = streamUrlWithKey.replace(/\/+$/g, '');
+    const lastSlash = clean.lastIndexOf('/');
+    if (lastSlash > 0) {
+      return {
+        rtmpUrl: normalizeYouTubeIngestUrlForFfmpeg(clean.slice(0, lastSlash)),
+        streamKey: clean.slice(lastSlash + 1),
+      };
+    }
+  }
+
+  return {
+    rtmpUrl: normalizeYouTubeIngestUrlForFfmpeg(streamUrl || DEFAULT_YOUTUBE_RTMP_URL),
+    streamKey: streamName,
+  };
+};
+
+const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+const isRedundantYouTubeTransitionError = (error: any) => {
+  const message = String(error?.message || error?.payload?.message || error || '');
+  return message.toLowerCase().includes('redundant transition');
+};
+
+const pollUntilYouTubeBroadcastLive = async (broadcastId: string) => {
+  let lastStatus: any = null;
+
+  for (let attempt = 1; attempt <= 35; attempt += 1) {
+    const ffmpegStatus = await getWindowsFfmpegLiveStatus();
+
+    let youtubeStatus: any = null;
+    try {
+      youtubeStatus = await getYouTubeLiveStatus(broadcastId);
+      lastStatus = youtubeStatus;
+    } catch (statusError: any) {
+      // v52b: backend may call YouTube transition while autoStart already moved the
+      // broadcast to live. YouTube then returns "Redundant transition". That is
+      // not a live failure: FFmpeg is already ingesting and the broadcast is already
+      // live/transitioned, so continue into gameplay instead of stopping the stream.
+      if (isRedundantYouTubeTransitionError(statusError)) {
+        console.log('[Settings YouTube Live Status Poll] redundant transition treated as live', {
+          attempt,
+          broadcastId,
+          ffmpegStatus: ffmpegStatus?.status,
+          ffmpegPid: ffmpegStatus?.pid,
+          message: statusError?.message || String(statusError),
+        });
+        if (ffmpegStatus?.status === 'stopped' || ffmpegStatus?.status === 'error') {
+          throw new Error(
+            ffmpegStatus?.stderrSummary ||
+              ffmpegStatus?.error ||
+              'FFmpeg đã dừng trước khi YouTube chuyển sang live.',
+          );
+        }
+        return {
+          ok: true,
+          autoTransitioned: true,
+          redundantTransition: true,
+          broadcast: {status: {lifeCycleStatus: 'live'}},
+          stream: {status: {streamStatus: 'active'}},
+        };
+      }
+
+      throw statusError;
+    }
+
+    const broadcastStatus = String(
+      (youtubeStatus as any)?.broadcast?.status?.lifeCycleStatus || '',
+    );
+    const streamStatus = String(
+      (youtubeStatus as any)?.stream?.status?.streamStatus || '',
+    );
+
+    console.log('[Settings YouTube Live Status Poll]', {
+      attempt,
+      broadcastId,
+      broadcastStatus,
+      streamStatus,
+      autoTransitioned: Boolean((youtubeStatus as any)?.autoTransitioned),
+      ffmpegStatus: ffmpegStatus?.status,
+      ffmpegPid: ffmpegStatus?.pid,
+      ffmpegStderrSummary: ffmpegStatus?.stderrSummary || ffmpegStatus?.error || '',
+    });
+
+    if (broadcastStatus === 'live') {
+      return youtubeStatus;
+    }
+
+    if (ffmpegStatus?.status === 'stopped' || ffmpegStatus?.status === 'error') {
+      throw new Error(
+        ffmpegStatus?.stderrSummary ||
+          ffmpegStatus?.error ||
+          'FFmpeg đã dừng trước khi YouTube chuyển sang live.',
+      );
+    }
+
+    await wait(attempt <= 5 ? 1500 : 2500);
+  }
+
+  const lastBroadcastStatus = String(
+    lastStatus?.broadcast?.status?.lifeCycleStatus || 'unknown',
+  );
+  const lastStreamStatus = String(lastStatus?.stream?.status?.streamStatus || 'unknown');
+  throw new Error(
+    `YouTube chưa chuyển sang live. Broadcast=${lastBroadcastStatus}, stream=${lastStreamStatus}`,
+  );
+};
 
 const toDisplayText = (value?: unknown) => String(value ?? '').trim();
 
@@ -339,6 +477,8 @@ const GameSettingsViewModel = (props: Props) => {
   const [aplusLiveStatus, setAplusLiveStatus] = useState('Chưa kết nối web Aplus.');
   const [aplusLoadingTournaments, setAplusLoadingTournaments] = useState(false);
   const [aplusLoadingMatch, setAplusLoadingMatch] = useState(false);
+  const [youtubeLiveLoading, setYoutubeLiveLoading] = useState(false);
+  const [youtubeLiveLoadingMessage, setYoutubeLiveLoadingMessage] = useState('Đang tải phiên live');
 
   const selectedAplusTournament = aplusTournaments[selectedAplusTournamentIndex];
 
@@ -523,7 +663,11 @@ const GameSettingsViewModel = (props: Props) => {
     props.goBack();
   }, [props]);
 
-  const onStart = useCallback(() => {
+  const onStart = useCallback(async () => {
+    if (youtubeLiveLoading) {
+      return;
+    }
+
     const _playingPlayers = playerSettings.playingPlayers.map(player => {
       return {
         ...player,
@@ -537,23 +681,15 @@ const GameSettingsViewModel = (props: Props) => {
       };
     });
 
-    clearSettingsDraft();
-
     const shouldCreateYouTubeLive = livestreamPlatform === 'youtube';
 
-    console.log('[Live Flow] start pressed', {
+    console.log('[Live Flow] start pressed from settings', {
       selectedPlatform: livestreamPlatform,
       youtubeConnected: Boolean(liveAccountName || liveAccountId || liveSetupToken),
       shouldCreateYouTubeLive,
       saveToDeviceWhileStreaming,
       liveVisibility,
     });
-
-    if (!shouldCreateYouTubeLive) {
-      console.log('[Live Flow] local recording active reason=selectedPlatform is not youtube', {
-        selectedPlatform: livestreamPlatform,
-      });
-    }
 
     const effectiveTournamentName =
       selectedAplusMatch?.tournamentName ||
@@ -587,26 +723,144 @@ const GameSettingsViewModel = (props: Props) => {
       aplusLiveScore,
     };
 
-    dispatch(gameActions.updateGameSettings(nextGameSettings));
+    const navigateToGameplay = (extraParams: Record<string, any> = {}) => {
+      clearSettingsDraft();
+      dispatch(gameActions.updateGameSettings(nextGameSettings));
 
-    // Also pass the live params directly to gameplay. The Redux update is saga-based
-    // and can arrive after the gameplay screen mounts; route params are available
-    // immediately and prevent the YouTube flow from falling back to local recording.
-    props.navigate(screens.gamePlay, {
-      gameSettings: nextGameSettings,
-      livestreamPlatform,
-      saveToDeviceWhileStreaming,
-      liveVisibility,
-      liveAccountName,
-      liveAccountId,
-      liveSetupToken,
-      tournamentName: effectiveTournamentName,
-      selectedTournamentName: effectiveTournamentName,
-      aplusLiveScore,
-    });
+      props.navigate(screens.gamePlay, {
+        gameSettings: nextGameSettings,
+        livestreamPlatform,
+        saveToDeviceWhileStreaming,
+        liveVisibility,
+        liveAccountName,
+        liveAccountId,
+        liveSetupToken,
+        tournamentName: effectiveTournamentName,
+        selectedTournamentName: effectiveTournamentName,
+        aplusLiveScore,
+        ...extraParams,
+      });
 
-    _resetData();
+      _resetData();
+    };
+
+    if (!shouldCreateYouTubeLive || Platform.OS !== 'windows') {
+      if (!shouldCreateYouTubeLive) {
+        console.log('[Live Flow] local recording active reason=selectedPlatform is not youtube', {
+          selectedPlatform: livestreamPlatform,
+        });
+      }
+      navigateToGameplay();
+      return;
+    }
+
+    let broadcastId = '';
+
+    try {
+      setYoutubeLiveLoading(true);
+      setYoutubeLiveLoadingMessage('Đang tải phiên live');
+
+      const firstPlayerName = _playingPlayers?.[0]?.name?.trim() || 'Player 1';
+      const secondPlayerName = _playingPlayers?.[1]?.name?.trim() || 'Player 2';
+
+      setYoutubeLiveLoadingMessage('Đang tạo phiên YouTube...');
+      const liveResponse = await createYouTubeLiveSession({
+        title: `${firstPlayerName} vs ${secondPlayerName} - ${new Date().toLocaleString()}`,
+        description: `Live score từ trận đấu ${firstPlayerName} vs ${secondPlayerName}`,
+        privacyStatus: liveVisibility,
+        enableAutoStart: true,
+        enableAutoStop: true,
+        enableDvr: true,
+        recordFromStart: true,
+        resolution: '1080p',
+        frameRate: '30fps',
+      });
+
+      const ingestion = resolveYouTubeIngestion(liveResponse?.session);
+      broadcastId = liveResponse?.session?.broadcastId || liveResponse?.session?.id || '';
+
+      if (!ingestion.streamKey) {
+        throw new Error('Backend đã tạo phiên YouTube nhưng chưa trả về stream key.');
+      }
+
+      setYoutubeLiveLoadingMessage('Đang mở camera và đẩy tín hiệu live...');
+
+      const liveConfigItems = await AsyncStorage.multiGet([
+        'WindowsFfmpegPath',
+        'WindowsFfmpegCameraDevice',
+        'WindowsFfmpegAudioDevice',
+      ]);
+      const liveConfigLookup = liveConfigItems.reduce<Record<string, string>>(
+        (acc, [key, value]) => ({...acc, [key]: value || ''}),
+        {},
+      );
+
+      const windowsLiveConfig: WindowsFfmpegLiveConfig = {
+        platform: 'youtube',
+        rtmpUrl: ingestion.rtmpUrl || DEFAULT_YOUTUBE_RTMP_URL,
+        streamKey: ingestion.streamKey,
+        ffmpegPath: liveConfigLookup.WindowsFfmpegPath || '',
+        cameraDeviceName: liveConfigLookup.WindowsFfmpegCameraDevice || '',
+        audioDeviceName: liveConfigLookup.WindowsFfmpegAudioDevice || '',
+        useAudio: Boolean(liveConfigLookup.WindowsFfmpegAudioDevice),
+        fps: 30,
+        bitrate: '8000k',
+      };
+
+      const snapshot = createWindowsFfmpegSnapshotFromGameState({
+        gameSettings: nextGameSettings,
+        playerSettings: nextGameSettings.players,
+        currentPlayerIndex: 0,
+        countdownTime: Number((gameSettingsMode as any)?.countdownTime || 0),
+        totalTurns: 1,
+      });
+
+      const startResult = await startWindowsFfmpegYouTubeLive(windowsLiveConfig, snapshot);
+      if (!startResult?.ok) {
+        throw new Error(startResult?.error || 'Không khởi động được live YouTube.');
+      }
+
+      setYoutubeLiveLoadingMessage('Đang chờ YouTube chuyển sang LIVE...');
+      const liveReadyStatus: any = await pollUntilYouTubeBroadcastLive(broadcastId);
+
+      // v54: YouTube API can report live a few seconds before the watch page/player
+      // visibly shows the live session. Keep the Settings loading overlay up until
+      // the live session has had enough time to appear on YouTube, then enter gameplay.
+      const finalVisibleWaitMs = liveReadyStatus?.redundantTransition ? 8000 : 6500;
+      setYoutubeLiveLoadingMessage('Đang xác nhận phiên live trên YouTube...');
+      await wait(finalVisibleWaitMs);
+
+      setYoutubeLiveLoadingMessage('Live đã sẵn sàng. Đang vào trận...');
+      await wait(400);
+
+      navigateToGameplay({
+        prestartedYouTubeLive: true,
+        prestartedYouTubeBroadcastId: broadcastId,
+        prestartedYouTubeWatchUrl: liveResponse?.session?.watchUrl || '',
+      });
+    } catch (error: any) {
+      const message = error?.message || String(error) || 'Không tải được phiên live.';
+      console.log('[Settings YouTube Live] failed', {message, broadcastId});
+
+      try {
+        await stopWindowsFfmpegYouTubeLive('settings-start-failed');
+      } catch {}
+      if (broadcastId) {
+        try {
+          await stopYouTubeLiveSession(broadcastId);
+        } catch (stopError) {
+          console.log('[Settings YouTube Live] stop failed', stopError);
+        }
+      }
+
+      setAplusLiveStatus(message);
+      Alert.alert('Chưa thể live YouTube', message);
+    } finally {
+      setYoutubeLiveLoading(false);
+      setYoutubeLiveLoadingMessage('Đang tải phiên live');
+    }
   }, [
+    youtubeLiveLoading,
     dispatch,
     _resetData,
     props,
@@ -885,6 +1139,8 @@ const onSelectGameMode = useCallback(
       aplusLiveStatus,
       aplusLoadingTournaments,
       aplusLoadingMatch,
+      youtubeLiveLoading,
+      youtubeLiveLoadingMessage,
       onLoadAplusTournaments,
       onPrevAplusTournament,
       onNextAplusTournament,
@@ -915,6 +1171,8 @@ const onSelectGameMode = useCallback(
     aplusLiveStatus,
     aplusLoadingTournaments,
     aplusLoadingMatch,
+    youtubeLiveLoading,
+    youtubeLiveLoadingMessage,
     onLoadAplusTournaments,
     onPrevAplusTournament,
     onNextAplusTournament,

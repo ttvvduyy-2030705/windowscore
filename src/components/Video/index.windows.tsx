@@ -33,7 +33,7 @@ type RecordingCallbacks = {
   path?: string;
 };
 
-const DEBUG_WINDOWS_CAMERA = true;
+const DEBUG_WINDOWS_CAMERA = false;
 
 const debugWindowsCamera = (...args: any[]) => {
   if (DEBUG_WINDOWS_CAMERA) {
