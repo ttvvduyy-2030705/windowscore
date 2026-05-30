@@ -55,8 +55,21 @@ const getWindowsLiveOverlayPaths = () => {
   return {
     nativeRoot,
     nativeSnapshotPath: `${nativeRoot}/overlay-snapshot.png`,
+    nativeReactSnapshotPath: `${nativeRoot}/react-fullscreen-overlay.png`,
     nativeSnapshotMetaPath: `${nativeRoot}/overlay-snapshot.json`,
   };
+};
+
+const safeUnlink = async (path?: string) => {
+  const target = String(path || '').trim();
+  if (!target) {
+    return;
+  }
+  try {
+    if (await RNFS.exists(target)) {
+      await RNFS.unlink(target);
+    }
+  } catch (_error) {}
 };
 
 export const isYouTubeNativeLiveEngineMounted = () => false;
@@ -140,6 +153,11 @@ export const updateYouTubeNativeOverlay = async (
         nativeSnapshotMetaPath: paths.nativeSnapshotMetaPath,
         error: mirrorError,
       });
+    }
+
+    if (!hasSnapshot) {
+      await safeUnlink(paths.nativeSnapshotPath);
+      await safeUnlink(paths.nativeReactSnapshotPath);
     }
 
     console.log('[Windows Live Overlay]', {

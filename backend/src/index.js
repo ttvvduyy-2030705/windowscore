@@ -20,6 +20,7 @@ const DATA_DIR = process.env.DATA_DIR ||
 const TOKENS_PATH = TOKEN_STORE_PATH || path.join(DATA_DIR, 'tokens.json');
 
 const app = express();
+const YOUTUBE_LOW_DELAY_BACKEND_BUILD = 'youtube-ultralow-20260530-strict-v2';
 
 app.use(cors());
 app.use(express.json());
@@ -311,7 +312,7 @@ const ensureYouTubeAccessToken = async store => {
 
 const normalizeIsoDate = value => {
   if (!value) {
-    return new Date(Date.now() + 30 * 1000).toISOString();
+    return new Date(Date.now() + 1500).toISOString();
   }
 
   const parsed = new Date(value);
@@ -322,10 +323,94 @@ const normalizeIsoDate = value => {
   return parsed.toISOString();
 };
 
+const normalizeYouTubeLatencyPreference = value => {
+  const normalized = String(value || '').trim();
+  if (['normal', 'low', 'ultraLow'].includes(normalized)) {
+    return normalized;
+  }
+  return 'ultraLow';
+};
+
 const normalizeYouTubePrivacy = value => {
   const allowed = ['public', 'private', 'unlisted'];
   return allowed.includes(value) ? value : 'public';
 };
+
+const buildYouTubeBroadcastContentDetails = ({
+  enableAutoStart = true,
+  enableAutoStop = false,
+  enableDvr = false,
+  recordFromStart = false,
+  latencyPreference = 'ultraLow',
+} = {}) => {
+  const latency = normalizeYouTubeLatencyPreference(latencyPreference);
+  const details = {
+    enableAutoStart: Boolean(enableAutoStart),
+    enableAutoStop: Boolean(enableAutoStop),
+    enableDvr: Boolean(enableDvr),
+    recordFromStart: Boolean(recordFromStart),
+    latencyPreference: latency,
+    monitorStream: {
+      enableMonitorStream: false,
+    },
+  };
+
+  // YouTube's legacy enableLowLatency flag conflicts with ultraLow.
+  // For ultraLow, latencyPreference must be the source of truth and
+  // enableLowLatency must be omitted. If both are sent, YouTube can silently
+  // normalize the broadcast back to normal latency on some channels/backends.
+  if (latency === 'low') {
+    details.enableLowLatency = true;
+  } else if (latency === 'normal') {
+    details.enableLowLatency = false;
+  }
+
+  return details;
+};
+
+const isYouTubeUltraLowLatencyApplied = broadcast => {
+  return broadcast?.contentDetails?.latencyPreference === 'ultraLow';
+};
+
+const updateYouTubeBroadcastLatency = async ({
+  accessToken,
+  broadcastId,
+  enableAutoStart = true,
+  enableAutoStop = false,
+  enableDvr = false,
+  recordFromStart = false,
+  latencyPreference = 'ultraLow',
+}) => {
+  if (!broadcastId) {
+    return null;
+  }
+
+  const contentDetails = buildYouTubeBroadcastContentDetails({
+    enableAutoStart,
+    enableAutoStop,
+    enableDvr,
+    recordFromStart,
+    latencyPreference,
+  });
+
+  return fetch(
+    buildYouTubeApiUrl('/youtube/v3/liveBroadcasts', {
+      part: 'contentDetails',
+    }),
+    {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({
+        id: broadcastId,
+        contentDetails,
+      }),
+    },
+  ).then(parseResponse);
+};
+
 
 const normalizeFacebookTargetType = value => {
   return value === 'user' ? 'user' : 'page';
@@ -568,7 +653,7 @@ const deleteYouTubeStream = async (accessToken, streamId) => {
   }
 };
 
-const YOUTUBE_AUTO_GO_LIVE_POLL_INTERVAL_MS = 3000;
+const YOUTUBE_AUTO_GO_LIVE_POLL_INTERVAL_MS = 700;
 const YOUTUBE_AUTO_GO_LIVE_MAX_ATTEMPTS = 40;
 const youtubeAutoGoLiveJobs = new Map();
 
@@ -1523,6 +1608,15 @@ app.get('/auth/tiktok/callback', async (req, res) => {
   }
 });
 
+
+app.get('/live/youtube/build-info', (_req, res) => {
+  res.json({
+    ok: true,
+    backendBuild: YOUTUBE_LOW_DELAY_BACKEND_BUILD,
+    expectedLatencyPreference: 'ultraLow',
+  });
+});
+
 app.get('/live/youtube/eligibility', async (req, res) => {
   try {
     const store = readTokenStore();
@@ -1605,9 +1699,10 @@ app.post('/live/youtube/create', async (req, res) => {
       privacyStatus = 'public',
       scheduledStartTime,
       enableAutoStart = false,
-      enableAutoStop = true,
-      enableDvr = true,
-      recordFromStart = true,
+      enableAutoStop = false,
+      enableDvr = false,
+      recordFromStart = false,
+      latencyPreference = 'ultraLow',
       resolution = 'variable',
       frameRate = 'variable',
     } = req.body || {};
@@ -1633,15 +1728,13 @@ app.post('/live/youtube/create', async (req, res) => {
           description: String(description || ''),
           scheduledStartTime: normalizedStartTime,
         },
-        contentDetails: {
-          enableAutoStart: Boolean(enableAutoStart),
-          enableAutoStop: Boolean(enableAutoStop),
-          enableDvr: Boolean(enableDvr),
-          recordFromStart: Boolean(recordFromStart),
-          monitorStream: {
-            enableMonitorStream: false,
-          },
-        },
+        contentDetails: buildYouTubeBroadcastContentDetails({
+          enableAutoStart,
+          enableAutoStop,
+          enableDvr,
+          recordFromStart,
+          latencyPreference,
+        }),
         status: {
           privacyStatus: normalizeYouTubePrivacy(privacyStatus),
           selfDeclaredMadeForKids: false,
@@ -1677,7 +1770,7 @@ app.post('/live/youtube/create', async (req, res) => {
     );
 
     console.log('[YouTube Live Create] binding broadcast');
-    const boundBroadcast = await fetch(
+    let boundBroadcast = await fetch(
       buildYouTubeApiUrl('/youtube/v3/liveBroadcasts/bind', {
         id: broadcast.id,
         part: 'id,snippet,contentDetails,status',
@@ -1690,6 +1783,49 @@ app.post('/live/youtube/create', async (req, res) => {
         },
       },
     ).then(parseResponse);
+
+    const desiredLatencyPreference = normalizeYouTubeLatencyPreference(latencyPreference);
+    if (desiredLatencyPreference === 'ultraLow' && !isYouTubeUltraLowLatencyApplied(boundBroadcast)) {
+      console.warn('[YouTube Live Create] ultraLow not applied after bind; retrying contentDetails update', {
+        broadcastId: broadcast.id,
+        returnedLatencyPreference: boundBroadcast.contentDetails?.latencyPreference,
+        returnedEnableLowLatency: boundBroadcast.contentDetails?.enableLowLatency,
+      });
+
+      try {
+        boundBroadcast = await updateYouTubeBroadcastLatency({
+          accessToken,
+          broadcastId: broadcast.id,
+          enableAutoStart,
+          enableAutoStop,
+          enableDvr,
+          recordFromStart,
+          latencyPreference: desiredLatencyPreference,
+        });
+      } catch (latencyError) {
+        console.warn('[YouTube Live Create] ultraLow update failed; retrying low latency fallback', {
+          broadcastId: broadcast.id,
+          message: latencyError?.message || String(latencyError),
+        });
+
+        boundBroadcast = await updateYouTubeBroadcastLatency({
+          accessToken,
+          broadcastId: broadcast.id,
+          enableAutoStart,
+          enableAutoStop,
+          enableDvr,
+          recordFromStart,
+          latencyPreference: 'low',
+        });
+      }
+    }
+
+    console.log('[YouTube Live Create] latency applied', {
+      broadcastId: broadcast.id,
+      latencyPreference: boundBroadcast.contentDetails?.latencyPreference,
+      enableLowLatency: boundBroadcast.contentDetails?.enableLowLatency,
+      enableDvr: boundBroadcast.contentDetails?.enableDvr,
+    });
 
     const ingestion = stream.cdn?.ingestionInfo || {};
     const ingestBase =
@@ -1716,6 +1852,20 @@ app.post('/live/youtube/create', async (req, res) => {
       watchUrl: `https://www.youtube.com/watch?v=${broadcast.id}`,
       streamStatus: stream.status?.streamStatus || '',
       broadcastStatus: boundBroadcast.status?.lifeCycleStatus || '',
+      latencyPreference:
+        boundBroadcast.contentDetails?.latencyPreference ||
+        normalizeYouTubeLatencyPreference(latencyPreference),
+      enableLowLatency:
+        boundBroadcast.contentDetails?.enableLowLatency ??
+        (desiredLatencyPreference === 'low'
+          ? true
+          : desiredLatencyPreference === 'normal'
+            ? false
+            : null),
+      enableDvr: boundBroadcast.contentDetails?.enableDvr ?? Boolean(enableDvr),
+      enableAutoStop:
+        boundBroadcast.contentDetails?.enableAutoStop ?? Boolean(enableAutoStop),
+      backendBuild: YOUTUBE_LOW_DELAY_BACKEND_BUILD,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };

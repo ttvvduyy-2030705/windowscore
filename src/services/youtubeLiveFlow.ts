@@ -42,6 +42,8 @@ export type YouTubeCreateLivePayload = {
   recordFromStart?: boolean;
   resolution?: string;
   frameRate?: string;
+  latencyPreference?: 'normal' | 'low' | 'ultraLow';
+  enableLowLatency?: boolean;
 };
 
 const maskSecret = (value?: string | null) => {
@@ -115,6 +117,11 @@ type YouTubeLiveSession = {
   watchUrl: string;
   streamStatus: string;
   broadcastStatus: string;
+  latencyPreference?: 'normal' | 'low' | 'ultraLow' | string | null;
+  enableLowLatency?: boolean | null;
+  enableDvr?: boolean | null;
+  enableAutoStop?: boolean | null;
+  backendBuild?: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -130,6 +137,34 @@ const getYouTubeSetupToken = async () => {
     return parsed?.youtube?.setupToken || '';
   } catch (_error) {
     return '';
+  }
+};
+
+
+export const isYouTubeNotConnectedError = (error: any) => {
+  const errorCode = String(error?.payload?.errorCode || error?.errorCode || '').trim().toLowerCase();
+  const message = String(error?.payload?.message || error?.message || error || '').toLowerCase();
+  return errorCode === 'not_connected' || message.includes('chưa kết nối youtube') || message.includes('not connected');
+};
+
+export const clearStoredYouTubeConnection = async () => {
+  try {
+    const raw = await AsyncStorage.getItem(LIVESTREAM_ACCOUNT_STORAGE_KEY);
+    const parsed = raw ? (JSON.parse(raw) as any) : {};
+    const previousYoutube = parsed?.youtube || {};
+    const nextValue = {
+      ...parsed,
+      youtube: {
+        ...previousYoutube,
+        accountName: '',
+        accountId: '',
+        setupToken: '',
+      },
+    };
+    await AsyncStorage.setItem(LIVESTREAM_ACCOUNT_STORAGE_KEY, JSON.stringify(nextValue));
+    console.log('[YouTube OAuth] cleared stale local connection after backend not_connected');
+  } catch (error: any) {
+    console.log('[YouTube OAuth] clear stale connection failed', error?.message || String(error));
   }
 };
 
@@ -201,6 +236,36 @@ export const getYouTubeLiveEligibility =
     return requestJson<YouTubeEligibilityResponse>('/live/youtube/eligibility');
   };
 
+
+const assertYouTubeUltraLowBackendApplied = (data: {session?: YouTubeLiveSession; raw?: any}) => {
+  const session = data?.session || ({} as YouTubeLiveSession);
+  const rawLatency =
+    session.latencyPreference ||
+    data?.raw?.broadcast?.contentDetails?.latencyPreference ||
+    '';
+  const latencyPreference = String(rawLatency || '').trim();
+  const enableDvr = session.enableDvr ?? data?.raw?.broadcast?.contentDetails?.enableDvr;
+  const enableAutoStop = session.enableAutoStop ?? data?.raw?.broadcast?.contentDetails?.enableAutoStop;
+
+  console.log('[YouTube LowDelay Guard] backend latency check', {
+    broadcastId: session.broadcastId || session.id || '',
+    latencyPreference: latencyPreference || 'missing',
+    enableDvr,
+    enableAutoStop,
+    backendBuild: session.backendBuild || 'missing',
+  });
+
+  if (latencyPreference !== 'ultraLow' || enableDvr !== false || enableAutoStop !== false) {
+    throw new Error(
+      [
+        'Backend YouTube Live trên Render chưa chạy bản ultra-low latency.',
+        `YouTube đang trả về latencyPreference=${latencyPreference || 'missing'}, enableDvr=${String(enableDvr)}, enableAutoStop=${String(enableAutoStop)}.`,
+        'Hãy deploy lại thư mục backend lên Render rồi tạo phiên live mới. Nếu vẫn chạy tiếp với backend này thì YouTube sẽ giữ delay 15-30 giây.',
+      ].join(' '),
+    );
+  }
+};
+
 export const createYouTubeLiveSession = async (
   payload: YouTubeCreateLivePayload,
 ) => {
@@ -222,6 +287,8 @@ export const createYouTubeLiveSession = async (
       'Backend đã tạo phiên YouTube nhưng chưa trả về RTMP URL/stream key.',
     );
   }
+
+  assertYouTubeUltraLowBackendApplied(data);
 
   return data;
 };
