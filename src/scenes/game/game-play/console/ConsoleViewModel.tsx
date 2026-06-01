@@ -20,6 +20,8 @@ export interface ConsoleViewModelProps {
   currentMode: GameSettingsMode;
   winner?: Player;
   warmUpCount?: number;
+  warmUpCountdownTime?: number;
+  gameBreakEnabled?: boolean;
   totalPlayers: number;
   totalTurns: number;
   totalTime: number;
@@ -82,6 +84,17 @@ const ConsoleViewModel = (props: ConsoleViewModelProps) => {
   const [remoteEnabled, setRemoteEnabled] = useState(false);
   const [tableNumber, setTableNumber] = useState('');
 
+  const onToggleRemote = useCallback((value: boolean) => {
+    setRemoteEnabled(value);
+    RemoteControl.instance.setEnabled?.(value);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      RemoteControl.instance.setEnabled?.(false);
+    };
+  }, []);
+
   //Pool 15-only
   const [balls, setBalls] = useState(
     isPool15FreeGame(gameSettings?.category) ||
@@ -110,16 +123,6 @@ const ConsoleViewModel = (props: ConsoleViewModelProps) => {
     });
   }, []);
 
-  const onToggleValue = useCallback(
-    (setValue: React.Dispatch<React.SetStateAction<boolean>>) => () => {
-      setValue(prev => {
-        const next = !prev;
-        RemoteControl.instance.setEnabled?.(next);
-        return next;
-      });
-    },
-    [],
-  );
 
   const buildGameModeTitle = useCallback(() => {
     return `${i18n.t(`${gameSettings?.category}`).toUpperCase()} - ${i18n
@@ -281,7 +284,7 @@ const ConsoleViewModel = (props: ConsoleViewModelProps) => {
       gameSettings,
       buildGameModeTitle,
       displayTotalTime,
-      onToggleRemote: onToggleValue(setRemoteEnabled),
+      onToggleRemote,
       onPressGiveMoreTime,
       onSwitchTurn,
       onSwapPlayers,
@@ -307,7 +310,6 @@ const ConsoleViewModel = (props: ConsoleViewModelProps) => {
     gameSettings,
     buildGameModeTitle,
     displayTotalTime,
-    onToggleValue,
     onPressGiveMoreTime,
     onSwitchTurn,
     onSwapPlayers,

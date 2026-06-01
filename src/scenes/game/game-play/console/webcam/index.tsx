@@ -18,6 +18,7 @@ import {
   Pressable,
   StatusBar,
   StyleSheet,
+  Text as RNText,
   View as RNView,
 } from 'react-native';
 
@@ -62,7 +63,7 @@ const BASE_ZOOM_STEPS = [1, 2, 5, 10];
 const DEBUG_CAMERA = false;
 const LIVE_OVERLAY_SNAPSHOT_WIDTH = 1920;
 const LIVE_OVERLAY_SNAPSHOT_HEIGHT = 1080;
-const LIVE_OVERLAY_SNAPSHOT_MIN_INTERVAL_MS = 450;
+const LIVE_OVERLAY_SNAPSHOT_MIN_INTERVAL_MS = 250;
 const ENABLE_YOUTUBE_OVERLAY_SNAPSHOT_CAPTURE = true;
 
 // Encoded live overlay sizing values.
@@ -166,6 +167,14 @@ const getLiveOverlayLayoutSpec = (mode: LiveOverlayMode) => {
 
 const formatLiveOverlayRect = (rect: {x: number; y: number; w: number; h: number}) => {
   return `${rect.x},${rect.y},${rect.w},${rect.h}`;
+};
+
+const formatWarmUpOverlayTime = (value?: number) => {
+  const totalSeconds = Math.max(0, Math.ceil(Number(value || 0)));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+
+  return `${minutes}:${seconds < 10 ? '0' : ''}${seconds}`;
 };
 
 type YouTubeNativeCaptureModule = {
@@ -478,6 +487,7 @@ const WebCam = forwardRef<WebCamHandle, WebCamComponentProps>((props, ref) => {
   const liveOverlaySnapshotRef = useRef<RNView | null>(null);
   const liveOverlaySnapshotTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastLiveOverlaySnapshotSignatureRef = useRef('');
+  const liveOverlaySnapshotInFlightSignatureRef = useRef('');
   const lastLiveOverlaySnapshotAtRef = useRef(0);
   const lastLiveOverlayFullscreenStateRef = useRef<boolean | null>(null);
   const [liveOverlaySnapshotLayout, setLiveOverlaySnapshotLayout] = useState({
@@ -983,6 +993,18 @@ const handleZoomSliderComplete = useCallback(
   const liveOverlaySnapshotReady =
     liveOverlaySnapshotLayout.width > 0 && liveOverlaySnapshotLayout.height > 0;
 
+  const warmUpOverlaySeconds =
+    typeof props.warmUpCountdownTime === 'number' && props.warmUpCountdownTime > 0
+      ? Math.ceil(props.warmUpCountdownTime)
+      : undefined;
+  const shouldShowWarmUpOverlay = typeof warmUpOverlaySeconds === 'number';
+  const warmUpOverlayTimeText = shouldShowWarmUpOverlay
+    ? formatWarmUpOverlayTime(warmUpOverlaySeconds)
+    : '';
+  const warmUpOverlayTitleText = String(
+    props.gameBreakEnabled ? i18n.t('gameBreak') : i18n.t('warmUp'),
+  ).toUpperCase();
+
   const isExplicitRecording =
     recordingInfo?.isRecording === true ||
     recordingInfo?.state === 'starting' ||
@@ -1134,6 +1156,9 @@ const handleZoomSliderComplete = useCallback(
         ? caromOverlayState.countdownTime
         : matchOverlayState.countdownTime,
       totalTurns: caromOverlayState.totalTurns,
+      warmUpCountdownTime: warmUpOverlaySeconds ?? null,
+      warmUpLabel: shouldShowWarmUpOverlay ? warmUpOverlayTitleText : null,
+      gameBreakEnabled: !!props.gameBreakEnabled,
       poolGoal: matchOverlayState.gameSettings?.players?.goal?.goal ?? matchOverlayState.playerSettings?.goal?.goal,
       caromGoal: caromOverlayState.gameSettings?.players?.goal?.goal ?? caromOverlayState.playerSettings?.goal?.goal,
       players: players.map((player: any) => ({
@@ -1155,9 +1180,12 @@ const handleZoomSliderComplete = useCallback(
     hasThumbnailImages,
     isFullscreen,
     matchOverlayState,
+    props.gameBreakEnabled,
     shouldPublishGameplayOverlaySnapshot,
     shouldShowCaromSnapshotOverlay,
     thumbnailOverlay,
+    warmUpOverlaySeconds,
+    warmUpOverlayTitleText,
   ]);
 
   useEffect(() => {
@@ -1168,6 +1196,7 @@ const handleZoomSliderComplete = useCallback(
 
     if (!shouldPublishWindowsLiveOverlaySnapshot) {
       lastLiveOverlaySnapshotSignatureRef.current = '';
+      liveOverlaySnapshotInFlightSignatureRef.current = '';
       lastLiveOverlaySnapshotAtRef.current = 0;
       void updateYouTubeNativeOverlay({
         visible: false,
@@ -1178,6 +1207,7 @@ const handleZoomSliderComplete = useCallback(
 
     if (!shouldPublishGameplayOverlaySnapshot) {
       lastLiveOverlaySnapshotSignatureRef.current = 'hidden';
+      liveOverlaySnapshotInFlightSignatureRef.current = '';
       void updateYouTubeNativeOverlay({
         visible: false,
         source: 'gameplay-shared-overlay-snapshot',
@@ -1187,6 +1217,7 @@ const handleZoomSliderComplete = useCallback(
 
     if (!liveOverlaySnapshotReady) {
       lastLiveOverlaySnapshotSignatureRef.current = 'waiting-layout';
+      liveOverlaySnapshotInFlightSignatureRef.current = '';
       console.log(
         '[Live Overlay] desiredSource=gameplay-shared-overlay mounted=false snapshotEnabled=true overlaySkipReason=snapshot-view-not-laid-out keepLastGoodOverlay=true',
       );
@@ -1199,17 +1230,27 @@ const handleZoomSliderComplete = useCallback(
       return;
     }
 
-    if (liveOverlaySnapshotSignature === lastLiveOverlaySnapshotSignatureRef.current) {
+    if (
+      liveOverlaySnapshotSignature === lastLiveOverlaySnapshotSignatureRef.current ||
+      liveOverlaySnapshotSignature === liveOverlaySnapshotInFlightSignatureRef.current
+    ) {
       return;
     }
 
+    // v73 stable live: do not fire unlimited overlapping PNG captures while the
+    // camera/RTMP encoder is running.  The v2 low-delay build could request a new
+    // 1920x1080 snapshot every render before the previous capture finished, which
+    // flooded the JS/native bridge and made the YouTube live look unstable.  Keep
+    // score changes responsive, but cap overlay snapshots to a stable 250ms floor
+    // and mark the signature as in-flight before the async capture starts.
     const delayMs = Math.max(
-      80,
+      0,
       LIVE_OVERLAY_SNAPSHOT_MIN_INTERVAL_MS -
         (Date.now() - lastLiveOverlaySnapshotAtRef.current),
     );
 
     let cancelled = false;
+    liveOverlaySnapshotInFlightSignatureRef.current = liveOverlaySnapshotSignature;
     liveOverlaySnapshotTimerRef.current = setTimeout(() => {
       liveOverlaySnapshotTimerRef.current = null;
 
@@ -1258,10 +1299,14 @@ const handleZoomSliderComplete = useCallback(
           const capturedUri = await captureNativeYouTubeOverlayRef(overlayRef);
 
           if (cancelled || !capturedUri) {
+            if (liveOverlaySnapshotInFlightSignatureRef.current === liveOverlaySnapshotSignature) {
+              liveOverlaySnapshotInFlightSignatureRef.current = '';
+            }
             return;
           }
 
           lastLiveOverlaySnapshotSignatureRef.current = liveOverlaySnapshotSignature;
+          liveOverlaySnapshotInFlightSignatureRef.current = '';
           lastLiveOverlaySnapshotAtRef.current = Date.now();
           lastLiveOverlayFullscreenStateRef.current = isFullscreen;
 
@@ -1284,6 +1329,9 @@ const handleZoomSliderComplete = useCallback(
             updatedAt: Date.now(),
           } as any);
         } catch (error) {
+          if (liveOverlaySnapshotInFlightSignatureRef.current === liveOverlaySnapshotSignature) {
+            liveOverlaySnapshotInFlightSignatureRef.current = '';
+          }
           console.log('[Live Overlay Snapshot] captured=false source=gameplay-overlay error=', error);
           console.log(
             `[Live Overlay Fullscreen] fullscreen=${isFullscreen} activeSource=offscreen-live-overlay snapshotCaptured=false snapshotSkipReason=unknown overlayBitmapStillAvailable=true`,
@@ -1299,6 +1347,9 @@ const handleZoomSliderComplete = useCallback(
       if (liveOverlaySnapshotTimerRef.current) {
         clearTimeout(liveOverlaySnapshotTimerRef.current);
         liveOverlaySnapshotTimerRef.current = null;
+        if (liveOverlaySnapshotInFlightSignatureRef.current === liveOverlaySnapshotSignature) {
+          liveOverlaySnapshotInFlightSignatureRef.current = '';
+        }
       }
     };
   }, [
@@ -1311,6 +1362,33 @@ const handleZoomSliderComplete = useCallback(
     shouldPublishWindowsLiveOverlaySnapshot,
     isFullscreen,
   ]);
+
+  const renderWarmUpIndicator = (variant: 'live' | 'fullscreen') => {
+    if (!shouldShowWarmUpOverlay) {
+      return null;
+    }
+
+    const isLive = variant === 'live';
+
+    return (
+      <RNView
+        pointerEvents="none"
+        style={isLive ? styles.liveWarmUpIndicator : styles.fullscreenWarmUpIndicator}>
+        <RNText
+          allowFontScaling={false}
+          maxFontSizeMultiplier={1}
+          style={isLive ? styles.liveWarmUpTitle : styles.fullscreenWarmUpTitle}>
+          {warmUpOverlayTitleText}
+        </RNText>
+        <RNText
+          allowFontScaling={false}
+          maxFontSizeMultiplier={1}
+          style={isLive ? styles.liveWarmUpTime : styles.fullscreenWarmUpTime}>
+          {warmUpOverlayTimeText}
+        </RNText>
+      </RNView>
+    );
+  };
 
   const renderOverlay = () => {
     if (
@@ -1645,6 +1723,7 @@ const handleZoomSliderComplete = useCallback(
           style={styles.fullscreenBrandImage}
         />
       )}
+      {renderWarmUpIndicator('fullscreen')}
     </RNView>
   );
 };
@@ -1796,6 +1875,7 @@ const handleZoomSliderComplete = useCallback(
           });
         }}>
         {renderThumbnailOverlay(false, {liveOutput: true})}
+        {renderWarmUpIndicator('live')}
         {renderScoreboardOverlay(false, {liveOutput: true})}
       </RNView>
     );
@@ -2244,6 +2324,73 @@ const createStyles = (adaptive: any, design: any, rules: any, safeInsets: any) =
     width: LIVE_OVERLAY_LOGO_WIDTH,
     height: LIVE_OVERLAY_LOGO_HEIGHT,
     marginRight: 14,
+  },
+
+  liveWarmUpIndicator: {
+    position: 'absolute',
+    left: LIVE_OVERLAY_LOGO_MARGIN_X,
+    top: LIVE_OVERLAY_LOGO_MARGIN_TOP + LIVE_OVERLAY_LOGO_HEIGHT - 2,
+    width: LIVE_OVERLAY_LOGO_WIDTH,
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+    zIndex: 52,
+    elevation: 52,
+  },
+
+  liveWarmUpTitle: {
+    color: '#FFE600',
+    fontSize: 30,
+    lineHeight: 34,
+    fontWeight: '900',
+    textAlign: 'center',
+    includeFontPadding: false,
+    textShadowColor: 'rgba(0,0,0,0.82)',
+    textShadowOffset: {width: 0, height: 2},
+    textShadowRadius: 4,
+  },
+
+  liveWarmUpTime: {
+    color: '#FFE600',
+    fontSize: 34,
+    lineHeight: 38,
+    fontWeight: '900',
+    textAlign: 'center',
+    includeFontPadding: false,
+    textShadowColor: 'rgba(0,0,0,0.82)',
+    textShadowOffset: {width: 0, height: 2},
+    textShadowRadius: 4,
+  },
+
+  fullscreenWarmUpIndicator: {
+    alignSelf: 'center',
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+    width: adaptive.s(150),
+    marginTop: adaptive.s(2),
+  },
+
+  fullscreenWarmUpTitle: {
+    color: '#FFE600',
+    fontSize: adaptive.s(18),
+    lineHeight: adaptive.s(22),
+    fontWeight: '900',
+    textAlign: 'center',
+    includeFontPadding: false,
+    textShadowColor: 'rgba(0,0,0,0.82)',
+    textShadowOffset: {width: 0, height: 1},
+    textShadowRadius: 3,
+  },
+
+  fullscreenWarmUpTime: {
+    color: '#FFE600',
+    fontSize: adaptive.s(20),
+    lineHeight: adaptive.s(24),
+    fontWeight: '900',
+    textAlign: 'center',
+    includeFontPadding: false,
+    textShadowColor: 'rgba(0,0,0,0.82)',
+    textShadowOffset: {width: 0, height: 1},
+    textShadowRadius: 3,
   },
 
   fullscreenHud: {

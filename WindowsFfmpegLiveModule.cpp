@@ -2,6 +2,7 @@
 #include "WindowsFfmpegLiveModule.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cctype>
@@ -11,7 +12,9 @@
 #include <cwctype>
 #include <cstdio>
 #include <cstdint>
+#include <climits>
 #include <cstring>
+#include <ctime>
 #include <thread>
 #include <vector>
 
@@ -21,6 +24,9 @@
 #include <winrt/Windows.Media.Capture.Frames.h>
 #include <winrt/Windows.Media.MediaProperties.h>
 #include <winrt/Windows.Storage.Streams.h>
+#include <winrt/Windows.UI.Xaml.h>
+#include <winrt/Windows.UI.Xaml.Media.Imaging.h>
+#include <winrt/Windows.Storage.h>
 
 
 // WinRT memory access helper without <robuffer.h>.
@@ -113,6 +119,14 @@ namespace
     std::atomic<bool> g_pipeFrameWriteBusy{false};
     int g_pipeFrameWidth = 640;
     int g_pipeFrameHeight = 480;
+
+    // v65 microphone fix: FFmpeg is launched by the packaged app. On this user's
+    // machine, manual PowerShell FFmpeg can list DirectShow microphones, but the
+    // app-launched FFmpeg cannot until the packaged app has explicitly requested
+    // microphone consent from Windows. Prime that consent with a tiny WinRT
+    // MediaCapture(Audio) init before probing/starting FFmpeg audio.
+    std::atomic<bool> g_microphoneAccessPrimed{false};
+    std::string g_microphoneAccessSummary;
 
     std::wstring ToWide(std::string const &value)
     {
@@ -375,6 +389,11 @@ namespace
         auto dir = GetAplusScoreDebugDirectory();
         return dir.empty() ? L"" : dir + L"\\start-youtube-live.cmd";
     }
+
+    // v68b: Forward declaration used by mic-bridge readiness guard below.
+    // The implementation stays with the overlay helpers later in this file.
+    std::string ReadSmallTextFileUtf8(std::wstring const &path, DWORD maxBytes);
+    std::string PreviewText(std::string text);
 
     bool WriteUtf8TextFile(std::wstring const &path, std::string const &text)
     {
@@ -989,6 +1008,354 @@ namespace
         return result;
     }
 
+    std::wstring GetFfmpegMicBridgeScriptPath()
+    {
+        auto dir = GetAplusScoreDebugDirectory();
+        return dir.empty() ? L"" : dir + L"\\start-youtube-mic-bridge.cmd";
+    }
+
+    std::wstring GetFfmpegMicBridgeLogPath()
+    {
+        auto dir = GetAplusScoreDebugDirectory();
+        return dir.empty() ? L"" : dir + L"\\ffmpeg-mic-bridge.log";
+    }
+
+    std::string LowerCopy(std::string value)
+    {
+        std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+        return value;
+    }
+
+    bool IsDirectShowAudioInputArgument(std::string const &value)
+    {
+        auto lower = LowerCopy(value);
+        return lower.rfind("audio=", 0) == 0;
+    }
+
+    std::string ExtractDirectShowAudioDeviceName(std::string const &value)
+    {
+        if (value.size() <= 6)
+        {
+            return "";
+        }
+        return value.substr(6);
+    }
+
+    std::string ExtractFirstDirectShowAudioDeviceName(std::vector<std::string> const &args)
+    {
+        for (size_t i = 0; i + 3 < args.size(); ++i)
+        {
+            if (LowerCopy(args[i]) == "-f" && LowerCopy(args[i + 1]) == "dshow" && LowerCopy(args[i + 2]) == "-i" && IsDirectShowAudioInputArgument(args[i + 3]))
+            {
+                return ExtractDirectShowAudioDeviceName(args[i + 3]);
+            }
+        }
+        return "";
+    }
+
+    std::vector<std::string> RemoveDirectShowAudioInputs(std::vector<std::string> const &args, bool &removed)
+    {
+        removed = false;
+        std::vector<std::string> out;
+        for (size_t i = 0; i < args.size();)
+        {
+            // Remove the common audio block:
+            //   -thread_queue_size 512 -f dshow -i audio=...
+            if (i + 5 < args.size() &&
+                LowerCopy(args[i]) == "-thread_queue_size" &&
+                LowerCopy(args[i + 2]) == "-f" &&
+                LowerCopy(args[i + 3]) == "dshow" &&
+                LowerCopy(args[i + 4]) == "-i" &&
+                IsDirectShowAudioInputArgument(args[i + 5]))
+            {
+                removed = true;
+                i += 6;
+                continue;
+            }
+
+            // Remove a bare DirectShow audio block:
+            //   -f dshow -i audio=...
+            if (i + 3 < args.size() &&
+                LowerCopy(args[i]) == "-f" &&
+                LowerCopy(args[i + 1]) == "dshow" &&
+                LowerCopy(args[i + 2]) == "-i" &&
+                IsDirectShowAudioInputArgument(args[i + 3]))
+            {
+                removed = true;
+                i += 4;
+                continue;
+            }
+
+            out.push_back(args[i]);
+            ++i;
+        }
+        return out;
+    }
+
+    void AppendUdpMicInput(std::vector<std::string> &out, int port)
+    {
+        out.push_back("-thread_queue_size");
+        out.push_back("512");
+        out.push_back("-f");
+        out.push_back("s16le");
+        out.push_back("-ar");
+        out.push_back("44100");
+        out.push_back("-ac");
+        out.push_back("2");
+        out.push_back("-i");
+        out.push_back("udp://127.0.0.1:" + std::to_string(port) + "?fifo_size=1000000&overrun_nonfatal=1");
+    }
+
+    std::vector<std::string> ReplaceDirectShowAudioInputsWithUdp(std::vector<std::string> const &args, int port, bool &replaced)
+    {
+        replaced = false;
+        std::vector<std::string> out;
+        for (size_t i = 0; i < args.size();)
+        {
+            // Replace, at the original input position, the common audio block:
+            //   -thread_queue_size 512 -f dshow -i audio=...
+            // with the localhost PCM bridge input.  This must stay before -map
+            // and before output options; appending it at the end makes FFmpeg
+            // treat the input as an output option and silently loses the mic.
+            if (i + 5 < args.size() &&
+                LowerCopy(args[i]) == "-thread_queue_size" &&
+                LowerCopy(args[i + 2]) == "-f" &&
+                LowerCopy(args[i + 3]) == "dshow" &&
+                LowerCopy(args[i + 4]) == "-i" &&
+                IsDirectShowAudioInputArgument(args[i + 5]))
+            {
+                if (!replaced)
+                {
+                    AppendUdpMicInput(out, port);
+                    replaced = true;
+                }
+                i += 6;
+                continue;
+            }
+
+            // Replace a bare DirectShow audio block:
+            //   -f dshow -i audio=...
+            if (i + 3 < args.size() &&
+                LowerCopy(args[i]) == "-f" &&
+                LowerCopy(args[i + 1]) == "dshow" &&
+                LowerCopy(args[i + 2]) == "-i" &&
+                IsDirectShowAudioInputArgument(args[i + 3]))
+            {
+                if (!replaced)
+                {
+                    AppendUdpMicInput(out, port);
+                    replaced = true;
+                }
+                i += 4;
+                continue;
+            }
+
+            out.push_back(args[i]);
+            ++i;
+        }
+        return out;
+    }
+
+    std::vector<std::string> ReplaceDirectShowAudioInputsWithSilent(std::vector<std::string> const &args, bool &replaced)
+    {
+        replaced = false;
+        std::vector<std::string> out;
+        for (size_t i = 0; i < args.size();)
+        {
+            // Replace DirectShow audio with a silent lavfi source at the same
+            // input index. This keeps the main YouTube ingest alive if the
+            // external/user-context microphone bridge cannot be started.
+            if (i + 5 < args.size() &&
+                LowerCopy(args[i]) == "-thread_queue_size" &&
+                LowerCopy(args[i + 2]) == "-f" &&
+                LowerCopy(args[i + 3]) == "dshow" &&
+                LowerCopy(args[i + 4]) == "-i" &&
+                IsDirectShowAudioInputArgument(args[i + 5]))
+            {
+                if (!replaced)
+                {
+                    out.push_back("-f");
+                    out.push_back("lavfi");
+                    out.push_back("-i");
+                    out.push_back("anullsrc=channel_layout=stereo:sample_rate=44100");
+                    replaced = true;
+                }
+                i += 6;
+                continue;
+            }
+
+            if (i + 3 < args.size() &&
+                LowerCopy(args[i]) == "-f" &&
+                LowerCopy(args[i + 1]) == "dshow" &&
+                LowerCopy(args[i + 2]) == "-i" &&
+                IsDirectShowAudioInputArgument(args[i + 3]))
+            {
+                if (!replaced)
+                {
+                    out.push_back("-f");
+                    out.push_back("lavfi");
+                    out.push_back("-i");
+                    out.push_back("anullsrc=channel_layout=stereo:sample_rate=44100");
+                    replaced = true;
+                }
+                i += 4;
+                continue;
+            }
+
+            out.push_back(args[i]);
+            ++i;
+        }
+        return out;
+    }
+
+    int PickMicBridgeUdpPort()
+    {
+        return 19000 + static_cast<int>(GetTickCount64() % 10000);
+    }
+
+    std::string BuildMicBridgeBatchFile(std::wstring const &ffmpegPath, std::string const &audioDeviceName, int port, std::wstring const &logPath)
+    {
+        const std::string log = ToUtf8(logPath);
+        std::string content;
+        content += "@echo off\r\n";
+        content += "setlocal EnableExtensions\r\n";
+        content += "echo ==== APLUS FFmpeg mic bridge %DATE% %TIME% ==== > " + QuoteBatchArg(log) + "\r\n";
+        content += "echo AudioDevice=" + EscapeBatchText(audioDeviceName) + " >> " + QuoteBatchArg(log) + "\r\n";
+        content += QuoteBatchArg(ToUtf8(ffmpegPath));
+        content += " -hide_banner -loglevel info -nostdin -fflags nobuffer -flags low_delay";
+        content += " -thread_queue_size 512 -f dshow -i " + QuoteBatchArg("audio=" + audioDeviceName);
+        content += " -vn -ac 2 -ar 44100 -acodec pcm_s16le -f s16le ";
+        content += QuoteBatchArg("udp://127.0.0.1:" + std::to_string(port) + "?pkt_size=1316");
+        content += " >> " + QuoteBatchArg(log) + " 2>&1\r\n";
+        content += "set APLUS_MIC_EXIT=%ERRORLEVEL%\r\n";
+        content += "echo ==== APLUS mic bridge exited %APLUS_MIC_EXIT% %DATE% %TIME% ==== >> " + QuoteBatchArg(log) + "\r\n";
+        content += "exit /b %APLUS_MIC_EXIT%\r\n";
+        return content;
+    }
+
+    std::string FutureTaskStartTimeHHMM()
+    {
+        auto now = std::chrono::system_clock::now() + std::chrono::minutes(1);
+        std::time_t t = std::chrono::system_clock::to_time_t(now);
+        std::tm local{};
+        localtime_s(&local, &t);
+        char buf[16] = {};
+        std::snprintf(buf, sizeof(buf), "%02d:%02d", local.tm_hour, local.tm_min);
+        return std::string(buf);
+    }
+
+    void StopMicBridgeScheduledTaskBestEffort()
+    {
+        auto schtasksPath = GetSchtasksPath();
+        RunProcessAndCapture(schtasksPath, {"/End", "/TN", "AplusScoreLiveMicBridge"}, 2000);
+        RunProcessAndCapture(schtasksPath, {"/Delete", "/TN", "AplusScoreLiveMicBridge", "/F"}, 2000);
+    }
+
+    bool StartMicBridgeScheduledTask(std::wstring const &ffmpegPath, std::string const &audioDeviceName, int port, std::string &error)
+    {
+        error.clear();
+        if (audioDeviceName.empty())
+        {
+            error = "empty audio device name";
+            return false;
+        }
+
+        const auto scriptPath = GetFfmpegMicBridgeScriptPath();
+        const auto logPath = GetFfmpegMicBridgeLogPath();
+        if (scriptPath.empty() || logPath.empty())
+        {
+            error = "cannot resolve mic bridge script/log path";
+            return false;
+        }
+
+        StopMicBridgeScheduledTaskBestEffort();
+        WriteUtf8TextFile(logPath, "==== APLUS mic bridge preparing ====\r\n");
+        if (!WriteUtf8TextFile(scriptPath, BuildMicBridgeBatchFile(ffmpegPath, audioDeviceName, port, logPath)))
+        {
+            error = "cannot write mic bridge cmd file";
+            return false;
+        }
+
+        const auto schtasksPath = GetSchtasksPath();
+        const auto runCommand = ToUtf8(BuildCmdBatchLauncherCommandLine(scriptPath));
+        auto create = RunProcessAndCapture(
+            schtasksPath,
+            {"/Create", "/TN", "AplusScoreLiveMicBridge", "/SC", "ONCE", "/ST", FutureTaskStartTimeHHMM(), "/TR", runCommand, "/F", "/IT"},
+            6000);
+
+        if (!create.started || create.timedOut || (create.output.find("ERROR") != std::string::npos && create.output.find("SUCCESS") == std::string::npos))
+        {
+            // Some Windows editions reject /IT from app-launched schtasks. Retry
+            // without it; running as the current logged-in user is still enough on
+            // most machines to expose DirectShow microphone devices.
+            create = RunProcessAndCapture(
+                schtasksPath,
+                {"/Create", "/TN", "AplusScoreLiveMicBridge", "/SC", "ONCE", "/ST", FutureTaskStartTimeHHMM(), "/TR", runCommand, "/F"},
+                6000);
+        }
+
+        if (!create.started || create.timedOut || create.output.find("ERROR") != std::string::npos)
+        {
+            error = "schtasks create failed: " + (create.error.empty() ? create.output : create.error + " " + create.output);
+            StopMicBridgeScheduledTaskBestEffort();
+            return false;
+        }
+
+        auto run = RunProcessAndCapture(schtasksPath, {"/Run", "/TN", "AplusScoreLiveMicBridge"}, 5000);
+        if (!run.started || run.timedOut || run.output.find("ERROR") != std::string::npos)
+        {
+            error = "schtasks run failed: " + (run.error.empty() ? run.output : run.error + " " + run.output);
+            StopMicBridgeScheduledTaskBestEffort();
+            return false;
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(900));
+        return true;
+    }
+
+    bool ReplaceDshowAudioWithMicBridge(std::wstring const &ffmpegPath, std::vector<std::string> &pipeArgs, std::string &summary)
+    {
+        summary.clear();
+        const auto audioDeviceName = ExtractFirstDirectShowAudioDeviceName(pipeArgs);
+        if (audioDeviceName.empty())
+        {
+            return false;
+        }
+
+        std::string bridgeError;
+        const int port = PickMicBridgeUdpPort();
+        if (!StartMicBridgeScheduledTask(ffmpegPath, audioDeviceName, port, bridgeError))
+        {
+            bool silentReplaced = false;
+            auto silentArgs = ReplaceDirectShowAudioInputsWithSilent(pipeArgs, silentReplaced);
+            if (silentReplaced)
+            {
+                pipeArgs = std::move(silentArgs);
+                summary = "Mic bridge not started for " + audioDeviceName + ": " + bridgeError + "; replaced audio input with silent fallback so YouTube ingest can still go live";
+            }
+            else
+            {
+                summary = "Mic bridge not started for " + audioDeviceName + ": " + bridgeError;
+            }
+            return false;
+        }
+
+        bool replaced = false;
+        auto transformed = ReplaceDirectShowAudioInputsWithUdp(pipeArgs, port, replaced);
+        if (!replaced)
+        {
+            StopMicBridgeScheduledTaskBestEffort();
+            summary = "Mic bridge started but no DirectShow audio input was replaced";
+            return false;
+        }
+
+        pipeArgs = std::move(transformed);
+        g_externalScheduledLive = true;
+        summary = "Mic bridge scheduled for " + audioDeviceName + " on udp://127.0.0.1:" + std::to_string(port);
+        return true;
+    }
+
+
     std::string PreviewText(std::string text)
     {
         // v32: keep enough DirectShow output for JS/native diagnostics. The first
@@ -1160,6 +1527,12 @@ namespace
             "info",
             "-fflags",
             "nobuffer",
+            "-flags",
+            "low_delay",
+            "-probesize",
+            "32",
+            "-analyzeduration",
+            "0",
             "-f",
             "rawvideo",
             "-pix_fmt",
@@ -1178,6 +1551,816 @@ namespace
             pipeArgs.insert(pipeArgs.end(), tail.begin(), tail.end());
         }
         return pipeArgs;
+    }
+
+
+    std::wstring Utf8ToWideLoose(std::string const &value)
+    {
+        if (value.empty()) return L"";
+        int required = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value.data(), static_cast<int>(value.size()), nullptr, 0);
+        if (required <= 0) return std::wstring(value.begin(), value.end());
+        std::wstring result(static_cast<size_t>(required), L'\0');
+        MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value.data(), static_cast<int>(value.size()), result.data(), required);
+        return result;
+    }
+
+    std::wstring GetProcessTempDirectory()
+    {
+        std::wstring temp(32768, L'\0');
+        DWORD len = GetTempPathW(static_cast<DWORD>(temp.size()), temp.data());
+        if (len > 0 && len < temp.size())
+        {
+            temp.resize(len);
+            while (!temp.empty() && (temp.back() == L'\\' || temp.back() == L'/'))
+            {
+                temp.pop_back();
+            }
+            return temp;
+        }
+        return L"";
+    }
+
+    std::string ReadSmallTextFileUtf8(std::wstring const &path, DWORD maxBytes = 256 * 1024)
+    {
+        // v53b: Avoid CreateFileW here. In this RNW/UWP-style build, CreateFileW can
+        // be hidden by the selected Windows API family and fails to compile, while the
+        // CRT file APIs are available and enough for reading the small overlay.json.
+        FILE *file = nullptr;
+        if (_wfopen_s(&file, path.c_str(), L"rb") != 0 || !file)
+        {
+            return "";
+        }
+
+        if (fseek(file, 0, SEEK_END) != 0)
+        {
+            fclose(file);
+            return "";
+        }
+        long size = ftell(file);
+        if (size <= 0 || size > static_cast<long>(maxBytes))
+        {
+            fclose(file);
+            return "";
+        }
+        rewind(file);
+
+        std::string data(static_cast<size_t>(size), '\0');
+        size_t read = fread(data.data(), 1, data.size(), file);
+        fclose(file);
+        if (read == 0)
+        {
+            return "";
+        }
+        data.resize(read);
+        return data;
+    }
+
+    std::string JsonStringValue(std::string const &json, std::string const &key, size_t from = 0, size_t *endPos = nullptr)
+    {
+        auto keyText = std::string("\"") + key + "\"";
+        auto pos = json.find(keyText, from);
+        if (pos == std::string::npos) return "";
+        pos = json.find(':', pos + keyText.size());
+        if (pos == std::string::npos) return "";
+        pos = json.find('"', pos + 1);
+        if (pos == std::string::npos) return "";
+        ++pos;
+        std::string value;
+        bool escape = false;
+        for (size_t i = pos; i < json.size(); ++i)
+        {
+            char ch = json[i];
+            if (escape)
+            {
+                if (ch == 'n') value.push_back('\n');
+                else if (ch == 'r') value.push_back('\r');
+                else if (ch == 't') value.push_back('\t');
+                else value.push_back(ch);
+                escape = false;
+                continue;
+            }
+            if (ch == '\\') { escape = true; continue; }
+            if (ch == '"') { if (endPos) *endPos = i + 1; return value; }
+            value.push_back(ch);
+        }
+        return value;
+    }
+
+    int64_t JsonInt64Value(std::string const &json, std::string const &key, size_t from = 0)
+    {
+        auto keyText = std::string("\"") + key + "\"";
+        auto pos = json.find(keyText, from);
+        if (pos == std::string::npos) return 0;
+        pos = json.find(':', pos + keyText.size());
+        if (pos == std::string::npos) return 0;
+        ++pos;
+        while (pos < json.size() && std::isspace(static_cast<unsigned char>(json[pos]))) ++pos;
+        bool neg = false;
+        if (pos < json.size() && json[pos] == '-') { neg = true; ++pos; }
+        int64_t value = 0;
+        bool any = false;
+        while (pos < json.size() && std::isdigit(static_cast<unsigned char>(json[pos])))
+        {
+            any = true;
+            value = value * 10 + static_cast<int64_t>(json[pos] - '0');
+            ++pos;
+        }
+        if (!any) return 0;
+        return neg ? -value : value;
+    }
+
+    int JsonIntValue(std::string const &json, std::string const &key, size_t from = 0)
+    {
+        auto value = JsonInt64Value(json, key, from);
+        if (value > INT_MAX) return INT_MAX;
+        if (value < INT_MIN) return INT_MIN;
+        return static_cast<int>(value);
+    }
+
+    int64_t CurrentUnixTimeMs() noexcept
+    {
+        try
+        {
+            return std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count();
+        }
+        catch (...) { return 0; }
+    }
+
+    struct NativeLiveOverlayState
+    {
+        bool visible = false;
+        bool carom = false;
+        bool useSnapshot = false;
+        std::wstring snapshotPath;
+        std::wstring leftName = L"Nguoi choi 1";
+        std::wstring rightName = L"Nguoi choi 2";
+        int leftScore = 0;
+        int rightScore = 0;
+        int goal = 0;
+        int turns = 0;
+        int timer = 0;
+    };
+
+    struct NativeOverlayBitmap
+    {
+        bool valid = false;
+        std::wstring path;
+        uint64_t fileToken = 0;
+        uint32_t width = 0;
+        uint32_t height = 0;
+        std::vector<BYTE> bgra;
+    };
+
+    std::mutex g_nativeOverlayMutex;
+    NativeLiveOverlayState g_nativeOverlayState{};
+    ULONGLONG g_nativeOverlayLastLoadTick = 0;
+    int64_t g_nativeOverlaySessionStartedAtMs = 0;
+    std::mutex g_nativeOverlayBitmapMutex;
+    NativeOverlayBitmap g_nativeOverlayBitmap{};
+
+    void ResetNativeLiveOverlayStateForNewSession() noexcept
+    {
+        g_nativeOverlaySessionStartedAtMs = CurrentUnixTimeMs();
+        g_nativeOverlayLastLoadTick = 0;
+        {
+            std::lock_guard<std::mutex> lock(g_nativeOverlayMutex);
+            g_nativeOverlayState = NativeLiveOverlayState{};
+        }
+        {
+            std::lock_guard<std::mutex> lock(g_nativeOverlayBitmapMutex);
+            g_nativeOverlayBitmap = NativeOverlayBitmap{};
+        }
+        // Do not call AppendStderrSummary here: Start() holds g_processMutex
+        // when resetting overlay state, and AppendStderrSummary also locks it.
+        // Calling it here deadlocked native start and left the app stuck at
+        // "Đang tạo phiên live" / LiveState=starting.
+    }
+
+    uint64_t FileTokenForPath(std::wstring const &path) noexcept
+    {
+        try
+        {
+            WIN32_FILE_ATTRIBUTE_DATA data{};
+            if (!GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &data))
+            {
+                return 0;
+            }
+            ULARGE_INTEGER size{};
+            size.HighPart = data.nFileSizeHigh;
+            size.LowPart = data.nFileSizeLow;
+            ULARGE_INTEGER write{};
+            write.HighPart = data.ftLastWriteTime.dwHighDateTime;
+            write.LowPart = data.ftLastWriteTime.dwLowDateTime;
+            return size.QuadPart ^ write.QuadPart;
+        }
+        catch (...) { return 0; }
+    }
+
+    bool ParseJsonBoolValue(std::string const &json, std::string const &key, bool fallback = false)
+    {
+        auto pos = json.find("\"" + key + "\"");
+        if (pos == std::string::npos) return fallback;
+        pos = json.find(':', pos);
+        if (pos == std::string::npos) return fallback;
+        auto start = json.find_first_not_of(" \t\r\n", pos + 1);
+        if (start == std::string::npos) return fallback;
+        if (json.compare(start, 4, "true") == 0) return true;
+        if (json.compare(start, 5, "false") == 0) return false;
+        return fallback;
+    }
+
+    std::wstring NormalizeOverlaySnapshotPath(std::wstring path)
+    {
+        std::replace(path.begin(), path.end(), L'/', L'\\');
+        return path;
+    }
+
+    bool LoadOverlaySnapshotBitmap(std::wstring const &path) noexcept
+    {
+        try
+        {
+            if (path.empty()) return false;
+            auto normalizedPath = NormalizeOverlaySnapshotPath(path);
+            uint64_t token = FileTokenForPath(normalizedPath);
+            if (token == 0)
+            {
+                static ULONGLONG lastMissingLogTick = 0;
+                auto now = GetTickCount64();
+                if (now - lastMissingLogTick > 2500)
+                {
+                    lastMissingLogTick = now;
+                    AppendStderrSummary("\n[LiveOverlaySnapshot v62] png not found: " + ToUtf8(normalizedPath));
+                }
+                return false;
+            }
+            {
+                std::lock_guard<std::mutex> lock(g_nativeOverlayBitmapMutex);
+                if (g_nativeOverlayBitmap.valid && g_nativeOverlayBitmap.path == normalizedPath && g_nativeOverlayBitmap.fileToken == token)
+                {
+                    return true;
+                }
+            }
+
+            auto file = winrt::Windows::Storage::StorageFile::GetFileFromPathAsync(normalizedPath).get();
+            auto stream = file.OpenReadAsync().get();
+            auto decoder = winrt::Windows::Graphics::Imaging::BitmapDecoder::CreateAsync(stream).get();
+            auto softwareBitmap = decoder.GetSoftwareBitmapAsync(
+                winrt::Windows::Graphics::Imaging::BitmapPixelFormat::Bgra8,
+                winrt::Windows::Graphics::Imaging::BitmapAlphaMode::Premultiplied).get();
+            auto buffer = softwareBitmap.LockBuffer(winrt::Windows::Graphics::Imaging::BitmapBufferAccessMode::Read);
+            auto reference = buffer.CreateReference();
+            BYTE *planeBytes = nullptr;
+            uint32_t capacity = 0;
+            auto access = reference.as<IMemoryBufferByteAccess>();
+            HRESULT hr = access->GetBuffer(&planeBytes, &capacity);
+            if (FAILED(hr) || planeBytes == nullptr || capacity == 0)
+            {
+                return false;
+            }
+            auto plane = buffer.GetPlaneDescription(0);
+            const uint32_t width = static_cast<uint32_t>(softwareBitmap.PixelWidth());
+            const uint32_t height = static_cast<uint32_t>(softwareBitmap.PixelHeight());
+            const uint32_t rowBytes = width * 4;
+            std::vector<BYTE> contiguous(static_cast<size_t>(rowBytes) * height);
+            for (uint32_t row = 0; row < height; ++row)
+            {
+                const uint64_t srcOffset = static_cast<uint64_t>(plane.StartIndex) + static_cast<uint64_t>(row) * static_cast<uint32_t>(plane.Stride);
+                if (srcOffset + rowBytes > capacity)
+                {
+                    return false;
+                }
+                std::memcpy(contiguous.data() + static_cast<size_t>(row) * rowBytes, planeBytes + srcOffset, rowBytes);
+            }
+
+            std::lock_guard<std::mutex> lock(g_nativeOverlayBitmapMutex);
+            g_nativeOverlayBitmap.valid = true;
+            g_nativeOverlayBitmap.path = normalizedPath;
+            g_nativeOverlayBitmap.fileToken = token;
+            g_nativeOverlayBitmap.width = width;
+            g_nativeOverlayBitmap.height = height;
+            g_nativeOverlayBitmap.bgra = std::move(contiguous);
+            return true;
+        }
+        catch (winrt::hresult_error const &ex)
+        {
+            static ULONGLONG lastDecodeLogTick = 0;
+            auto now = GetTickCount64();
+            if (now - lastDecodeLogTick > 2500)
+            {
+                lastDecodeLogTick = now;
+                AppendStderrSummary("\n[LiveOverlaySnapshot v62] decode failed: " + winrt::to_string(ex.message()) + " hr=" + std::to_string(static_cast<long>(ex.code())) + " path=" + ToUtf8(NormalizeOverlaySnapshotPath(path)));
+            }
+            return false;
+        }
+        catch (std::exception const &ex)
+        {
+            AppendStderrSummary(std::string("\n[LiveOverlaySnapshot v62] decode exception: ") + ex.what());
+            return false;
+        }
+        catch (...) { AppendStderrSummary("\n[LiveOverlaySnapshot v62] decode exception: unknown"); return false; }
+    }
+
+    bool ApplyOverlaySnapshotBitmapToFrame(std::vector<BYTE> &frame, uint32_t width, uint32_t height) noexcept
+    {
+        NativeOverlayBitmap bitmap;
+        {
+            std::lock_guard<std::mutex> lock(g_nativeOverlayBitmapMutex);
+            if (!g_nativeOverlayBitmap.valid || g_nativeOverlayBitmap.bgra.empty()) return false;
+            bitmap = g_nativeOverlayBitmap;
+        }
+
+        if (bitmap.width == 0 || bitmap.height == 0) return false;
+
+        for (uint32_t y = 0; y < height; ++y)
+        {
+            uint32_t sy = bitmap.height == height ? y : static_cast<uint32_t>((static_cast<uint64_t>(y) * bitmap.height) / std::max<uint32_t>(1, height));
+            if (sy >= bitmap.height) sy = bitmap.height - 1;
+            for (uint32_t x = 0; x < width; ++x)
+            {
+                uint32_t sx = bitmap.width == width ? x : static_cast<uint32_t>((static_cast<uint64_t>(x) * bitmap.width) / std::max<uint32_t>(1, width));
+                if (sx >= bitmap.width) sx = bitmap.width - 1;
+                size_t srcIndex = (static_cast<size_t>(sy) * bitmap.width + sx) * 4;
+                if (srcIndex + 3 >= bitmap.bgra.size()) continue;
+                const BYTE b = bitmap.bgra[srcIndex + 0];
+                const BYTE g = bitmap.bgra[srcIndex + 1];
+                const BYTE r = bitmap.bgra[srcIndex + 2];
+                const BYTE a = bitmap.bgra[srcIndex + 3];
+                if (a == 0) continue;
+                size_t dstIndex = (static_cast<size_t>(y) * width + x) * 4;
+                if (dstIndex + 3 >= frame.size()) continue;
+                // Source pixels are premultiplied BGRA.
+                frame[dstIndex + 0] = static_cast<BYTE>(std::min<int>(255, static_cast<int>(b) + (static_cast<int>(frame[dstIndex + 0]) * (255 - a)) / 255));
+                frame[dstIndex + 1] = static_cast<BYTE>(std::min<int>(255, static_cast<int>(g) + (static_cast<int>(frame[dstIndex + 1]) * (255 - a)) / 255));
+                frame[dstIndex + 2] = static_cast<BYTE>(std::min<int>(255, static_cast<int>(r) + (static_cast<int>(frame[dstIndex + 2]) * (255 - a)) / 255));
+                frame[dstIndex + 3] = 255;
+            }
+        }
+        return true;
+    }
+
+    void RefreshNativeLiveOverlayStateIfNeeded() noexcept
+    {
+        ULONGLONG now = GetTickCount64();
+        if (now - g_nativeOverlayLastLoadTick < 16) return;
+        g_nativeOverlayLastLoadTick = now;
+
+        std::vector<std::wstring> snapshotMetaCandidates;
+        std::vector<std::wstring> snapshotPngCandidates;
+        std::vector<std::wstring> overlayCandidates;
+        try
+        {
+            auto appTemp = std::wstring(winrt::Windows::Storage::ApplicationData::Current().TemporaryFolder().Path().c_str());
+            if (!appTemp.empty())
+            {
+                snapshotMetaCandidates.push_back(JoinPath(appTemp, L"AplusScoreLiveOverlay\\overlay-snapshot.json"));
+                snapshotPngCandidates.push_back(JoinPath(appTemp, L"AplusScoreLiveOverlay\\react-fullscreen-overlay.png"));
+                snapshotPngCandidates.push_back(JoinPath(appTemp, L"AplusScoreLiveOverlay\\overlay-snapshot.png"));
+                overlayCandidates.push_back(JoinPath(appTemp, L"AplusScoreLiveOverlay\\overlay.json"));
+            }
+        }
+        catch (...) {}
+        auto temp = GetProcessTempDirectory();
+        if (!temp.empty())
+        {
+            overlayCandidates.push_back(JoinPath(temp, L"AplusScoreLiveOverlay\\overlay.json"));
+            snapshotMetaCandidates.push_back(JoinPath(temp, L"AplusScoreLiveOverlay\\overlay-snapshot.json"));
+            snapshotPngCandidates.push_back(JoinPath(temp, L"AplusScoreLiveOverlay\\overlay-snapshot.png"));
+        }
+        auto profile = GetRealUserProfileDirectory();
+        if (!profile.empty())
+        {
+            overlayCandidates.push_back(JoinPath(profile, L"Videos\\Aplus Score\\External\\LiveOverlay\\overlay.json"));
+            overlayCandidates.push_back(JoinPath(profile, L"Videos\\Aplus Score\\LiveOverlay\\overlay.json"));
+            snapshotMetaCandidates.push_back(JoinPath(profile, L"Videos\\Aplus Score\\External\\LiveOverlay\\overlay-snapshot.json"));
+            snapshotMetaCandidates.push_back(JoinPath(profile, L"Videos\\Aplus Score\\LiveOverlay\\overlay-snapshot.json"));
+            snapshotPngCandidates.push_back(JoinPath(profile, L"Videos\\Aplus Score\\External\\LiveOverlay\\overlay-snapshot.png"));
+            snapshotPngCandidates.push_back(JoinPath(profile, L"Videos\\Aplus Score\\LiveOverlay\\overlay-snapshot.png"));
+        }
+        auto localAppData = GetRealLocalAppDataDirectory();
+        if (!localAppData.empty())
+        {
+            overlayCandidates.push_back(JoinPath(localAppData, L"AplusScore\\LiveOverlay\\overlay.json"));
+            snapshotMetaCandidates.push_back(JoinPath(localAppData, L"AplusScore\\LiveOverlay\\overlay-snapshot.json"));
+            snapshotPngCandidates.push_back(JoinPath(localAppData, L"AplusScore\\LiveOverlay\\overlay-snapshot.png"));
+        }
+
+        NativeLiveOverlayState next;
+        std::string snapshotMetaJson;
+        std::wstring snapshotPngPath;
+        for (size_t index = 0; index < snapshotMetaCandidates.size(); ++index)
+        {
+            snapshotMetaJson = ReadSmallTextFileUtf8(snapshotMetaCandidates[index]);
+            if (!snapshotMetaJson.empty())
+            {
+                if (index < snapshotPngCandidates.size())
+                {
+                    snapshotPngPath = snapshotPngCandidates[index];
+                }
+                break;
+            }
+        }
+        if (!snapshotMetaJson.empty() && ParseJsonBoolValue(snapshotMetaJson, "visible", false))
+        {
+            const int64_t metaUpdatedAt = JsonInt64Value(snapshotMetaJson, "updatedAt");
+            const int64_t sessionStartedAt = g_nativeOverlaySessionStartedAtMs;
+            if (sessionStartedAt > 0 && metaUpdatedAt > 0 && metaUpdatedAt + 1000 < sessionStartedAt)
+            {
+                std::lock_guard<std::mutex> lock(g_nativeOverlayMutex);
+                g_nativeOverlayState = next;
+                return;
+            }
+            if (sessionStartedAt > 0 && metaUpdatedAt <= 0)
+            {
+                std::lock_guard<std::mutex> lock(g_nativeOverlayMutex);
+                g_nativeOverlayState = next;
+                return;
+            }
+
+            auto variant = JsonStringValue(snapshotMetaJson, "variant");
+            std::transform(variant.begin(), variant.end(), variant.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+            next.carom = variant.find("carom") != std::string::npos || variant.find("libre") != std::string::npos;
+
+            auto snapshotPathFromMeta = JsonStringValue(snapshotMetaJson, "snapshotPath");
+            if (!snapshotPathFromMeta.empty())
+            {
+                snapshotPngPath = NormalizeOverlaySnapshotPath(Utf8ToWideLoose(snapshotPathFromMeta));
+            }
+
+            if (!snapshotPngPath.empty())
+            {
+                next.useSnapshot = LoadOverlaySnapshotBitmap(snapshotPngPath);
+                if (next.useSnapshot)
+                {
+                    next.visible = true;
+                    next.snapshotPath = snapshotPngPath;
+                }
+                else
+                {
+                    // Keep the last good React snapshot instead of flashing to the
+                    // temporary hand-drawn JSON overlay while React is rewriting the PNG.
+                    // This prevents live overlay blinking during score/timer updates.
+                    std::lock_guard<std::mutex> lock(g_nativeOverlayMutex);
+                    if (g_nativeOverlayState.visible && g_nativeOverlayState.useSnapshot)
+                    {
+                        return;
+                    }
+                }
+            }
+        }
+
+        std::string json;
+        for (auto const &candidate : overlayCandidates)
+        {
+            json = ReadSmallTextFileUtf8(candidate);
+            if (!json.empty())
+            {
+                break;
+            }
+        }
+
+        // v57: only the captured React fullscreen overlay is allowed.
+        // Do not fall back to the old hand-drawn native overlay.
+        if (json.empty())
+        {
+            std::lock_guard<std::mutex> lock(g_nativeOverlayMutex);
+            g_nativeOverlayState = next;
+            return;
+        }
+        auto category = JsonStringValue(json, "category");
+        auto mode = JsonStringValue(json, "mode");
+        std::transform(category.begin(), category.end(), category.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+        std::transform(mode.begin(), mode.end(), mode.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+        next.carom = category.find("carom") != std::string::npos || mode.find("carom") != std::string::npos || mode.find("libre") != std::string::npos;
+        next.goal = JsonIntValue(json, "goal");
+        next.turns = JsonIntValue(json, "totalTurns");
+        next.timer = JsonIntValue(json, "countdownTime");
+
+        size_t playersPos = json.find("\"players\"");
+        if (playersPos != std::string::npos)
+        {
+            size_t firstEnd = playersPos;
+            auto leftName = JsonStringValue(json, "name", playersPos, &firstEnd);
+            auto leftScore = JsonIntValue(json, "score", playersPos);
+            size_t secondStart = json.find("\"name\"", firstEnd);
+            auto rightName = secondStart == std::string::npos ? std::string("Nguoi choi 2") : JsonStringValue(json, "name", secondStart);
+            auto rightScore = secondStart == std::string::npos ? 0 : JsonIntValue(json, "score", secondStart);
+            if (!leftName.empty()) next.leftName = Utf8ToWideLoose(leftName);
+            if (!rightName.empty()) next.rightName = Utf8ToWideLoose(rightName);
+            next.leftScore = leftScore;
+            next.rightScore = rightScore;
+        }
+
+        std::lock_guard<std::mutex> lock(g_nativeOverlayMutex);
+        g_nativeOverlayState = next;
+    }
+
+    struct OverlayBox
+    {
+        int left = 0;
+        int top = 0;
+        int right = 0;
+        int bottom = 0;
+    };
+
+    struct OverlayColor
+    {
+        BYTE r = 0;
+        BYTE g = 0;
+        BYTE b = 0;
+        BYTE a = 255;
+    };
+
+    int ClampInt(int value, int minValue, int maxValue)
+    {
+        return std::max(minValue, std::min(value, maxValue));
+    }
+
+    void BlendPixelBgra(std::vector<BYTE> &frame, uint32_t width, uint32_t height, int x, int y, OverlayColor color) noexcept
+    {
+        if (x < 0 || y < 0 || x >= static_cast<int>(width) || y >= static_cast<int>(height) || frame.empty()) return;
+        size_t index = (static_cast<size_t>(y) * static_cast<size_t>(width) + static_cast<size_t>(x)) * 4;
+        if (index + 3 >= frame.size()) return;
+        const int alpha = static_cast<int>(color.a);
+        frame[index + 0] = static_cast<BYTE>((static_cast<int>(color.b) * alpha + static_cast<int>(frame[index + 0]) * (255 - alpha)) / 255);
+        frame[index + 1] = static_cast<BYTE>((static_cast<int>(color.g) * alpha + static_cast<int>(frame[index + 1]) * (255 - alpha)) / 255);
+        frame[index + 2] = static_cast<BYTE>((static_cast<int>(color.r) * alpha + static_cast<int>(frame[index + 2]) * (255 - alpha)) / 255);
+        frame[index + 3] = 255;
+    }
+
+    void FillRectBgra(std::vector<BYTE> &frame, uint32_t width, uint32_t height, OverlayBox box, OverlayColor color) noexcept
+    {
+        int left = ClampInt(std::min(box.left, box.right), 0, static_cast<int>(width));
+        int right = ClampInt(std::max(box.left, box.right), 0, static_cast<int>(width));
+        int top = ClampInt(std::min(box.top, box.bottom), 0, static_cast<int>(height));
+        int bottom = ClampInt(std::max(box.top, box.bottom), 0, static_cast<int>(height));
+        for (int y = top; y < bottom; ++y)
+        {
+            for (int x = left; x < right; ++x)
+            {
+                BlendPixelBgra(frame, width, height, x, y, color);
+            }
+        }
+    }
+
+    std::array<const char *, 7> Glyph5x7(char ch) noexcept
+    {
+        switch (ch)
+        {
+        case '0': return {"01110","10001","10011","10101","11001","10001","01110"};
+        case '1': return {"00100","01100","00100","00100","00100","00100","01110"};
+        case '2': return {"01110","10001","00001","00010","00100","01000","11111"};
+        case '3': return {"11110","00001","00001","01110","00001","00001","11110"};
+        case '4': return {"00010","00110","01010","10010","11111","00010","00010"};
+        case '5': return {"11111","10000","10000","11110","00001","00001","11110"};
+        case '6': return {"01110","10000","10000","11110","10001","10001","01110"};
+        case '7': return {"11111","00001","00010","00100","01000","01000","01000"};
+        case '8': return {"01110","10001","10001","01110","10001","10001","01110"};
+        case '9': return {"01110","10001","10001","01111","00001","00001","01110"};
+        case 'A': return {"01110","10001","10001","11111","10001","10001","10001"};
+        case 'B': return {"11110","10001","10001","11110","10001","10001","11110"};
+        case 'C': return {"01110","10001","10000","10000","10000","10001","01110"};
+        case 'D': return {"11110","10001","10001","10001","10001","10001","11110"};
+        case 'E': return {"11111","10000","10000","11110","10000","10000","11111"};
+        case 'F': return {"11111","10000","10000","11110","10000","10000","10000"};
+        case 'G': return {"01110","10001","10000","10111","10001","10001","01110"};
+        case 'H': return {"10001","10001","10001","11111","10001","10001","10001"};
+        case 'I': return {"01110","00100","00100","00100","00100","00100","01110"};
+        case 'J': return {"00111","00010","00010","00010","00010","10010","01100"};
+        case 'K': return {"10001","10010","10100","11000","10100","10010","10001"};
+        case 'L': return {"10000","10000","10000","10000","10000","10000","11111"};
+        case 'M': return {"10001","11011","10101","10101","10001","10001","10001"};
+        case 'N': return {"10001","11001","10101","10011","10001","10001","10001"};
+        case 'O': return {"01110","10001","10001","10001","10001","10001","01110"};
+        case 'P': return {"11110","10001","10001","11110","10000","10000","10000"};
+        case 'Q': return {"01110","10001","10001","10001","10101","10010","01101"};
+        case 'R': return {"11110","10001","10001","11110","10100","10010","10001"};
+        case 'S': return {"01111","10000","10000","01110","00001","00001","11110"};
+        case 'T': return {"11111","00100","00100","00100","00100","00100","00100"};
+        case 'U': return {"10001","10001","10001","10001","10001","10001","01110"};
+        case 'V': return {"10001","10001","10001","10001","10001","01010","00100"};
+        case 'W': return {"10001","10001","10001","10101","10101","10101","01010"};
+        case 'X': return {"10001","10001","01010","00100","01010","10001","10001"};
+        case 'Y': return {"10001","10001","01010","00100","00100","00100","00100"};
+        case 'Z': return {"11111","00001","00010","00100","01000","10000","11111"};
+        case '+': return {"00000","00100","00100","11111","00100","00100","00000"};
+        case '-': return {"00000","00000","00000","11111","00000","00000","00000"};
+        case ':': return {"00000","00100","00100","00000","00100","00100","00000"};
+        case '.': return {"00000","00000","00000","00000","00000","01100","01100"};
+        case '/': return {"00001","00010","00010","00100","01000","01000","10000"};
+        case '[': return {"01110","01000","01000","01000","01000","01000","01110"};
+        case ']': return {"01110","00010","00010","00010","00010","00010","01110"};
+        default: return {"00000","00000","00000","00000","00000","00000","00000"};
+        }
+    }
+
+    char NormalizeOverlayChar(wchar_t ch) noexcept
+    {
+        if (ch >= L'a' && ch <= L'z') return static_cast<char>(ch - L'a' + L'A');
+        if (ch >= L'A' && ch <= L'Z') return static_cast<char>(ch);
+        if (ch >= L'0' && ch <= L'9') return static_cast<char>(ch);
+
+        // v53d: use numeric Unicode code points instead of Vietnamese character
+        // literals. Some MSVC project/codepage combinations compile literals like
+        // accented literals as duplicated byte values and fail with C2196 "case value already
+        // used". Numeric constants avoid source-encoding ambiguity.
+        switch (static_cast<unsigned int>(ch))
+        {
+        // A/a family
+        case 0x00C0: case 0x00C1: case 0x1EA2: case 0x00C3: case 0x1EA0:
+        case 0x0102: case 0x1EB0: case 0x1EAE: case 0x1EB2: case 0x1EB4: case 0x1EB6:
+        case 0x00C2: case 0x1EA6: case 0x1EA4: case 0x1EA8: case 0x1EAA: case 0x1EAC:
+        case 0x00E0: case 0x00E1: case 0x1EA3: case 0x00E3: case 0x1EA1:
+        case 0x0103: case 0x1EB1: case 0x1EAF: case 0x1EB3: case 0x1EB5: case 0x1EB7:
+        case 0x00E2: case 0x1EA7: case 0x1EA5: case 0x1EA9: case 0x1EAB: case 0x1EAD:
+            return 'A';
+
+        // E/e family
+        case 0x00C8: case 0x00C9: case 0x1EBA: case 0x1EBC: case 0x1EB8:
+        case 0x00CA: case 0x1EC0: case 0x1EBE: case 0x1EC2: case 0x1EC4: case 0x1EC6:
+        case 0x00E8: case 0x00E9: case 0x1EBB: case 0x1EBD: case 0x1EB9:
+        case 0x00EA: case 0x1EC1: case 0x1EBF: case 0x1EC3: case 0x1EC5: case 0x1EC7:
+            return 'E';
+
+        // I/i family
+        case 0x00CC: case 0x00CD: case 0x1EC8: case 0x0128: case 0x1ECA:
+        case 0x00EC: case 0x00ED: case 0x1EC9: case 0x0129: case 0x1ECB:
+            return 'I';
+
+        // O/o family
+        case 0x00D2: case 0x00D3: case 0x1ECE: case 0x00D5: case 0x1ECC:
+        case 0x00D4: case 0x1ED2: case 0x1ED0: case 0x1ED4: case 0x1ED6: case 0x1ED8:
+        case 0x01A0: case 0x1EDC: case 0x1EDA: case 0x1EDE: case 0x1EE0: case 0x1EE2:
+        case 0x00F2: case 0x00F3: case 0x1ECF: case 0x00F5: case 0x1ECD:
+        case 0x00F4: case 0x1ED3: case 0x1ED1: case 0x1ED5: case 0x1ED7: case 0x1ED9:
+        case 0x01A1: case 0x1EDD: case 0x1EDB: case 0x1EDF: case 0x1EE1: case 0x1EE3:
+            return 'O';
+
+        // U/u family
+        case 0x00D9: case 0x00DA: case 0x1EE6: case 0x0168: case 0x1EE4:
+        case 0x01AF: case 0x1EEA: case 0x1EE8: case 0x1EEC: case 0x1EEE: case 0x1EF0:
+        case 0x00F9: case 0x00FA: case 0x1EE7: case 0x0169: case 0x1EE5:
+        case 0x01B0: case 0x1EEB: case 0x1EE9: case 0x1EED: case 0x1EEF: case 0x1EF1:
+            return 'U';
+
+        // Y/y family
+        case 0x1EF2: case 0x00DD: case 0x1EF6: case 0x1EF8: case 0x1EF4:
+        case 0x1EF3: case 0x00FD: case 0x1EF7: case 0x1EF9: case 0x1EF5:
+            return 'Y';
+
+        // D/d family
+        case 0x0110: case 0x0111:
+            return 'D';
+
+        case '+': case '-': case ':': case '.': case '/': case '[': case ']':
+            return static_cast<char>(ch);
+
+        default:
+            return ' ';
+        }
+    }
+
+    std::string NormalizeOverlayText(std::wstring const &text, size_t maxChars = 32)
+    {
+        std::string out;
+        out.reserve(std::min(maxChars, text.size()));
+        bool lastSpace = false;
+        for (auto ch : text)
+        {
+            char normalized = NormalizeOverlayChar(ch);
+            if (normalized == ' ')
+            {
+                if (!lastSpace && !out.empty())
+                {
+                    out.push_back(' ');
+                    lastSpace = true;
+                }
+            }
+            else
+            {
+                out.push_back(normalized);
+                lastSpace = false;
+            }
+            if (out.size() >= maxChars) break;
+        }
+        while (!out.empty() && out.back() == ' ') out.pop_back();
+        return out;
+    }
+
+    int MeasureOverlayTextWidth(std::string const &text, int scale) noexcept
+    {
+        if (text.empty()) return 0;
+        int charWidth = 5 * scale;
+        int gap = std::max(1, scale);
+        return static_cast<int>(text.size()) * (charWidth + gap) - gap;
+    }
+
+    void DrawOverlayText(std::vector<BYTE> &frame, uint32_t width, uint32_t height, std::string text, OverlayBox box, int scale, OverlayColor color, int align = 0) noexcept
+    {
+        if (scale <= 0 || box.right <= box.left || box.bottom <= box.top) return;
+        int available = box.right - box.left;
+        while (!text.empty() && MeasureOverlayTextWidth(text, scale) > available)
+        {
+            text.pop_back();
+        }
+        int textWidth = MeasureOverlayTextWidth(text, scale);
+        int x = box.left;
+        if (align == 1) x = box.left + std::max(0, (available - textWidth) / 2);
+        if (align == 2) x = box.right - textWidth;
+        int y = box.top + std::max(0, ((box.bottom - box.top) - (7 * scale)) / 2);
+        for (char ch : text)
+        {
+            if (ch == ' ')
+            {
+                x += 4 * scale;
+                continue;
+            }
+            auto glyph = Glyph5x7(ch);
+            for (int gy = 0; gy < 7; ++gy)
+            {
+                for (int gx = 0; gx < 5; ++gx)
+                {
+                    if (glyph[gy][gx] == '1')
+                    {
+                        FillRectBgra(frame, width, height, OverlayBox{x + gx * scale, y + gy * scale, x + (gx + 1) * scale, y + (gy + 1) * scale}, color);
+                    }
+                }
+            }
+            x += 6 * scale;
+            if (x > box.right) break;
+        }
+    }
+
+    void ApplyNativeLiveOverlayToBgraFrame(std::vector<BYTE> &frame, uint32_t width, uint32_t height) noexcept
+    {
+        try
+        {
+            RefreshNativeLiveOverlayStateIfNeeded();
+            NativeLiveOverlayState state;
+            {
+                std::lock_guard<std::mutex> lock(g_nativeOverlayMutex);
+                state = g_nativeOverlayState;
+            }
+            if (!state.visible || frame.empty() || width < 240 || height < 180) return;
+            if (state.useSnapshot)
+            {
+                ApplyOverlaySnapshotBitmapToFrame(frame, width, height);
+                return;
+            }
+
+            // v64: do not draw the old/native fallback overlay at all. It caused
+            // visible flicker between the React overlay PNG and the hand-drawn
+            // placeholder during live updates. If no React snapshot is available,
+            // send the clean camera frame until the next valid snapshot arrives.
+            return;
+
+            const int w = static_cast<int>(width);
+            const int h = static_cast<int>(height);
+            const OverlayColor red{209, 29, 36, 235};
+            const OverlayColor dark{8, 8, 10, 218};
+            const OverlayColor darker{0, 0, 0, 205};
+            const OverlayColor white{255, 255, 255, 255};
+            const OverlayColor softWhite{245, 245, 245, 245};
+            const OverlayColor yellow{245, 205, 44, 245};
+
+            OverlayBox logoBg{std::max(8, w / 80), std::max(8, h / 80), std::max(132, w / 4), std::max(46, h / 10)};
+            FillRectBgra(frame, width, height, logoBg, darker);
+            DrawOverlayText(frame, width, height, "A+PLUS", OverlayBox{logoBg.left + 12, logoBg.top + 4, logoBg.right - 8, logoBg.bottom - 4}, std::max(2, h / 70), red, 0);
+
+            if (state.carom)
+            {
+                const int panelW = std::max(250, w * 50 / 100);
+                const int panelH = std::max(108, h * 24 / 100);
+                const int x = std::max(12, w * 3 / 100);
+                const int y = h - panelH - std::max(14, h * 4 / 100);
+                FillRectBgra(frame, width, height, OverlayBox{x, y, x + panelW, y + panelH}, dark);
+                FillRectBgra(frame, width, height, OverlayBox{x, y, x + std::max(6, w / 110), y + panelH}, red);
+                FillRectBgra(frame, width, height, OverlayBox{x + 12, y + panelH / 2 - 1, x + panelW - 12, y + panelH / 2 + 1}, softWhite);
+
+                int nameScale = std::max(2, h / 95);
+                int scoreScale = std::max(4, h / 50);
+                DrawOverlayText(frame, width, height, NormalizeOverlayText(state.leftName, 18), OverlayBox{x + 18, y + 8, x + panelW - 120, y + panelH / 2 - 4}, nameScale, white, 0);
+                DrawOverlayText(frame, width, height, std::to_string(state.leftScore), OverlayBox{x + panelW - 108, y + 4, x + panelW - 16, y + panelH / 2 - 4}, scoreScale, yellow, 2);
+                DrawOverlayText(frame, width, height, NormalizeOverlayText(state.rightName, 18), OverlayBox{x + 18, y + panelH / 2 + 6, x + panelW - 120, y + panelH - 28}, nameScale, white, 0);
+                DrawOverlayText(frame, width, height, std::to_string(state.rightScore), OverlayBox{x + panelW - 108, y + panelH / 2 + 3, x + panelW - 16, y + panelH - 28}, scoreScale, yellow, 2);
+                DrawOverlayText(frame, width, height, "GOAL " + std::to_string(state.goal) + "  INN " + std::to_string(state.turns) + "  " + std::to_string(state.timer) + "S", OverlayBox{x + 18, y + panelH - 26, x + panelW - 18, y + panelH - 3}, std::max(1, h / 130), white, 0);
+            }
+            else
+            {
+                const int barH = std::max(64, h * 15 / 100);
+                const int barX = std::max(18, w * 5 / 100);
+                const int barW = w - barX * 2;
+                const int barY = h - barH - std::max(14, h * 5 / 100);
+                FillRectBgra(frame, width, height, OverlayBox{barX, barY, barX + barW, barY + barH}, red);
+                FillRectBgra(frame, width, height, OverlayBox{barX, barY + barH - 6, barX + barW, barY + barH}, softWhite);
+                const int scoreBoxW = std::max(110, barW / 5);
+                DrawOverlayText(frame, width, height, NormalizeOverlayText(state.leftName, 20), OverlayBox{barX + 18, barY + 6, barX + (barW - scoreBoxW) / 2 - 10, barY + barH - 8}, std::max(2, h / 90), white, 0);
+                DrawOverlayText(frame, width, height, std::to_string(state.leftScore) + "-" + std::to_string(state.rightScore), OverlayBox{barX + (barW - scoreBoxW) / 2, barY + 2, barX + (barW + scoreBoxW) / 2, barY + barH - 10}, std::max(4, h / 45), white, 1);
+                DrawOverlayText(frame, width, height, NormalizeOverlayText(state.rightName, 20), OverlayBox{barX + (barW + scoreBoxW) / 2 + 10, barY + 6, barX + barW - 18, barY + barH - 8}, std::max(2, h / 90), white, 2);
+                DrawOverlayText(frame, width, height, "RACE " + std::to_string(state.goal) + "  INN " + std::to_string(state.turns) + "  " + std::to_string(state.timer) + "S", OverlayBox{barX, barY + barH + 3, barX + barW, std::min(h, barY + barH + 30)}, std::max(1, h / 130), white, 1);
+            }
+        }
+        catch (...) {}
     }
 
     bool WriteAllToFfmpegStdin(BYTE const *data, uint32_t totalBytes) noexcept
@@ -1276,29 +2459,32 @@ namespace
 
             const BYTE *sourceStart = planeBytes + startIndex;
             bool success = false;
+            // v53: burn the latest fullscreen-style logo/scoreboard overlay into
+            // the raw BGRA camera frame before FFmpeg encodes the YouTube stream.
+            std::vector<BYTE> contiguous(frameSize);
             if (static_cast<uint32_t>(stride) == rowBytes && static_cast<uint32_t>(startIndex) + frameSize <= capacity)
             {
-                success = WriteAllToFfmpegStdin(sourceStart, frameSize);
+                std::memcpy(contiguous.data(), sourceStart, frameSize);
             }
             else
             {
                 // Some camera frames have padded rows. FFmpeg rawvideo expects contiguous
                 // tightly packed BGRA rows, so collapse stride padding before writing.
-                std::vector<BYTE> contiguous(frameSize);
                 for (uint32_t row = 0; row < height; ++row)
                 {
                     const uint64_t srcOffset = static_cast<uint64_t>(startIndex) + static_cast<uint64_t>(row) * static_cast<uint32_t>(stride);
                     if (srcOffset + rowBytes > capacity)
                     {
-                        AppendStderrSummary("\n[MediaCapturePipe v50d] plane capacity too small row=" + std::to_string(row) +
+                        AppendStderrSummary("\n[MediaCapturePipe v53e] plane capacity too small row=" + std::to_string(row) +
                             " stride=" + std::to_string(stride) + " capacity=" + std::to_string(capacity));
                         g_pipeFrameWriteBusy = false;
                         return false;
                     }
                     std::memcpy(contiguous.data() + static_cast<size_t>(row) * rowBytes, planeBytes + srcOffset, rowBytes);
                 }
-                success = WriteAllToFfmpegStdin(contiguous.data(), frameSize);
             }
+            ApplyNativeLiveOverlayToBgraFrame(contiguous, width, height);
+            success = WriteAllToFfmpegStdin(contiguous.data(), frameSize);
 
             g_pipeFrameWriteBusy = false;
             return success;
@@ -1364,6 +2550,75 @@ namespace
             catch (...) {}
         }
         g_pipeMediaCapture = nullptr;
+    }
+
+
+    winrt::Windows::Foundation::IAsyncAction PrimeMicrophoneAccessAsync()
+    {
+        using namespace winrt::Windows::Devices::Enumeration;
+        using namespace winrt::Windows::Media::Capture;
+
+        try
+        {
+            auto devices = co_await DeviceInformation::FindAllAsync(DeviceClass::AudioCapture);
+            if (devices.Size() == 0)
+            {
+                g_microphoneAccessSummary = "no Windows audio capture device found";
+                co_return;
+            }
+
+            auto selected = devices.GetAt(0);
+            MediaCaptureInitializationSettings settings;
+            settings.StreamingCaptureMode(StreamingCaptureMode::Audio);
+            settings.AudioDeviceId(selected.Id());
+
+            MediaCapture mediaCapture;
+            co_await mediaCapture.InitializeAsync(settings);
+            try { mediaCapture.Close(); } catch (...) {}
+
+            g_microphoneAccessSummary = "ok: " + winrt::to_string(selected.Name());
+            co_return;
+        }
+        catch (winrt::hresult_error const &ex)
+        {
+            g_microphoneAccessSummary = "failed: " + winrt::to_string(ex.message()) + " hr=" + std::to_string(static_cast<long>(ex.code()));
+            co_return;
+        }
+        catch (std::exception const &ex)
+        {
+            g_microphoneAccessSummary = std::string("failed: ") + ex.what();
+            co_return;
+        }
+        catch (...)
+        {
+            g_microphoneAccessSummary = "failed: unknown";
+            co_return;
+        }
+    }
+
+    void PrimeMicrophoneAccessBlocking()
+    {
+        if (g_microphoneAccessPrimed.exchange(true))
+        {
+            return;
+        }
+        try { winrt::init_apartment(winrt::apartment_type::multi_threaded); } catch (...) {}
+        try
+        {
+            PrimeMicrophoneAccessAsync().get();
+        }
+        catch (winrt::hresult_error const &ex)
+        {
+            g_microphoneAccessSummary = "failed blocking: " + winrt::to_string(ex.message()) + " hr=" + std::to_string(static_cast<long>(ex.code()));
+        }
+        catch (std::exception const &ex)
+        {
+            g_microphoneAccessSummary = std::string("failed blocking: ") + ex.what();
+        }
+        catch (...)
+        {
+            g_microphoneAccessSummary = "failed blocking: unknown";
+        }
     }
 
     winrt::Windows::Foundation::IAsyncAction PrepareMediaCapturePipeLiveAsync(std::string const &preferredVideoDeviceNameUtf8)
@@ -1677,8 +2932,96 @@ namespace
     }
 }
 
+
+    winrt::fire_and_forget CaptureOverlayViewOnUIThread(
+        winrt::Microsoft::ReactNative::ReactContext reactContext,
+        int64_t nativeTag,
+        int32_t requestedWidth,
+        int32_t requestedHeight,
+        winrt::Microsoft::ReactNative::ReactPromise<std::string> promise) noexcept
+    {
+        try
+        {
+            auto uiService = winrt::Microsoft::ReactNative::XamlUIService::FromContext(reactContext.Handle());
+            auto dependencyObject = uiService.ElementFromReactTag(nativeTag);
+            auto element = dependencyObject.try_as<winrt::Windows::UI::Xaml::UIElement>();
+            if (!element)
+            {
+                promise.Resolve("");
+                co_return;
+            }
+
+            const int32_t width = std::max<int32_t>(320, requestedWidth);
+            const int32_t height = std::max<int32_t>(180, requestedHeight);
+            auto renderTarget = winrt::Windows::UI::Xaml::Media::Imaging::RenderTargetBitmap();
+            co_await renderTarget.RenderAsync(element, width, height);
+            auto pixelBuffer = co_await renderTarget.GetPixelsAsync();
+            const uint32_t pixelLength = pixelBuffer.Length();
+            if (pixelLength == 0)
+            {
+                promise.Resolve("");
+                co_return;
+            }
+
+            std::vector<uint8_t> pixels(pixelLength);
+            auto reader = winrt::Windows::Storage::Streams::DataReader::FromBuffer(pixelBuffer);
+            reader.ReadBytes(pixels);
+
+            auto tempFolder = winrt::Windows::Storage::ApplicationData::Current().TemporaryFolder();
+            auto overlayFolder = co_await tempFolder.CreateFolderAsync(
+                L"AplusScoreLiveOverlay",
+                winrt::Windows::Storage::CreationCollisionOption::OpenIfExists);
+            auto file = co_await overlayFolder.CreateFileAsync(
+                L"react-fullscreen-overlay.png",
+                winrt::Windows::Storage::CreationCollisionOption::ReplaceExisting);
+            auto stream = co_await file.OpenAsync(winrt::Windows::Storage::FileAccessMode::ReadWrite);
+            auto encoder = co_await winrt::Windows::Graphics::Imaging::BitmapEncoder::CreateAsync(
+                winrt::Windows::Graphics::Imaging::BitmapEncoder::PngEncoderId(),
+                stream);
+            encoder.SetPixelData(
+                winrt::Windows::Graphics::Imaging::BitmapPixelFormat::Bgra8,
+                winrt::Windows::Graphics::Imaging::BitmapAlphaMode::Premultiplied,
+                static_cast<uint32_t>(renderTarget.PixelWidth()),
+                static_cast<uint32_t>(renderTarget.PixelHeight()),
+                96.0,
+                96.0,
+                pixels);
+            co_await encoder.FlushAsync();
+            promise.Resolve(winrt::to_string(file.Path()));
+        }
+        catch (...)
+        {
+            promise.Resolve("");
+        }
+    }
+
 namespace winrt::billiardsgrade::implementation
 {
+    void WindowsFfmpegLiveModule::Initialize(winrt::Microsoft::ReactNative::ReactContext const &reactContext) noexcept
+    {
+        m_reactContext = reactContext;
+    }
+
+    void WindowsFfmpegLiveModule::CaptureOverlayView(int64_t nativeTag, int32_t width, int32_t height, winrt::Microsoft::ReactNative::ReactPromise<std::string> promise) noexcept
+    {
+        try
+        {
+            if (!m_reactContext)
+            {
+                promise.Resolve("");
+                return;
+            }
+            auto reactContext = m_reactContext;
+            reactContext.UIDispatcher().Post([reactContext, nativeTag, width, height, promise]() mutable {
+                CaptureOverlayViewOnUIThread(reactContext, nativeTag, width, height, promise);
+            });
+        }
+        catch (...)
+        {
+            promise.Resolve("");
+        }
+    }
+
     winrt::Windows::Foundation::IAsyncOperation<bool> WindowsCameraReleaseForExternalUseAsync();
     void WindowsFfmpegLiveModule::CheckFfmpegAvailable(std::string ffmpegPath, ReactPromise<JSValueObject> promise) noexcept
     {
@@ -1711,6 +3054,8 @@ namespace winrt::billiardsgrade::implementation
             JSValueObject result;
             try
             {
+                PrimeMicrophoneAccessBlocking();
+
                 JSValueArray bestVideoDevices;
                 JSValueArray bestAudioDevices;
                 std::string bestError;
@@ -1746,6 +3091,8 @@ namespace winrt::billiardsgrade::implementation
                 result["ffmpegPath"] = JSValue(bestPath);
                 result["error"] = JSValue(bestError);
                 result["outputPreview"] = JSValue(bestPreview);
+                result["microphoneAccessPrimed"] = JSValue(g_microphoneAccessPrimed.load());
+                result["microphoneAccessSummary"] = JSValue(g_microphoneAccessSummary);
                 promise.Resolve(result);
             }
             catch (std::exception const &ex)
@@ -1773,6 +3120,8 @@ namespace winrt::billiardsgrade::implementation
             JSValueObject result;
             try
             {
+                PrimeMicrophoneAccessBlocking();
+
                 std::unique_lock<std::mutex> lock(g_processMutex);
                 if (g_processActive && g_processInfo.hProcess)
                 {
@@ -1781,7 +3130,8 @@ namespace winrt::billiardsgrade::implementation
                     {
                         result["status"] = JSValue("live");
                         result["pid"] = JSValue(static_cast<double>(g_processInfo.dwProcessId));
-                        result["error"] = JSValue("FFmpeg live process is already running");
+                        result["alreadyRunning"] = JSValue(true);
+                        result["error"] = JSValue("");
                         promise.Resolve(result);
                         return;
                     }
@@ -1800,6 +3150,8 @@ namespace winrt::billiardsgrade::implementation
                 }
 
                 const bool isDirectShowVideoLive = ArgsContainDirectShowVideoInput(args);
+
+                ResetNativeLiveOverlayStateForNewSession();
 
                 if (isDirectShowVideoLive)
                 {
@@ -1847,7 +3199,30 @@ namespace winrt::billiardsgrade::implementation
                         return;
                     }
 
+                    auto pipeArgs = BuildMediaCapturePipeArgs(args, g_pipeFrameWidth, g_pipeFrameHeight);
+                    // v71 stable live first: microphone is fully disabled in the live startup path.
+                    // Keep YouTube ingest stable with the anullsrc audio input generated by TypeScript.
+                    // If an older DirectShow audio argument is still present, replace it with anullsrc.
+                    std::string micBridgeSummary;
+                    bool micBridgeActive = false;
+                    bool silentReplaced = false;
+                    auto silentArgs = ReplaceDirectShowAudioInputsWithSilent(pipeArgs, silentReplaced);
+                    if (silentReplaced)
+                    {
+                        pipeArgs = std::move(silentArgs);
+                        micBridgeSummary = "Microphone disabled; replaced DirectShow audio with stable anullsrc fallback";
+                    }
+
                     lock.lock();
+
+                    if (!micBridgeSummary.empty())
+                    {
+                        g_stderrSummary += "\n[LiveAudio] " + micBridgeSummary;
+                        if (g_stderrSummary.size() > 4096)
+                        {
+                            g_stderrSummary.erase(0, g_stderrSummary.size() - 4096);
+                        }
+                    }
 
                     SECURITY_ATTRIBUTES sa{};
                     sa.nLength = sizeof(SECURITY_ATTRIBUTES);
@@ -1889,13 +3264,15 @@ namespace winrt::billiardsgrade::implementation
                     pipeSi.hStdOutput = writePipe;
                     pipeSi.hStdError = writePipe;
 
-                    auto pipeArgs = BuildMediaCapturePipeArgs(args, g_pipeFrameWidth, g_pipeFrameHeight);
                     auto command = BuildCommandLine(ffmpegPath, pipeArgs);
                     std::vector<wchar_t> commandLine(command.begin(), command.end());
                     commandLine.push_back(L'\0');
 
                     PROCESS_INFORMATION pi{};
-                    DWORD launchFlags = CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP | BELOW_NORMAL_PRIORITY_CLASS;
+                    // Near-parallel v2: do not launch FFmpeg below normal priority.
+                    // Encoding plus RTMPS upload is latency-sensitive; BELOW_NORMAL can add
+                    // avoidable buffering on busy Windows machines.
+                    DWORD launchFlags = CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP | NORMAL_PRIORITY_CLASS;
                     BOOL ok = CreateProcessW(
                         nullptr,
                         commandLine.data(),
@@ -1913,6 +3290,11 @@ namespace winrt::billiardsgrade::implementation
 
                     if (!ok)
                     {
+                        if (micBridgeActive)
+                        {
+                            StopMicBridgeScheduledTaskBestEffort();
+                            g_externalScheduledLive = false;
+                        }
                         CloseHandle(stdinWrite);
                         CloseHandle(readPipe);
                         StopMediaCapturePipeLiveBestEffort();
@@ -1926,7 +3308,11 @@ namespace winrt::billiardsgrade::implementation
                     g_processInfo = pi;
                     g_stdinWrite = stdinWrite;
                     g_stderrRead = nullptr;
-                    g_stderrSummary = "FFmpeg started with MediaCapture raw BGRA pipe v51 shared-preview (" + std::to_string(g_pipeFrameWidth) + "x" + std::to_string(g_pipeFrameHeight) + ").";
+                    g_stderrSummary = "FFmpeg started with MediaCapture raw BGRA pipe v73 stable-overlay-throttle-anullsrc-no-mic (" + std::to_string(g_pipeFrameWidth) + "x" + std::to_string(g_pipeFrameHeight) + ").";
+                    if (!micBridgeSummary.empty())
+                    {
+                        g_stderrSummary += "\n[LiveAudio] " + micBridgeSummary;
+                    }
                     g_processActive = true;
                     g_externalScheduledLive = false;
 
@@ -1961,6 +3347,11 @@ namespace winrt::billiardsgrade::implementation
                     }
                     catch (winrt::hresult_error const &ex)
                     {
+                        if (micBridgeActive)
+                        {
+                            StopMicBridgeScheduledTaskBestEffort();
+                            g_externalScheduledLive = false;
+                        }
                         StopMediaCapturePipeLiveBestEffort();
                         {
                             std::lock_guard<std::mutex> cleanupLock(g_processMutex);
@@ -1985,6 +3376,11 @@ namespace winrt::billiardsgrade::implementation
                     }
                     catch (...)
                     {
+                        if (micBridgeActive)
+                        {
+                            StopMicBridgeScheduledTaskBestEffort();
+                            g_externalScheduledLive = false;
+                        }
                         StopMediaCapturePipeLiveBestEffort();
                         {
                             std::lock_guard<std::mutex> cleanupLock(g_processMutex);
@@ -2014,6 +3410,11 @@ namespace winrt::billiardsgrade::implementation
                     if (g_processInfo.hProcess && GetExitCodeProcess(g_processInfo.hProcess, &earlyExitCode) && earlyExitCode != STILL_ACTIVE)
                     {
                         std::string summary = g_stderrSummary.empty() ? "FFmpeg raw pipe exited immediately." : g_stderrSummary;
+                        if (micBridgeActive)
+                        {
+                            StopMicBridgeScheduledTaskBestEffort();
+                            g_externalScheduledLive = false;
+                        }
                         StopMediaCapturePipeLiveBestEffort();
                         ResetActiveProcessHandles();
                         result["status"] = JSValue("error");
@@ -2027,9 +3428,13 @@ namespace winrt::billiardsgrade::implementation
                     result["status"] = JSValue("live");
                     result["pid"] = JSValue(static_cast<double>(g_processInfo.dwProcessId));
                     result["error"] = JSValue("");
-                    result["captureSource"] = JSValue("mediacapture-rawvideo-pipe-v51-shared-preview");
+                    result["captureSource"] = JSValue(micBridgeActive ? "mediacapture-rawvideo-pipe-v67-external-mic-bridge-deadlock-fix-react-fullscreen-snapshot" : "mediacapture-rawvideo-pipe-v65-mic-consent-prime-react-fullscreen-snapshot-direct");
+                    result["micBridgeDisabled"] = JSValue(micBridgeActive);
+                    result["micBridgeSummary"] = JSValue(micBridgeSummary);
                     result["width"] = JSValue(static_cast<double>(g_pipeFrameWidth));
                     result["height"] = JSValue(static_cast<double>(g_pipeFrameHeight));
+                    result["microphoneAccessPrimed"] = JSValue(g_microphoneAccessPrimed.load());
+                    result["microphoneAccessSummary"] = JSValue(g_microphoneAccessSummary);
                     promise.Resolve(result);
                     return;
                 }
@@ -2155,7 +3560,7 @@ namespace winrt::billiardsgrade::implementation
 
                 // Synchronous sanity check: CreateProcessW succeeding is not enough.
                 // If FFmpeg cannot open DirectShow/RTMPS it exits immediately; JS used
-                // to mark the stream live anyway and YouTube stayed "Sắp diễn ra".
+                // to mark the stream live anyway and YouTube stayed "Sap dien ra".
                 auto earlyWait = WaitForSingleObject(pi.hProcess, 1800);
                 if (earlyWait == WAIT_OBJECT_0)
                 {
@@ -2254,10 +3659,9 @@ namespace winrt::billiardsgrade::implementation
                 // so kill FFmpeg as a fallback on stop/end match.
                 if (g_externalScheduledLive)
                 {
-                    auto schtasksPath = GetSchtasksPath();
-                    RunProcessAndCapture(schtasksPath, {"/End", "/TN", "AplusScoreLiveFfmpeg"}, 4000);
-                    RunProcessAndCapture(schtasksPath, {"/Delete", "/TN", "AplusScoreLiveFfmpeg", "/F"}, 4000);
+                    StopMicBridgeScheduledTaskBestEffort();
                     RunProcessAndCapture(L"C:\\Windows\\System32\\taskkill.exe", {"/IM", "ffmpeg.exe", "/F", "/T"}, 4000);
+                    g_externalScheduledLive = false;
                 }
                 ResetActiveProcessHandles();
                 result["stopped"] = JSValue(true);

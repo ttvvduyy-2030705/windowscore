@@ -544,6 +544,12 @@ const GamePlay = () => {
   };
 
   useEffect(() => {
+    return () => {
+      RemoteControl.instance.setEnabled?.(false);
+    };
+  }, []);
+
+  useEffect(() => {
     return subscribeCameraFullscreen(setIsCameraFullscreen);
   }, []);
 
@@ -802,6 +808,8 @@ const GamePlay = () => {
         playerSettings={effectivePlayerSettings}
         currentMode={viewModel.gameSettings.mode}
         warmUpCount={viewModel.warmUpCount}
+        warmUpCountdownTime={viewModel.warmUpCountdownTime}
+        gameBreakEnabled={viewModel.gameBreakEnabled}
         totalPlayers={totalPlayers}
         totalTime={viewModel.totalTime}
         totalTurns={viewModel.totalTurns}

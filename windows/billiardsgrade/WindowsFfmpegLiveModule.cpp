@@ -12,7 +12,9 @@
 #include <cwctype>
 #include <cstdio>
 #include <cstdint>
+#include <climits>
 #include <cstring>
+#include <ctime>
 #include <thread>
 #include <vector>
 
@@ -117,6 +119,14 @@ namespace
     std::atomic<bool> g_pipeFrameWriteBusy{false};
     int g_pipeFrameWidth = 640;
     int g_pipeFrameHeight = 480;
+
+    // v65 microphone fix: FFmpeg is launched by the packaged app. On this user's
+    // machine, manual PowerShell FFmpeg can list DirectShow microphones, but the
+    // app-launched FFmpeg cannot until the packaged app has explicitly requested
+    // microphone consent from Windows. Prime that consent with a tiny WinRT
+    // MediaCapture(Audio) init before probing/starting FFmpeg audio.
+    std::atomic<bool> g_microphoneAccessPrimed{false};
+    std::string g_microphoneAccessSummary;
 
     std::wstring ToWide(std::string const &value)
     {
@@ -379,6 +389,11 @@ namespace
         auto dir = GetAplusScoreDebugDirectory();
         return dir.empty() ? L"" : dir + L"\\start-youtube-live.cmd";
     }
+
+    // v68b: Forward declaration used by mic-bridge readiness guard below.
+    // The implementation stays with the overlay helpers later in this file.
+    std::string ReadSmallTextFileUtf8(std::wstring const &path, DWORD maxBytes);
+    std::string PreviewText(std::string text);
 
     bool WriteUtf8TextFile(std::wstring const &path, std::string const &text)
     {
@@ -993,6 +1008,396 @@ namespace
         return result;
     }
 
+    std::wstring GetFfmpegMicBridgeScriptPath()
+    {
+        auto dir = GetAplusScoreDebugDirectory();
+        return dir.empty() ? L"" : dir + L"\\start-youtube-mic-bridge.cmd";
+    }
+
+    std::wstring GetFfmpegMicBridgeLogPath()
+    {
+        auto dir = GetAplusScoreDebugDirectory();
+        return dir.empty() ? L"" : dir + L"\\ffmpeg-mic-bridge.log";
+    }
+
+    std::string LowerCopy(std::string value)
+    {
+        std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+        return value;
+    }
+
+    bool IsDirectShowAudioInputArgument(std::string const &value)
+    {
+        auto lower = LowerCopy(value);
+        return lower.rfind("audio=", 0) == 0;
+    }
+
+    std::string ExtractDirectShowAudioDeviceName(std::string const &value)
+    {
+        if (value.size() <= 6)
+        {
+            return "";
+        }
+        return value.substr(6);
+    }
+
+    std::string ExtractFirstDirectShowAudioDeviceName(std::vector<std::string> const &args)
+    {
+        for (size_t i = 0; i + 3 < args.size(); ++i)
+        {
+            if (LowerCopy(args[i]) == "-f" && LowerCopy(args[i + 1]) == "dshow" && LowerCopy(args[i + 2]) == "-i" && IsDirectShowAudioInputArgument(args[i + 3]))
+            {
+                return ExtractDirectShowAudioDeviceName(args[i + 3]);
+            }
+        }
+        return "";
+    }
+
+    std::vector<std::string> RemoveDirectShowAudioInputs(std::vector<std::string> const &args, bool &removed)
+    {
+        removed = false;
+        std::vector<std::string> out;
+        for (size_t i = 0; i < args.size();)
+        {
+            // Remove the common audio block:
+            //   -thread_queue_size 512 -f dshow -i audio=...
+            if (i + 5 < args.size() &&
+                LowerCopy(args[i]) == "-thread_queue_size" &&
+                LowerCopy(args[i + 2]) == "-f" &&
+                LowerCopy(args[i + 3]) == "dshow" &&
+                LowerCopy(args[i + 4]) == "-i" &&
+                IsDirectShowAudioInputArgument(args[i + 5]))
+            {
+                removed = true;
+                i += 6;
+                continue;
+            }
+
+            // Remove a bare DirectShow audio block:
+            //   -f dshow -i audio=...
+            if (i + 3 < args.size() &&
+                LowerCopy(args[i]) == "-f" &&
+                LowerCopy(args[i + 1]) == "dshow" &&
+                LowerCopy(args[i + 2]) == "-i" &&
+                IsDirectShowAudioInputArgument(args[i + 3]))
+            {
+                removed = true;
+                i += 4;
+                continue;
+            }
+
+            out.push_back(args[i]);
+            ++i;
+        }
+        return out;
+    }
+
+    void AppendUdpMicInput(std::vector<std::string> &out, int port)
+    {
+        out.push_back("-thread_queue_size");
+        out.push_back("512");
+        out.push_back("-f");
+        out.push_back("s16le");
+        out.push_back("-ar");
+        out.push_back("44100");
+        out.push_back("-ac");
+        out.push_back("2");
+        out.push_back("-i");
+        out.push_back("udp://127.0.0.1:" + std::to_string(port) + "?fifo_size=1000000&overrun_nonfatal=1");
+    }
+
+    std::vector<std::string> ReplaceDirectShowAudioInputsWithUdp(std::vector<std::string> const &args, int port, bool &replaced)
+    {
+        replaced = false;
+        std::vector<std::string> out;
+        for (size_t i = 0; i < args.size();)
+        {
+            // Replace, at the original input position, the common audio block:
+            //   -thread_queue_size 512 -f dshow -i audio=...
+            // with the localhost PCM bridge input.  This must stay before -map
+            // and before output options; appending it at the end makes FFmpeg
+            // treat the input as an output option and silently loses the mic.
+            if (i + 5 < args.size() &&
+                LowerCopy(args[i]) == "-thread_queue_size" &&
+                LowerCopy(args[i + 2]) == "-f" &&
+                LowerCopy(args[i + 3]) == "dshow" &&
+                LowerCopy(args[i + 4]) == "-i" &&
+                IsDirectShowAudioInputArgument(args[i + 5]))
+            {
+                if (!replaced)
+                {
+                    AppendUdpMicInput(out, port);
+                    replaced = true;
+                }
+                i += 6;
+                continue;
+            }
+
+            // Replace a bare DirectShow audio block:
+            //   -f dshow -i audio=...
+            if (i + 3 < args.size() &&
+                LowerCopy(args[i]) == "-f" &&
+                LowerCopy(args[i + 1]) == "dshow" &&
+                LowerCopy(args[i + 2]) == "-i" &&
+                IsDirectShowAudioInputArgument(args[i + 3]))
+            {
+                if (!replaced)
+                {
+                    AppendUdpMicInput(out, port);
+                    replaced = true;
+                }
+                i += 4;
+                continue;
+            }
+
+            out.push_back(args[i]);
+            ++i;
+        }
+        return out;
+    }
+
+    std::vector<std::string> ReplaceDirectShowAudioInputsWithSilent(std::vector<std::string> const &args, bool &replaced)
+    {
+        replaced = false;
+        std::vector<std::string> out;
+        for (size_t i = 0; i < args.size();)
+        {
+            // Replace DirectShow audio with a silent lavfi source at the same
+            // input index. This keeps the main YouTube ingest alive if the
+            // external/user-context microphone bridge cannot be started.
+            if (i + 5 < args.size() &&
+                LowerCopy(args[i]) == "-thread_queue_size" &&
+                LowerCopy(args[i + 2]) == "-f" &&
+                LowerCopy(args[i + 3]) == "dshow" &&
+                LowerCopy(args[i + 4]) == "-i" &&
+                IsDirectShowAudioInputArgument(args[i + 5]))
+            {
+                if (!replaced)
+                {
+                    out.push_back("-f");
+                    out.push_back("lavfi");
+                    out.push_back("-i");
+                    out.push_back("anullsrc=channel_layout=stereo:sample_rate=44100");
+                    replaced = true;
+                }
+                i += 6;
+                continue;
+            }
+
+            if (i + 3 < args.size() &&
+                LowerCopy(args[i]) == "-f" &&
+                LowerCopy(args[i + 1]) == "dshow" &&
+                LowerCopy(args[i + 2]) == "-i" &&
+                IsDirectShowAudioInputArgument(args[i + 3]))
+            {
+                if (!replaced)
+                {
+                    out.push_back("-f");
+                    out.push_back("lavfi");
+                    out.push_back("-i");
+                    out.push_back("anullsrc=channel_layout=stereo:sample_rate=44100");
+                    replaced = true;
+                }
+                i += 4;
+                continue;
+            }
+
+            out.push_back(args[i]);
+            ++i;
+        }
+        return out;
+    }
+
+    int PickMicBridgeUdpPort()
+    {
+        return 19000 + static_cast<int>(GetTickCount64() % 10000);
+    }
+
+    std::string BuildMicBridgeBatchFile(std::wstring const &ffmpegPath, std::string const &audioDeviceName, int port, std::wstring const &logPath)
+    {
+        const std::string log = ToUtf8(logPath);
+        std::string content;
+        content += "@echo off\r\n";
+        content += "setlocal EnableExtensions\r\n";
+        content += "echo ==== APLUS FFmpeg mic bridge %DATE% %TIME% ==== > " + QuoteBatchArg(log) + "\r\n";
+        content += "echo AudioDevice=" + EscapeBatchText(audioDeviceName) + " >> " + QuoteBatchArg(log) + "\r\n";
+        content += QuoteBatchArg(ToUtf8(ffmpegPath));
+        content += " -hide_banner -loglevel info -nostdin -fflags nobuffer -flags low_delay";
+        content += " -thread_queue_size 512 -f dshow -i " + QuoteBatchArg("audio=" + audioDeviceName);
+        content += " -vn -ac 2 -ar 44100 -acodec pcm_s16le -f s16le ";
+        content += QuoteBatchArg("udp://127.0.0.1:" + std::to_string(port) + "?pkt_size=1316");
+        content += " >> " + QuoteBatchArg(log) + " 2>&1\r\n";
+        content += "set APLUS_MIC_EXIT=%ERRORLEVEL%\r\n";
+        content += "echo ==== APLUS mic bridge exited %APLUS_MIC_EXIT% %DATE% %TIME% ==== >> " + QuoteBatchArg(log) + "\r\n";
+        content += "exit /b %APLUS_MIC_EXIT%\r\n";
+        return content;
+    }
+
+    std::string FutureTaskStartTimeHHMM()
+    {
+        auto now = std::chrono::system_clock::now() + std::chrono::minutes(1);
+        std::time_t t = std::chrono::system_clock::to_time_t(now);
+        std::tm local{};
+        localtime_s(&local, &t);
+        char buf[16] = {};
+        std::snprintf(buf, sizeof(buf), "%02d:%02d", local.tm_hour, local.tm_min);
+        return std::string(buf);
+    }
+
+    void StopMicBridgeScheduledTaskBestEffort()
+    {
+        auto schtasksPath = GetSchtasksPath();
+        RunProcessAndCapture(schtasksPath, {"/End", "/TN", "AplusScoreLiveMicBridge"}, 2000);
+        RunProcessAndCapture(schtasksPath, {"/Delete", "/TN", "AplusScoreLiveMicBridge", "/F"}, 2000);
+    }
+
+    bool StartMicBridgeScheduledTask(std::wstring const &ffmpegPath, std::string const &audioDeviceName, int port, std::string &error)
+    {
+        error.clear();
+        if (audioDeviceName.empty())
+        {
+            error = "empty audio device name";
+            return false;
+        }
+
+        const auto scriptPath = GetFfmpegMicBridgeScriptPath();
+        const auto logPath = GetFfmpegMicBridgeLogPath();
+        if (scriptPath.empty() || logPath.empty())
+        {
+            error = "cannot resolve mic bridge script/log path";
+            return false;
+        }
+
+        StopMicBridgeScheduledTaskBestEffort();
+        WriteUtf8TextFile(logPath, "==== APLUS mic bridge preparing ====\r\n");
+        if (!WriteUtf8TextFile(scriptPath, BuildMicBridgeBatchFile(ffmpegPath, audioDeviceName, port, logPath)))
+        {
+            error = "cannot write mic bridge cmd file";
+            return false;
+        }
+
+        const auto schtasksPath = GetSchtasksPath();
+        const auto runCommand = ToUtf8(BuildCmdBatchLauncherCommandLine(scriptPath));
+        auto create = RunProcessAndCapture(
+            schtasksPath,
+            {"/Create", "/TN", "AplusScoreLiveMicBridge", "/SC", "ONCE", "/ST", FutureTaskStartTimeHHMM(), "/TR", runCommand, "/F", "/IT"},
+            6000);
+
+        if (!create.started || create.timedOut || (create.output.find("ERROR") != std::string::npos && create.output.find("SUCCESS") == std::string::npos))
+        {
+            // Some Windows editions reject /IT from app-launched schtasks. Retry
+            // without it; running as the current logged-in user is still enough on
+            // most machines to expose DirectShow microphone devices.
+            create = RunProcessAndCapture(
+                schtasksPath,
+                {"/Create", "/TN", "AplusScoreLiveMicBridge", "/SC", "ONCE", "/ST", FutureTaskStartTimeHHMM(), "/TR", runCommand, "/F"},
+                6000);
+        }
+
+        if (!create.started || create.timedOut || create.output.find("ERROR") != std::string::npos)
+        {
+            error = "schtasks create failed: " + (create.error.empty() ? create.output : create.error + " " + create.output);
+            StopMicBridgeScheduledTaskBestEffort();
+            return false;
+        }
+
+        auto run = RunProcessAndCapture(schtasksPath, {"/Run", "/TN", "AplusScoreLiveMicBridge"}, 5000);
+        if (!run.started || run.timedOut || run.output.find("ERROR") != std::string::npos)
+        {
+            error = "schtasks run failed: " + (run.error.empty() ? run.output : run.error + " " + run.output);
+            StopMicBridgeScheduledTaskBestEffort();
+            return false;
+        }
+
+        // v68: Do not blindly switch the main YouTube FFmpeg to UDP audio.
+        // If the bridge task was created but FFmpeg did not actually open the
+        // microphone yet, the main FFmpeg can block on the UDP audio input and
+        // YouTube stays at "upcoming/ready".  Wait for the bridge log to prove
+        // that the external FFmpeg reached its output stage.  Otherwise report
+        // failure so the caller replaces audio with stable silent fallback.
+        bool bridgeReady = false;
+        std::string bridgeLog;
+        for (int i = 0; i < 12; ++i)
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(250));
+            bridgeLog = ReadSmallTextFileUtf8(logPath, 64 * 1024);
+            auto lower = LowerCopy(bridgeLog);
+            const bool hasFatal =
+                lower.find("error opening input") != std::string::npos ||
+                lower.find("could not find audio") != std::string::npos ||
+                lower.find("could not enumerate audio") != std::string::npos ||
+                lower.find("unable to bindtoobject") != std::string::npos ||
+                lower.find("exited") != std::string::npos;
+            const bool hasOutput =
+                lower.find("output #0") != std::string::npos ||
+                lower.find("stream mapping") != std::string::npos ||
+                lower.find("size=") != std::string::npos;
+            if (hasFatal)
+            {
+                error = "mic bridge FFmpeg failed: " + PreviewText(bridgeLog);
+                StopMicBridgeScheduledTaskBestEffort();
+                return false;
+            }
+            if (hasOutput)
+            {
+                bridgeReady = true;
+                break;
+            }
+        }
+
+        if (!bridgeReady)
+        {
+            error = "mic bridge did not become ready; log=" + PreviewText(bridgeLog);
+            StopMicBridgeScheduledTaskBestEffort();
+            return false;
+        }
+
+        return true;
+    }
+
+    bool ReplaceDshowAudioWithMicBridge(std::wstring const &ffmpegPath, std::vector<std::string> &pipeArgs, std::string &summary)
+    {
+        summary.clear();
+        const auto audioDeviceName = ExtractFirstDirectShowAudioDeviceName(pipeArgs);
+        if (audioDeviceName.empty())
+        {
+            return false;
+        }
+
+        std::string bridgeError;
+        const int port = PickMicBridgeUdpPort();
+        if (!StartMicBridgeScheduledTask(ffmpegPath, audioDeviceName, port, bridgeError))
+        {
+            bool silentReplaced = false;
+            auto silentArgs = ReplaceDirectShowAudioInputsWithSilent(pipeArgs, silentReplaced);
+            if (silentReplaced)
+            {
+                pipeArgs = std::move(silentArgs);
+                summary = "Mic bridge not started for " + audioDeviceName + ": " + bridgeError + "; replaced audio input with silent fallback so YouTube ingest can still go live";
+            }
+            else
+            {
+                summary = "Mic bridge not started for " + audioDeviceName + ": " + bridgeError;
+            }
+            return false;
+        }
+
+        bool replaced = false;
+        auto transformed = ReplaceDirectShowAudioInputsWithUdp(pipeArgs, port, replaced);
+        if (!replaced)
+        {
+            StopMicBridgeScheduledTaskBestEffort();
+            summary = "Mic bridge started but no DirectShow audio input was replaced";
+            return false;
+        }
+
+        pipeArgs = std::move(transformed);
+        g_externalScheduledLive = true;
+        summary = "Mic bridge scheduled for " + audioDeviceName + " on udp://127.0.0.1:" + std::to_string(port);
+        return true;
+    }
+
+
     std::string PreviewText(std::string text)
     {
         // v32: keep enough DirectShow output for JS/native diagnostics. The first
@@ -1164,6 +1569,12 @@ namespace
             "info",
             "-fflags",
             "nobuffer",
+            "-flags",
+            "low_delay",
+            "-probesize",
+            "32",
+            "-analyzeduration",
+            "0",
             "-f",
             "rawvideo",
             "-pix_fmt",
@@ -1277,7 +1688,7 @@ namespace
         return value;
     }
 
-    int JsonIntValue(std::string const &json, std::string const &key, size_t from = 0)
+    int64_t JsonInt64Value(std::string const &json, std::string const &key, size_t from = 0)
     {
         auto keyText = std::string("\"") + key + "\"";
         auto pos = json.find(keyText, from);
@@ -1288,16 +1699,34 @@ namespace
         while (pos < json.size() && std::isspace(static_cast<unsigned char>(json[pos]))) ++pos;
         bool neg = false;
         if (pos < json.size() && json[pos] == '-') { neg = true; ++pos; }
-        int value = 0;
+        int64_t value = 0;
         bool any = false;
         while (pos < json.size() && std::isdigit(static_cast<unsigned char>(json[pos])))
         {
             any = true;
-            value = value * 10 + (json[pos] - '0');
+            value = value * 10 + static_cast<int64_t>(json[pos] - '0');
             ++pos;
         }
         if (!any) return 0;
         return neg ? -value : value;
+    }
+
+    int JsonIntValue(std::string const &json, std::string const &key, size_t from = 0)
+    {
+        auto value = JsonInt64Value(json, key, from);
+        if (value > INT_MAX) return INT_MAX;
+        if (value < INT_MIN) return INT_MIN;
+        return static_cast<int>(value);
+    }
+
+    int64_t CurrentUnixTimeMs() noexcept
+    {
+        try
+        {
+            return std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count();
+        }
+        catch (...) { return 0; }
     }
 
     struct NativeLiveOverlayState
@@ -1328,8 +1757,27 @@ namespace
     std::mutex g_nativeOverlayMutex;
     NativeLiveOverlayState g_nativeOverlayState{};
     ULONGLONG g_nativeOverlayLastLoadTick = 0;
+    int64_t g_nativeOverlaySessionStartedAtMs = 0;
     std::mutex g_nativeOverlayBitmapMutex;
     NativeOverlayBitmap g_nativeOverlayBitmap{};
+
+    void ResetNativeLiveOverlayStateForNewSession() noexcept
+    {
+        g_nativeOverlaySessionStartedAtMs = CurrentUnixTimeMs();
+        g_nativeOverlayLastLoadTick = 0;
+        {
+            std::lock_guard<std::mutex> lock(g_nativeOverlayMutex);
+            g_nativeOverlayState = NativeLiveOverlayState{};
+        }
+        {
+            std::lock_guard<std::mutex> lock(g_nativeOverlayBitmapMutex);
+            g_nativeOverlayBitmap = NativeOverlayBitmap{};
+        }
+        // Do not call AppendStderrSummary here: Start() holds g_processMutex
+        // when resetting overlay state, and AppendStderrSummary also locks it.
+        // Calling it here deadlocked native start and left the app stuck at
+        // "Đang tạo phiên live" / LiveState=starting.
+    }
 
     uint64_t FileTokenForPath(std::wstring const &path) noexcept
     {
@@ -1496,7 +1944,7 @@ namespace
     void RefreshNativeLiveOverlayStateIfNeeded() noexcept
     {
         ULONGLONG now = GetTickCount64();
-        if (now - g_nativeOverlayLastLoadTick < 250) return;
+        if (now - g_nativeOverlayLastLoadTick < 16) return;
         g_nativeOverlayLastLoadTick = now;
 
         std::vector<std::wstring> snapshotMetaCandidates;
@@ -1556,7 +2004,21 @@ namespace
         }
         if (!snapshotMetaJson.empty() && ParseJsonBoolValue(snapshotMetaJson, "visible", false))
         {
-            next.visible = true;
+            const int64_t metaUpdatedAt = JsonInt64Value(snapshotMetaJson, "updatedAt");
+            const int64_t sessionStartedAt = g_nativeOverlaySessionStartedAtMs;
+            if (sessionStartedAt > 0 && metaUpdatedAt > 0 && metaUpdatedAt + 1000 < sessionStartedAt)
+            {
+                std::lock_guard<std::mutex> lock(g_nativeOverlayMutex);
+                g_nativeOverlayState = next;
+                return;
+            }
+            if (sessionStartedAt > 0 && metaUpdatedAt <= 0)
+            {
+                std::lock_guard<std::mutex> lock(g_nativeOverlayMutex);
+                g_nativeOverlayState = next;
+                return;
+            }
+
             auto variant = JsonStringValue(snapshotMetaJson, "variant");
             std::transform(variant.begin(), variant.end(), variant.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
             next.carom = variant.find("carom") != std::string::npos || variant.find("libre") != std::string::npos;
@@ -1572,7 +2034,19 @@ namespace
                 next.useSnapshot = LoadOverlaySnapshotBitmap(snapshotPngPath);
                 if (next.useSnapshot)
                 {
+                    next.visible = true;
                     next.snapshotPath = snapshotPngPath;
+                }
+                else
+                {
+                    // Keep the last good React snapshot instead of flashing to the
+                    // temporary hand-drawn JSON overlay while React is rewriting the PNG.
+                    // This prevents live overlay blinking during score/timer updates.
+                    std::lock_guard<std::mutex> lock(g_nativeOverlayMutex);
+                    if (g_nativeOverlayState.visible && g_nativeOverlayState.useSnapshot)
+                    {
+                        return;
+                    }
                 }
             }
         }
@@ -1873,9 +2347,13 @@ namespace
             if (state.useSnapshot)
             {
                 ApplyOverlaySnapshotBitmapToFrame(frame, width, height);
+                return;
             }
-            // v57: absolutely no hand-drawn/native fallback overlay.
-            // If the React fullscreen snapshot is not available yet, send clean camera.
+
+            // v64: do not draw the old/native fallback overlay at all. It caused
+            // visible flicker between the React overlay PNG and the hand-drawn
+            // placeholder during live updates. If no React snapshot is available,
+            // send the clean camera frame until the next valid snapshot arrives.
             return;
 
             const int w = static_cast<int>(width);
@@ -2114,6 +2592,75 @@ namespace
             catch (...) {}
         }
         g_pipeMediaCapture = nullptr;
+    }
+
+
+    winrt::Windows::Foundation::IAsyncAction PrimeMicrophoneAccessAsync()
+    {
+        using namespace winrt::Windows::Devices::Enumeration;
+        using namespace winrt::Windows::Media::Capture;
+
+        try
+        {
+            auto devices = co_await DeviceInformation::FindAllAsync(DeviceClass::AudioCapture);
+            if (devices.Size() == 0)
+            {
+                g_microphoneAccessSummary = "no Windows audio capture device found";
+                co_return;
+            }
+
+            auto selected = devices.GetAt(0);
+            MediaCaptureInitializationSettings settings;
+            settings.StreamingCaptureMode(StreamingCaptureMode::Audio);
+            settings.AudioDeviceId(selected.Id());
+
+            MediaCapture mediaCapture;
+            co_await mediaCapture.InitializeAsync(settings);
+            try { mediaCapture.Close(); } catch (...) {}
+
+            g_microphoneAccessSummary = "ok: " + winrt::to_string(selected.Name());
+            co_return;
+        }
+        catch (winrt::hresult_error const &ex)
+        {
+            g_microphoneAccessSummary = "failed: " + winrt::to_string(ex.message()) + " hr=" + std::to_string(static_cast<long>(ex.code()));
+            co_return;
+        }
+        catch (std::exception const &ex)
+        {
+            g_microphoneAccessSummary = std::string("failed: ") + ex.what();
+            co_return;
+        }
+        catch (...)
+        {
+            g_microphoneAccessSummary = "failed: unknown";
+            co_return;
+        }
+    }
+
+    void PrimeMicrophoneAccessBlocking()
+    {
+        if (g_microphoneAccessPrimed.exchange(true))
+        {
+            return;
+        }
+        try { winrt::init_apartment(winrt::apartment_type::multi_threaded); } catch (...) {}
+        try
+        {
+            PrimeMicrophoneAccessAsync().get();
+        }
+        catch (winrt::hresult_error const &ex)
+        {
+            g_microphoneAccessSummary = "failed blocking: " + winrt::to_string(ex.message()) + " hr=" + std::to_string(static_cast<long>(ex.code()));
+        }
+        catch (std::exception const &ex)
+        {
+            g_microphoneAccessSummary = std::string("failed blocking: ") + ex.what();
+        }
+        catch (...)
+        {
+            g_microphoneAccessSummary = "failed blocking: unknown";
+        }
     }
 
     winrt::Windows::Foundation::IAsyncAction PrepareMediaCapturePipeLiveAsync(std::string const &preferredVideoDeviceNameUtf8)
@@ -2549,6 +3096,8 @@ namespace winrt::billiardsgrade::implementation
             JSValueObject result;
             try
             {
+                PrimeMicrophoneAccessBlocking();
+
                 JSValueArray bestVideoDevices;
                 JSValueArray bestAudioDevices;
                 std::string bestError;
@@ -2584,6 +3133,8 @@ namespace winrt::billiardsgrade::implementation
                 result["ffmpegPath"] = JSValue(bestPath);
                 result["error"] = JSValue(bestError);
                 result["outputPreview"] = JSValue(bestPreview);
+                result["microphoneAccessPrimed"] = JSValue(g_microphoneAccessPrimed.load());
+                result["microphoneAccessSummary"] = JSValue(g_microphoneAccessSummary);
                 promise.Resolve(result);
             }
             catch (std::exception const &ex)
@@ -2611,6 +3162,8 @@ namespace winrt::billiardsgrade::implementation
             JSValueObject result;
             try
             {
+                PrimeMicrophoneAccessBlocking();
+
                 std::unique_lock<std::mutex> lock(g_processMutex);
                 if (g_processActive && g_processInfo.hProcess)
                 {
@@ -2619,7 +3172,8 @@ namespace winrt::billiardsgrade::implementation
                     {
                         result["status"] = JSValue("live");
                         result["pid"] = JSValue(static_cast<double>(g_processInfo.dwProcessId));
-                        result["error"] = JSValue("FFmpeg live process is already running");
+                        result["alreadyRunning"] = JSValue(true);
+                        result["error"] = JSValue("");
                         promise.Resolve(result);
                         return;
                     }
@@ -2638,6 +3192,8 @@ namespace winrt::billiardsgrade::implementation
                 }
 
                 const bool isDirectShowVideoLive = ArgsContainDirectShowVideoInput(args);
+
+                ResetNativeLiveOverlayStateForNewSession();
 
                 if (isDirectShowVideoLive)
                 {
@@ -2685,7 +3241,30 @@ namespace winrt::billiardsgrade::implementation
                         return;
                     }
 
+                    auto pipeArgs = BuildMediaCapturePipeArgs(args, g_pipeFrameWidth, g_pipeFrameHeight);
+                    // v71 stable live first: microphone is fully disabled in the live startup path.
+                    // Keep YouTube ingest stable with the anullsrc audio input generated by TypeScript.
+                    // If an older DirectShow audio argument is still present, replace it with anullsrc.
+                    std::string micBridgeSummary;
+                    bool micBridgeActive = false;
+                    bool silentReplaced = false;
+                    auto silentArgs = ReplaceDirectShowAudioInputsWithSilent(pipeArgs, silentReplaced);
+                    if (silentReplaced)
+                    {
+                        pipeArgs = std::move(silentArgs);
+                        micBridgeSummary = "Microphone disabled; replaced DirectShow audio with stable anullsrc fallback";
+                    }
+
                     lock.lock();
+
+                    if (!micBridgeSummary.empty())
+                    {
+                        g_stderrSummary += "\n[LiveAudio] " + micBridgeSummary;
+                        if (g_stderrSummary.size() > 4096)
+                        {
+                            g_stderrSummary.erase(0, g_stderrSummary.size() - 4096);
+                        }
+                    }
 
                     SECURITY_ATTRIBUTES sa{};
                     sa.nLength = sizeof(SECURITY_ATTRIBUTES);
@@ -2727,13 +3306,15 @@ namespace winrt::billiardsgrade::implementation
                     pipeSi.hStdOutput = writePipe;
                     pipeSi.hStdError = writePipe;
 
-                    auto pipeArgs = BuildMediaCapturePipeArgs(args, g_pipeFrameWidth, g_pipeFrameHeight);
                     auto command = BuildCommandLine(ffmpegPath, pipeArgs);
                     std::vector<wchar_t> commandLine(command.begin(), command.end());
                     commandLine.push_back(L'\0');
 
                     PROCESS_INFORMATION pi{};
-                    DWORD launchFlags = CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP | BELOW_NORMAL_PRIORITY_CLASS;
+                    // Near-parallel v2: do not launch FFmpeg below normal priority.
+                    // Encoding plus RTMPS upload is latency-sensitive; BELOW_NORMAL can add
+                    // avoidable buffering on busy Windows machines.
+                    DWORD launchFlags = CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP | NORMAL_PRIORITY_CLASS;
                     BOOL ok = CreateProcessW(
                         nullptr,
                         commandLine.data(),
@@ -2751,6 +3332,11 @@ namespace winrt::billiardsgrade::implementation
 
                     if (!ok)
                     {
+                        if (micBridgeActive)
+                        {
+                            StopMicBridgeScheduledTaskBestEffort();
+                            g_externalScheduledLive = false;
+                        }
                         CloseHandle(stdinWrite);
                         CloseHandle(readPipe);
                         StopMediaCapturePipeLiveBestEffort();
@@ -2764,7 +3350,11 @@ namespace winrt::billiardsgrade::implementation
                     g_processInfo = pi;
                     g_stdinWrite = stdinWrite;
                     g_stderrRead = nullptr;
-                    g_stderrSummary = "FFmpeg started with MediaCapture raw BGRA pipe v62 react-fullscreen-snapshot-only (" + std::to_string(g_pipeFrameWidth) + "x" + std::to_string(g_pipeFrameHeight) + ").";
+                    g_stderrSummary = "FFmpeg started with MediaCapture raw BGRA pipe v73 stable-overlay-throttle-anullsrc-no-mic (" + std::to_string(g_pipeFrameWidth) + "x" + std::to_string(g_pipeFrameHeight) + ").";
+                    if (!micBridgeSummary.empty())
+                    {
+                        g_stderrSummary += "\n[LiveAudio] " + micBridgeSummary;
+                    }
                     g_processActive = true;
                     g_externalScheduledLive = false;
 
@@ -2799,6 +3389,11 @@ namespace winrt::billiardsgrade::implementation
                     }
                     catch (winrt::hresult_error const &ex)
                     {
+                        if (micBridgeActive)
+                        {
+                            StopMicBridgeScheduledTaskBestEffort();
+                            g_externalScheduledLive = false;
+                        }
                         StopMediaCapturePipeLiveBestEffort();
                         {
                             std::lock_guard<std::mutex> cleanupLock(g_processMutex);
@@ -2823,6 +3418,11 @@ namespace winrt::billiardsgrade::implementation
                     }
                     catch (...)
                     {
+                        if (micBridgeActive)
+                        {
+                            StopMicBridgeScheduledTaskBestEffort();
+                            g_externalScheduledLive = false;
+                        }
                         StopMediaCapturePipeLiveBestEffort();
                         {
                             std::lock_guard<std::mutex> cleanupLock(g_processMutex);
@@ -2852,6 +3452,11 @@ namespace winrt::billiardsgrade::implementation
                     if (g_processInfo.hProcess && GetExitCodeProcess(g_processInfo.hProcess, &earlyExitCode) && earlyExitCode != STILL_ACTIVE)
                     {
                         std::string summary = g_stderrSummary.empty() ? "FFmpeg raw pipe exited immediately." : g_stderrSummary;
+                        if (micBridgeActive)
+                        {
+                            StopMicBridgeScheduledTaskBestEffort();
+                            g_externalScheduledLive = false;
+                        }
                         StopMediaCapturePipeLiveBestEffort();
                         ResetActiveProcessHandles();
                         result["status"] = JSValue("error");
@@ -2865,9 +3470,13 @@ namespace winrt::billiardsgrade::implementation
                     result["status"] = JSValue("live");
                     result["pid"] = JSValue(static_cast<double>(g_processInfo.dwProcessId));
                     result["error"] = JSValue("");
-                    result["captureSource"] = JSValue("mediacapture-rawvideo-pipe-v62-react-fullscreen-snapshot-direct");
+                    result["captureSource"] = JSValue("mediacapture-rawvideo-pipe-v73-stable-overlay-throttle-anullsrc-no-mic");
+                    result["micBridgeDisabled"] = JSValue(micBridgeActive);
+                    result["micBridgeSummary"] = JSValue(micBridgeSummary);
                     result["width"] = JSValue(static_cast<double>(g_pipeFrameWidth));
                     result["height"] = JSValue(static_cast<double>(g_pipeFrameHeight));
+                    result["microphoneAccessPrimed"] = JSValue(g_microphoneAccessPrimed.load());
+                    result["microphoneAccessSummary"] = JSValue(g_microphoneAccessSummary);
                     promise.Resolve(result);
                     return;
                 }
@@ -3092,10 +3701,9 @@ namespace winrt::billiardsgrade::implementation
                 // so kill FFmpeg as a fallback on stop/end match.
                 if (g_externalScheduledLive)
                 {
-                    auto schtasksPath = GetSchtasksPath();
-                    RunProcessAndCapture(schtasksPath, {"/End", "/TN", "AplusScoreLiveFfmpeg"}, 4000);
-                    RunProcessAndCapture(schtasksPath, {"/Delete", "/TN", "AplusScoreLiveFfmpeg", "/F"}, 4000);
+                    StopMicBridgeScheduledTaskBestEffort();
                     RunProcessAndCapture(L"C:\\Windows\\System32\\taskkill.exe", {"/IM", "ffmpeg.exe", "/F", "/T"}, 4000);
+                    g_externalScheduledLive = false;
                 }
                 ResetActiveProcessHandles();
                 result["stopped"] = JSValue(true);

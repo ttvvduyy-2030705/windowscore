@@ -51,6 +51,8 @@ export interface Props {
   setIsCameraReady: (isReady: boolean) => void;
   youtubeLivePreviewActive?: boolean;
   gameSettings?: GameSettings;
+  warmUpCountdownTime?: number;
+  gameBreakEnabled?: boolean;
 }
 
 type CameraSource = 'back' | 'front' | 'external';

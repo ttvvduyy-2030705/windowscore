@@ -1,0 +1,6 @@
+v82 focuses only on Bấm giờ / Thêm giờ no longer changing PC volume.
+Because Windows handles VolumeUp/VolumeDown before the RNW app can fully block the OSD, this version adds an external guard helper:
+- It swallows VolumeDown/VolumeUp only while Aplus Score/billiardsgrade is the foreground app.
+- It sends F13/F14 to the app.
+- The app maps F13 -> TIMER and F14 -> EXTENSION.
+Run with: powershell -ExecutionPolicy Bypass -File .\RUN_APP_WITH_REMOTE_GUARD.ps1

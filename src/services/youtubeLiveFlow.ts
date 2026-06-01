@@ -222,6 +222,26 @@ const requestJson = async <T>(path: string, init?: RequestInit): Promise<T> => {
     errorCode: data?.errorCode,
   });
 
+  const isRedundantTransition =
+    path.startsWith('/live/youtube/status/') &&
+    String(data?.message || '').toLowerCase().includes('redundant transition');
+
+  if (isRedundantTransition) {
+    // Do NOT fake live/active here. YouTube may return "Redundant transition"
+    // while the public watch page is still showing scheduled/offline. Return a
+    // marker so the caller can keep polling until a real 200 response reports
+    // broadcast=live and stream=active.
+    console.log('[YouTube Live API] redundant transition received; keep polling for real live/active status');
+    return {
+      ok: true,
+      redundantTransition: true,
+      autoTransitioned: true,
+      message: data?.message || 'Redundant transition',
+      broadcast: {status: {lifeCycleStatus: 'transitioning'}},
+      stream: {status: {streamStatus: 'transitioning'}},
+    } as T;
+  }
+
   if (!response.ok || data?.ok === false) {
     const error = new Error(data?.message || 'Live API request failed');
     (error as any).payload = data;

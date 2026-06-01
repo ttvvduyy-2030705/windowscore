@@ -1,7 +1,7 @@
 import {RemoteControlModule} from 'services/native-modules';
 import {RemoteControlKeys, RemoteControlKeysNative} from 'types/bluetooth';
 
-const DEBUG_REMOTE = false;
+const DEBUG_REMOTE = true;
 const debugRemoteLog = (...args: any[]) => {
   if (__DEV__ && DEBUG_REMOTE) {
     console.log(...args);
@@ -45,6 +45,7 @@ class RemoteControl {
     }
 
     RemoteControlModule.registerRemoteControlListener(this.onRemoteEvent);
+    RemoteControlModule.startListening?.();
     this._registeredToNative = true;
   };
 
@@ -183,10 +184,13 @@ class RemoteControl {
     const normalizedFromCode = this.normalizeKeyCode(preferredPhysicalCode);
     const normalizedFromResolved = this.normalizeKeyCode(rawResolvedKey);
 
-    debugRemoteLog('[Remote] incoming:', {
+    console.log('[Remote][JS] incoming:', {
+      source: (data as any)?.source,
       key: (data as any)?.key,
       keyCode: rawKeyCode,
       scanCode: rawScanCode,
+      action: (data as any)?.action,
+      repeatCount,
       resolvedKey: rawResolvedKey,
       normalizedFromCode,
       normalizedFromResolved,
@@ -200,7 +204,7 @@ class RemoteControl {
       null;
 
     if (typeof callback !== 'function') {
-      debugRemoteLog('[Remote] no callback for key:', {
+      console.log('[Remote][JS] no callback for key:', {
         rawKeyCode,
         rawScanCode,
         rawResolvedKey,
@@ -211,6 +215,34 @@ class RemoteControl {
     }
 
     callback();
+  };
+
+  public setEnabled = async (enabled: boolean) => {
+    this.ensureNativeListener();
+
+    if (__DEV__) {
+      console.log('[Remote] setEnabled', enabled);
+    }
+
+    // For this Windows Bluetooth remote, enabling the in-game toggle must call
+    // the native module. Earlier builds only changed UI state, so native stayed
+    // enabled=false and no button event reached the app.
+    await RemoteControlModule.setEnabled?.(enabled);
+
+    if (enabled) {
+      RemoteControlModule.startListening?.();
+    }
+  };
+
+  public scanAndConnect = async () => {
+    this.ensureNativeListener();
+    await RemoteControlModule.setEnabled?.(true);
+    return RemoteControlModule.scanAndConnect?.();
+  };
+
+  public disconnect = async () => {
+    await RemoteControlModule.setEnabled?.(false);
+    return RemoteControlModule.disconnect?.();
   };
 
   public registerKeyEvents = (

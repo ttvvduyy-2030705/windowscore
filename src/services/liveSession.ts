@@ -19,6 +19,8 @@ export type YouTubeCreateLivePayload = {
   recordFromStart?: boolean;
   resolution?: string;
   frameRate?: string;
+  latencyPreference?: 'normal' | 'low' | 'ultraLow';
+  enableLowLatency?: boolean;
 };
 
 export type FacebookPage = {

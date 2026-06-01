@@ -653,8 +653,8 @@ const deleteYouTubeStream = async (accessToken, streamId) => {
   }
 };
 
-const YOUTUBE_AUTO_GO_LIVE_POLL_INTERVAL_MS = 700;
-const YOUTUBE_AUTO_GO_LIVE_MAX_ATTEMPTS = 40;
+const YOUTUBE_AUTO_GO_LIVE_POLL_INTERVAL_MS = 500;
+const YOUTUBE_AUTO_GO_LIVE_MAX_ATTEMPTS = 120;
 const youtubeAutoGoLiveJobs = new Map();
 
 const getYouTubeBroadcastById = async (accessToken, broadcastId) => {
@@ -764,24 +764,41 @@ const tryAutoTransitionYouTubeBroadcast = async ({
     return {broadcast, stream, transitioned: false};
   }
 
-  const transitionedBroadcast = await transitionYouTubeBroadcast(
-    accessToken,
-    broadcastId,
-    'live',
-  );
+  let transitionedBroadcast;
+
+  try {
+    transitionedBroadcast = await transitionYouTubeBroadcast(
+      accessToken,
+      broadcastId,
+      'live',
+    );
+  } catch (error) {
+    const message = String(error?.message || error || '');
+
+    if (!message.toLowerCase().includes('redundant transition')) {
+      throw error;
+    }
+
+    // YouTube can answer "Redundant transition" while the broadcast is in the
+    // middle of changing state. Do not return 400 to the app; fetch the real
+    // current status and let the app keep polling until it is actually live.
+    transitionedBroadcast = await getYouTubeBroadcastById(accessToken, broadcastId);
+  }
+
+  const freshStream = await getYouTubeStreamById(accessToken, streamId);
 
   updateStoredYouTubeSessionStatus({
     store,
     broadcastId,
     broadcast: transitionedBroadcast,
-    stream,
+    stream: freshStream || stream,
     extra: {autoStartedAt: new Date().toISOString()},
   });
   writeTokenStore(store);
 
   return {
     broadcast: transitionedBroadcast,
-    stream,
+    stream: freshStream || stream,
     transitioned: true,
   };
 };

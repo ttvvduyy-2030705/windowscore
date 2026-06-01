@@ -1565,6 +1565,8 @@ const GameConsole = (props: ConsoleViewModelProps) => {
               isPaused={props.isPaused}
               isStarted={props.isStarted}
               youtubeLivePreviewActive={props.youtubeLivePreviewActive}
+              warmUpCountdownTime={props.warmUpCountdownTime}
+              gameBreakEnabled={props.gameBreakEnabled}
               forceFullscreen={isCameraFullscreen}
             />
           </View>
@@ -1939,6 +1941,8 @@ const GameConsole = (props: ConsoleViewModelProps) => {
           isStarted={props.isStarted}
           youtubeLivePreviewActive={props.youtubeLivePreviewActive}
           gameSettings={props.gameSettings}
+          warmUpCountdownTime={props.warmUpCountdownTime}
+          gameBreakEnabled={props.gameBreakEnabled}
           forceFullscreen={isCameraFullscreen}
         />
       </View>

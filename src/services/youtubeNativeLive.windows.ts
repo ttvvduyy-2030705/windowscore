@@ -131,11 +131,27 @@ export const updateYouTubeNativeOverlay = async (
     // v62: keep the captured fullscreen overlay PNG in its original TempState
     // folder and write metadata next to it. v60 could treat a trailing slash as
     // a directory and attempted to write react-fullscreen-overlay.png/overlay-snapshot.json.
+    if (!hasSnapshot) {
+      // Do not mirror a transient invisible/empty snapshot while FFmpeg is live.
+      // Writing visible:false here makes the native layer remove the last good
+      // overlay for a frame, which appears as blinking on YouTube. Reset/stop
+      // paths still clear these files explicitly via resetWindowsFfmpegOverlaySession.
+      console.log('[Windows Live Overlay]', {
+        visible: false,
+        mode: payload?.variant || 'unknown',
+        hasSnapshot: false,
+        nativeSnapshotPath: '',
+        nativeSnapshotMetaPath: paths.nativeSnapshotMetaPath,
+        copyMode: 'direct-tempstate-path-v64-ignored-empty-snapshot',
+      });
+      return true;
+    }
+
     const meta = {
-      visible: hasSnapshot,
+      visible: true,
       variant: payload?.variant || 'pool',
       source: payload?.source || 'gameplay-shared-overlay-snapshot',
-      snapshotPath: hasSnapshot ? normalizedSource : '',
+      snapshotPath: normalizedSource,
       snapshotWidth: Number(payload?.snapshotWidth || 0),
       snapshotHeight: Number(payload?.snapshotHeight || 0),
       updatedAt: Number(payload?.updatedAt || Date.now()),
@@ -155,18 +171,13 @@ export const updateYouTubeNativeOverlay = async (
       });
     }
 
-    if (!hasSnapshot) {
-      await safeUnlink(paths.nativeSnapshotPath);
-      await safeUnlink(paths.nativeReactSnapshotPath);
-    }
-
     console.log('[Windows Live Overlay]', {
-      visible: hasSnapshot,
+      visible: true,
       mode: payload?.variant || 'unknown',
-      hasSnapshot,
-      nativeSnapshotPath: hasSnapshot ? normalizedSource : '',
+      hasSnapshot: true,
+      nativeSnapshotPath: normalizedSource,
       nativeSnapshotMetaPath: sourceMetaPath || paths.nativeSnapshotMetaPath,
-      copyMode: 'direct-tempstate-path-v62',
+      copyMode: 'direct-tempstate-path-v64-keep-last-good-snapshot',
     });
 
     return true;

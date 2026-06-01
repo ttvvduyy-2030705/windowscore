@@ -29,8 +29,10 @@ import {
   lockAplusLiveScoreMatch,
 } from 'services/aplusLiveScore';
 import {
+  clearStoredYouTubeConnection,
   createYouTubeLiveSession,
   getYouTubeLiveStatus,
+  isYouTubeNotConnectedError,
   stopYouTubeLiveSession,
 } from 'services/youtubeLiveFlow';
 import {
@@ -41,6 +43,16 @@ import {
   stopWindowsFfmpegYouTubeLive,
   type WindowsFfmpegLiveConfig,
 } from 'services/livestream/WindowsFfmpegLiveEngine';
+
+const formatVietnamLiveTitleTime = (date: Date = new Date()): string => {
+  const vietnamTime = new Date(date.getTime() + 7 * 60 * 60 * 1000);
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return `${pad(vietnamTime.getUTCDate())}/${pad(
+    vietnamTime.getUTCMonth() + 1,
+  )}/${vietnamTime.getUTCFullYear()} ${pad(vietnamTime.getUTCHours())}:${pad(
+    vietnamTime.getUTCMinutes(),
+  )}:${pad(vietnamTime.getUTCSeconds())} GMT+7`;
+};
 
 type LivestreamRouteParams = {
   livestreamPlatform?: 'facebook' | 'youtube' | 'tiktok' | 'device' | null;
@@ -128,69 +140,88 @@ const isRedundantYouTubeTransitionError = (error: any) => {
   return message.toLowerCase().includes('redundant transition');
 };
 
-const pollUntilYouTubeBroadcastLive = async (broadcastId: string) => {
-  let lastStatus: any = null;
 
-  for (let attempt = 1; attempt <= 35; attempt += 1) {
-    const ffmpegStatus = await getWindowsFfmpegLiveStatus();
+const kickYouTubeGoLiveInBackground = (broadcastId: string) => {
+  const id = String(broadcastId || '').trim();
+  if (!id) {
+    return;
+  }
 
-    let youtubeStatus: any = null;
-    try {
-      youtubeStatus = await getYouTubeLiveStatus(broadcastId);
-      lastStatus = youtubeStatus;
-    } catch (statusError: any) {
-      // v52b: backend may call YouTube transition while autoStart already moved the
-      // broadcast to live. YouTube then returns "Redundant transition". That is
-      // not a live failure: FFmpeg is already ingesting and the broadcast is already
-      // live/transitioned, so continue into gameplay instead of stopping the stream.
-      if (isRedundantYouTubeTransitionError(statusError)) {
-        console.log('[Settings YouTube Live Status Poll] redundant transition treated as live', {
+  void (async () => {
+    let lastBroadcastStatus = '';
+    let lastStreamStatus = '';
+
+    // Keep poking the backend transition endpoint in the background.  This does
+    // not block gameplay, but it avoids the case where the app enters the match
+    // while YouTube remains stuck at ready/offline because the single early check
+    // happened before liveStream.status became active.
+    for (let attempt = 1; attempt <= 90; attempt += 1) {
+      try {
+        const ffmpegStatus = await getWindowsFfmpegLiveStatus().catch(() => null);
+        if (ffmpegStatus?.status === 'stopped' || ffmpegStatus?.status === 'error') {
+          console.log('[YouTube Live Background GoLive] stop polling because FFmpeg stopped', {
+            attempt,
+            broadcastId: id,
+            ffmpegStatus: ffmpegStatus?.status,
+            ffmpegError: ffmpegStatus?.stderrSummary || ffmpegStatus?.error || '',
+          });
+          return;
+        }
+
+        const status: any = await getYouTubeLiveStatus(id);
+        lastBroadcastStatus = String(status?.broadcast?.status?.lifeCycleStatus || '');
+        lastStreamStatus = String(status?.stream?.status?.streamStatus || '');
+
+        console.log('[YouTube Live Background GoLive]', {
           attempt,
-          broadcastId,
+          broadcastId: id,
+          broadcastStatus: lastBroadcastStatus,
+          streamStatus: lastStreamStatus,
+          autoTransitioned: Boolean(status?.autoTransitioned),
           ffmpegStatus: ffmpegStatus?.status,
           ffmpegPid: ffmpegStatus?.pid,
-          message: statusError?.message || String(statusError),
         });
-        if (ffmpegStatus?.status === 'stopped' || ffmpegStatus?.status === 'error') {
-          throw new Error(
-            ffmpegStatus?.stderrSummary ||
-              ffmpegStatus?.error ||
-              'FFmpeg đã dừng trước khi YouTube chuyển sang live.',
-          );
+
+        if (lastBroadcastStatus === 'live' && lastStreamStatus === 'active') {
+          return;
         }
-        return {
-          ok: true,
-          autoTransitioned: true,
-          redundantTransition: true,
-          broadcast: {status: {lifeCycleStatus: 'live'}},
-          stream: {status: {streamStatus: 'active'}},
-        };
+      } catch (error: any) {
+        const message = error?.message || String(error);
+        if (!isRedundantYouTubeTransitionError(error)) {
+          console.log('[YouTube Live Background GoLive] status check failed', {
+            attempt,
+            broadcastId: id,
+            message,
+          });
+        }
       }
 
-      throw statusError;
+      await wait(attempt <= 20 ? 700 : 1200);
     }
 
-    const broadcastStatus = String(
-      (youtubeStatus as any)?.broadcast?.status?.lifeCycleStatus || '',
-    );
-    const streamStatus = String(
-      (youtubeStatus as any)?.stream?.status?.streamStatus || '',
-    );
-
-    console.log('[Settings YouTube Live Status Poll]', {
-      attempt,
-      broadcastId,
-      broadcastStatus,
-      streamStatus,
-      autoTransitioned: Boolean((youtubeStatus as any)?.autoTransitioned),
-      ffmpegStatus: ffmpegStatus?.status,
-      ffmpegPid: ffmpegStatus?.pid,
-      ffmpegStderrSummary: ffmpegStatus?.stderrSummary || ffmpegStatus?.error || '',
+    console.log('[YouTube Live Background GoLive] gave up but kept local FFmpeg alive', {
+      broadcastId: id,
+      lastBroadcastStatus,
+      lastStreamStatus,
     });
+  })();
+};
 
-    if (broadcastStatus === 'live') {
-      return youtubeStatus;
-    }
+const pollUntilYouTubeBroadcastLive = async (broadcastId: string) => {
+  let lastStatus: any = null;
+  let redundantTransitionCount = 0;
+  let lastBroadcastStatus = 'unknown';
+  let lastStreamStatus = 'unknown';
+
+  // v74: Do not enter gameplay until YouTube itself confirms the broadcast is
+  // live and the bound stream is active. FFmpeg can report local "live" several
+  // seconds before YouTube's public watch page leaves "scheduled/offline".
+  // That was the exact cause of entering the match while YouTube still showed
+  // "sắp diễn ra".
+  await wait(900);
+
+  for (let attempt = 1; attempt <= 90; attempt += 1) {
+    const ffmpegStatus = await getWindowsFfmpegLiveStatus();
 
     if (ffmpegStatus?.status === 'stopped' || ffmpegStatus?.status === 'error') {
       throw new Error(
@@ -200,13 +231,62 @@ const pollUntilYouTubeBroadcastLive = async (broadcastId: string) => {
       );
     }
 
-    await wait(attempt <= 5 ? 1500 : 2500);
+    let youtubeStatus: any = null;
+    try {
+      youtubeStatus = await getYouTubeLiveStatus(broadcastId);
+      lastStatus = youtubeStatus;
+    } catch (statusError: any) {
+      if (isRedundantYouTubeTransitionError(statusError)) {
+        redundantTransitionCount += 1;
+        console.log('[Settings YouTube Live Status Poll] redundant transition; keep waiting for real live/active', {
+          attempt,
+          redundantTransitionCount,
+          broadcastId,
+          ffmpegStatus: ffmpegStatus?.status,
+          ffmpegPid: ffmpegStatus?.pid,
+          message: statusError?.message || String(statusError),
+        });
+        await wait(attempt <= 20 ? 650 : 1000);
+        continue;
+      }
+
+      throw statusError;
+    }
+
+    const isRedundantMarker = Boolean((youtubeStatus as any)?.redundantTransition);
+    const broadcastStatus = String(
+      (youtubeStatus as any)?.broadcast?.status?.lifeCycleStatus || '',
+    );
+    const streamStatus = String(
+      (youtubeStatus as any)?.stream?.status?.streamStatus || '',
+    );
+
+    lastBroadcastStatus = broadcastStatus || lastBroadcastStatus;
+    lastStreamStatus = streamStatus || lastStreamStatus;
+
+    console.log('[Settings YouTube Live Status Poll]', {
+      attempt,
+      broadcastId,
+      broadcastStatus,
+      streamStatus,
+      redundantTransitionCount,
+      redundantMarker: isRedundantMarker,
+      autoTransitioned: Boolean((youtubeStatus as any)?.autoTransitioned),
+      ffmpegStatus: ffmpegStatus?.status,
+      ffmpegPid: ffmpegStatus?.pid,
+      ffmpegStderrSummary: ffmpegStatus?.stderrSummary || ffmpegStatus?.error || '',
+    });
+
+    if (!isRedundantMarker && broadcastStatus === 'live' && streamStatus === 'active') {
+      // Small public-player settle wait: enough to avoid the scheduled card, but
+      // short enough to keep the operator flow responsive.
+      await wait(1200);
+      return youtubeStatus;
+    }
+
+    await wait(attempt <= 20 ? 650 : 1000);
   }
 
-  const lastBroadcastStatus = String(
-    lastStatus?.broadcast?.status?.lifeCycleStatus || 'unknown',
-  );
-  const lastStreamStatus = String(lastStatus?.stream?.status?.streamStatus || 'unknown');
   throw new Error(
     `YouTube chưa chuyển sang live. Broadcast=${lastBroadcastStatus}, stream=${lastStreamStatus}`,
   );
@@ -765,13 +845,15 @@ const GameSettingsViewModel = (props: Props) => {
 
       setYoutubeLiveLoadingMessage('Đang tạo phiên YouTube...');
       const liveResponse = await createYouTubeLiveSession({
-        title: `${firstPlayerName} vs ${secondPlayerName} - ${new Date().toLocaleString()}`,
+        title: `${firstPlayerName} vs ${secondPlayerName} - ${formatVietnamLiveTitleTime()}`,
         description: `Live score từ trận đấu ${firstPlayerName} vs ${secondPlayerName}`,
         privacyStatus: liveVisibility,
+        scheduledStartTime: new Date().toISOString(),
         enableAutoStart: true,
-        enableAutoStop: true,
-        enableDvr: true,
-        recordFromStart: true,
+        enableAutoStop: false,
+        enableDvr: false,
+        recordFromStart: false,
+        latencyPreference: 'ultraLow',
         resolution: '1080p',
         frameRate: '30fps',
       });
@@ -801,10 +883,18 @@ const GameSettingsViewModel = (props: Props) => {
         streamKey: ingestion.streamKey,
         ffmpegPath: liveConfigLookup.WindowsFfmpegPath || '',
         cameraDeviceName: liveConfigLookup.WindowsFfmpegCameraDevice || '',
-        audioDeviceName: liveConfigLookup.WindowsFfmpegAudioDevice || '',
-        useAudio: Boolean(liveConfigLookup.WindowsFfmpegAudioDevice),
+        // v71 stable live first: remove microphone startup completely.
+        // YouTube ingest must always have an AAC audio track, so the engine
+        // uses lavfi anullsrc instead of trying DirectShow microphones.
+        audioDeviceName: '',
+        useAudio: true,
+        audioInputMode: 'anullsrc',
         fps: 30,
-        bitrate: '8000k',
+        width: 1920,
+        height: 1080,
+        resolution: '1080p',
+        bitrate: '5200k',
+        directShowInputMode: 'mjpeg1080',
       };
 
       const snapshot = createWindowsFfmpegSnapshotFromGameState({
@@ -820,18 +910,14 @@ const GameSettingsViewModel = (props: Props) => {
         throw new Error(startResult?.error || 'Không khởi động được live YouTube.');
       }
 
+      // v74: gate entry. FFmpeg local status is not enough: YouTube can still
+      // show "sắp diễn ra" while the RTMP ingest is warming up. Only open
+      // gameplay after YouTube reports broadcast=live and stream=active.
       setYoutubeLiveLoadingMessage('Đang chờ YouTube chuyển sang LIVE...');
-      const liveReadyStatus: any = await pollUntilYouTubeBroadcastLive(broadcastId);
+      await pollUntilYouTubeBroadcastLive(broadcastId);
 
-      // v54: YouTube API can report live a few seconds before the watch page/player
-      // visibly shows the live session. Keep the Settings loading overlay up until
-      // the live session has had enough time to appear on YouTube, then enter gameplay.
-      const finalVisibleWaitMs = liveReadyStatus?.redundantTransition ? 8000 : 6500;
-      setYoutubeLiveLoadingMessage('Đang xác nhận phiên live trên YouTube...');
-      await wait(finalVisibleWaitMs);
-
-      setYoutubeLiveLoadingMessage('Live đã sẵn sàng. Đang vào trận...');
-      await wait(400);
+      setYoutubeLiveLoadingMessage('YouTube đã LIVE. Đang vào trận...');
+      await wait(250);
 
       navigateToGameplay({
         prestartedYouTubeLive: true,
@@ -840,7 +926,23 @@ const GameSettingsViewModel = (props: Props) => {
       });
     } catch (error: any) {
       const message = error?.message || String(error) || 'Không tải được phiên live.';
-      console.log('[Settings YouTube Live] failed', {message, broadcastId});
+      const notConnected = isYouTubeNotConnectedError(error);
+      console.log('[Settings YouTube Live] failed', {message, broadcastId, notConnected});
+
+      if (notConnected) {
+        await clearStoredYouTubeConnection();
+        setAplusLiveStatus('YouTube vừa bị mất kết nối. Vui lòng kết nối lại kênh rồi bấm Tiếp tục để vào trận.');
+        Alert.alert(
+          'YouTube bị mất kết nối',
+          'Token YouTube cũ không còn hợp lệ trên backend. App sẽ mở lại màn kết nối YouTube, bạn chỉ cần đăng nhập lại rồi bấm Tiếp tục.',
+        );
+        props.navigate(screens.livePlatformSetupYoutube, {
+          livestreamPlatform: 'youtube',
+          saveToDeviceWhileStreaming,
+          liveVisibility,
+        });
+        return;
+      }
 
       try {
         await stopWindowsFfmpegYouTubeLive('settings-start-failed');

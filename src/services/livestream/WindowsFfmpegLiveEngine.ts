@@ -16,6 +16,7 @@ export type WindowsFfmpegLiveConfig = {
   cameraDeviceName?: string;
   audioDeviceName?: string;
   useAudio?: boolean;
+  audioInputMode?: 'silent' | 'anullsrc' | 'dshow' | 'dshow-default' | 'dshow-video';
   width?: number;
   height?: number;
   resolution?: Resolution | string;
@@ -36,6 +37,8 @@ export type WindowsFfmpegOverlaySnapshot = {
   mode?: string;
   currentPlayerIndex?: number;
   countdownTime?: number;
+  warmUpCountdownTime?: number;
+  gameBreakEnabled?: boolean;
   totalTurns?: number;
   goal?: number;
   players?: Array<{
@@ -73,6 +76,7 @@ type NativeWindowsFfmpegLiveModule = {
     status?: string;
     exitCode?: number;
     error?: string;
+    alreadyRunning?: boolean;
   }>;
   stop?: () => Promise<{
     stopped?: boolean;
@@ -150,6 +154,33 @@ const uniqueValues = (values: Array<string | undefined | null>) => {
       seen.add(key);
       return true;
     });
+};
+
+
+
+const buildLikelyMicrophoneDeviceNames = (cameraDeviceName?: string | null) => {
+  const cameraName = String(cameraDeviceName || '').trim();
+  const candidates: Array<string | undefined> = [];
+
+  if (cameraName) {
+    // Some Windows webcams expose the audio device as
+    //   Microphone (<camera name>-Audio)
+    // while the video device itself is just <camera name>.
+    // This is the exact pattern shown by the user's FFmpeg device check:
+    //   video: 2K Web Camera
+    //   audio: Microphone (2K Web Camera-Audio)
+    candidates.push(`Microphone (${cameraName}-Audio)`);
+    candidates.push(`Microphone (${cameraName})`);
+    candidates.push(`${cameraName}-Audio`);
+  }
+
+  candidates.push(
+    'Microphone (2K Web Camera-Audio)',
+    'Microphone (Realtek(R) Audio)',
+    'Microphone Array (Realtek(R) Audio)',
+  );
+
+  return uniqueValues(candidates);
 };
 
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -270,6 +301,9 @@ const resolveDimensions = (config: WindowsFfmpegLiveConfig) => {
     return {width: 1280, height: 720};
   }
 
+  // QUALITY/LOW-DELAY v3: return to 1080p output after backend ultraLow is verified.
+  // The previous 720p/2800k build reduced startup buffering but made the live image
+  // look soft. 1080p with a small VBV buffer keeps delay low while preserving detail.
   return {width: 1920, height: 1080};
 };
 
@@ -279,14 +313,14 @@ const resolveFps = (config: WindowsFfmpegLiveConfig) => {
 };
 
 const resolveBitrate = (config: WindowsFfmpegLiveConfig) => {
-  const raw = String(config.bitrate || '8000k').trim();
+  const raw = String(config.bitrate || '4500k').trim();
   const numeric = /^\d+k$/i.test(raw)
     ? Number(raw.replace(/k$/i, ''))
     : Number(raw.replace(/[^\d.]/g, ''));
   if (Number.isFinite(numeric) && numeric > 0) {
-    return `${Math.round(Math.min(9000, Math.max(2500, numeric)))}k`;
+    return `${Math.round(Math.min(7000, Math.max(2500, numeric)))}k`;
   }
-  return '8000k';
+  return '5200k';
 };
 
 const resolveVideoEncoder = (config: WindowsFfmpegLiveConfig) =>
@@ -295,12 +329,19 @@ const resolveVideoEncoder = (config: WindowsFfmpegLiveConfig) =>
 const resolveDirectShowInputMode = (config: WindowsFfmpegLiveConfig) =>
   (String(config.directShowInputMode || 'default').trim() || 'default') as NonNullable<WindowsFfmpegLiveConfig['directShowInputMode']>;
 
-const buildDirectShowInputModeCandidates = () =>
-  // v42: the user's PowerShell test proved the camera opens with FFmpeg's
-  // default DirectShow mode: -f dshow -i 'video=2K Web Camera'. Do not retry
-  // forced MJPEG/YUYV modes during production live; they only delay failure and
-  // are not needed once the app releases MediaCapture correctly.
-  ['default'] as Array<NonNullable<WindowsFfmpegLiveConfig['directShowInputMode']>>;
+const buildDirectShowInputModeCandidates = (preferred?: WindowsFfmpegLiveConfig['directShowInputMode']) => {
+  // QUALITY/LOW-DELAY v3:
+  // The low-delay 720p build opened DirectShow in default mode, which often gives
+  // only a soft 640x480 raw camera feed. Prefer the webcam's 1080p MJPEG mode for
+  // a sharper YouTube picture, but keep the old default mode as a safe fallback so
+  // live still starts if a camera does not support MJPEG 1080p.
+  const candidates: Array<NonNullable<WindowsFfmpegLiveConfig['directShowInputMode']>> = [
+    preferred || 'mjpeg1080',
+    'mjpeg1080',
+    'default',
+  ];
+  return uniqueValues(candidates) as Array<NonNullable<WindowsFfmpegLiveConfig['directShowInputMode']>>;
+};
 
 const buildEncoderCandidates = (_encoder?: WindowsFfmpegLiveConfig['videoEncoder']) => {
   // CRASH-FIX v10: use one stable encoder only.
@@ -340,7 +381,71 @@ export const getWindowsLiveOverlayPaths = () => {
     nativeJsonPath: `${nativeRoot}/overlay.json`,
     htmlPath: `${root}/overlay.html`,
     pngPath: `${root}/overlay.png`,
+    nativeSnapshotMetaPath: `${nativeRoot}/overlay-snapshot.json`,
+    nativeSnapshotPath: `${nativeRoot}/overlay-snapshot.png`,
+    nativeReactSnapshotPath: `${nativeRoot}/react-fullscreen-overlay.png`,
   };
+};
+
+const safeUnlink = async (path?: string) => {
+  const target = String(path || '').trim();
+  if (!target) {
+    return;
+  }
+  try {
+    if (await RNFS.exists(target)) {
+      await RNFS.unlink(target);
+    }
+  } catch (_error) {}
+};
+
+export const resetWindowsFfmpegOverlaySession = async (reason = 'new-live-session') => {
+  const paths = getWindowsLiveOverlayPaths();
+  lastOverlayWriteSignature = '';
+  lastOverlayWriteAt = 0;
+  lastOverlayLogAt = 0;
+  lastOverlayPath = '';
+
+  try {
+    await RNFS.mkdir(paths.root);
+  } catch (_error) {}
+  try {
+    await RNFS.mkdir(paths.nativeRoot);
+  } catch (_error) {}
+
+  const hiddenPayload = JSON.stringify(
+    {
+      visible: false,
+      source: 'aplus-live-overlay-reset',
+      reason,
+      updatedAt: Date.now(),
+    },
+    null,
+    2,
+  );
+
+  try {
+    await RNFS.writeFile(paths.nativeSnapshotMetaPath, hiddenPayload, 'utf8');
+  } catch (_error) {}
+  try {
+    await RNFS.writeFile(paths.nativeJsonPath, hiddenPayload, 'utf8');
+  } catch (_error) {}
+  try {
+    await RNFS.writeFile(paths.jsonPath, hiddenPayload, 'utf8');
+  } catch (_error) {}
+
+  await safeUnlink(paths.nativeSnapshotPath);
+  await safeUnlink(paths.nativeReactSnapshotPath);
+  await safeUnlink(paths.pngPath);
+
+  console.log('[WindowsLiveOverlayReset]', {
+    reason,
+    nativeSnapshotMetaPath: paths.nativeSnapshotMetaPath,
+    nativeOverlayPath: paths.nativeJsonPath,
+    overlayPath: paths.jsonPath,
+  });
+
+  return true;
 };
 
 const isCaromSnapshot = (snapshot?: WindowsFfmpegOverlaySnapshot | null) => {
@@ -539,6 +644,70 @@ const parseFirstDirectShowVideoDeviceFromText = (text?: string): string => {
   return '';
 };
 
+const parseDirectShowAudioDevicesFromText = (text?: string): string[] => {
+  const value = String(text || '');
+  const lines = value.split(/\r?\n/g);
+  const audioDevices: string[] = [];
+  let inAudioSection = false;
+
+  for (const line of lines) {
+    const lowerLine = line.toLowerCase();
+    if (lowerLine.includes('directshow audio devices')) {
+      inAudioSection = true;
+      continue;
+    }
+    if (lowerLine.includes('directshow video devices')) {
+      inAudioSection = false;
+      continue;
+    }
+
+    const match = line.match(/"([^"]+)"/);
+    if (!match?.[1]) {
+      continue;
+    }
+    const name = match[1].trim();
+    const lower = name.toLowerCase();
+    if (!name || lower.startsWith('@device')) {
+      continue;
+    }
+
+    const looksLikeAudio =
+      inAudioSection ||
+      lower.includes('microphone') ||
+      lower.includes('mic') ||
+      lower.includes('audio') ||
+      lower.includes('realtek') ||
+      lower.includes('stereo mix') ||
+      lowerLine.includes('(audio)');
+    const looksLikeSpeakerOnly =
+      lower.includes('speaker') ||
+      lower.includes('headphone') ||
+      lower.includes('headset earphone') ||
+      lower.includes('output');
+
+    if (looksLikeAudio && !looksLikeSpeakerOnly && !audioDevices.includes(name)) {
+      audioDevices.push(name);
+    }
+  }
+
+  return audioDevices;
+};
+
+const pickDefaultMicrophoneDevice = (audioDevices?: string[]): string => {
+  const devices = uniqueValues(audioDevices || []).filter(device => {
+    const lower = String(device || '').toLowerCase();
+    return !!device && !lower.startsWith('@device') && !lower.includes('speaker') && !lower.includes('headphone');
+  });
+  if (!devices.length) {
+    return '';
+  }
+  return (
+    devices.find(device => /microphone|mic/i.test(device)) ||
+    devices.find(device => /realtek|usb|webcam|camera/i.test(device)) ||
+    devices[0]
+  );
+};
+
 export const listWindowsFfmpegVideoDevices = async (ffmpegPath?: string) => {
   const nativeModule = getNativeModule();
 
@@ -574,10 +743,15 @@ export const listWindowsFfmpegVideoDevices = async (ffmpegPath?: string) => {
     const fallbackVideoDevice = friendlyVideoDevice && nativeVideoDevices.length === 0
       ? friendlyVideoDevice
       : '';
+    const parsedAudioDevices = parseDirectShowAudioDevicesFromText(result?.rawOutput || result?.outputPreview || '');
+    const audioDevices = uniqueValues([
+      ...(Array.isArray(result?.audioDevices) ? result.audioDevices : []),
+      ...parsedAudioDevices,
+    ]);
     const normalizedResult = {
       ...result,
       videoDevices,
-      audioDevices: Array.isArray(result?.audioDevices) ? result.audioDevices : [],
+      audioDevices,
     };
     console.log('[LiveDeviceList]', {
       videoDevices: normalizedResult.videoDevices,
@@ -702,10 +876,17 @@ export const buildFfmpegCommand = (
   const {width, height} = resolveDimensions(config);
   const fps = resolveFps(config);
   const bitrate = resolveBitrate(config);
+  const bitrateKbps = Number(String(bitrate).replace(/k$/i, '')) || 5200;
+  // v73 stable no-mic: keep the proven anullsrc ingest and avoid the overly
+  // tight v2 encoder settings that can make YouTube/player startup unstable.
+  // 700k VBV + ~0.33s GOP is still low-delay, but gives YouTube enough buffer
+  // to stay active while overlay snapshots are throttled separately.
+  const lowLatencyBufferSize = bitrateKbps <= 3200 ? '520k' : bitrateKbps <= 5600 ? '700k' : '900k';
   const videoEncoder = resolveVideoEncoder(config);
   const directShowInputMode = resolveDirectShowInputMode(config);
   const outputUrl = normalizeRtmpOutput(config.rtmpUrl, config.streamKey);
-  const gop = Math.max(30, fps * 2);
+  const gop = Math.max(10, Math.round(fps / 3));
+  const keyintMin = Math.max(6, Math.min(gop, Math.round(gop * 0.6)));
   const cameraDeviceName = String(config.cameraDeviceName || '').trim();
   const audioDeviceName = String(config.audioDeviceName || '').trim();
   const ffmpegPath = String(config.ffmpegPath || 'ffmpeg').trim() || 'ffmpeg';
@@ -716,6 +897,14 @@ export const buildFfmpegCommand = (
     '-nostdin',
     '-loglevel',
     'info',
+    '-fflags',
+    'nobuffer',
+    '-flags',
+    'low_delay',
+    '-probesize',
+    '32',
+    '-analyzeduration',
+    '0',
   ];
 
   if (useScreenCapture) {
@@ -768,7 +957,25 @@ export const buildFfmpegCommand = (
     args.push('-i', `video=${cameraDeviceName}`);
   }
 
-  if (config.useAudio && audioDeviceName) {
+  const audioInputMode = config.audioInputMode || (config.useAudio && audioDeviceName ? 'dshow' : 'anullsrc');
+  const webcamAudioDeviceName = String(config.cameraDeviceName || cameraDeviceName || '').trim();
+  const hasDirectShowAudio =
+    !!config.useAudio &&
+    (audioInputMode === 'dshow-default' || audioInputMode === 'dshow-video' || !!audioDeviceName);
+  const hasOutputAudio = audioInputMode === 'anullsrc' || !hasDirectShowAudio;
+
+  if (hasDirectShowAudio && audioInputMode === 'dshow-default') {
+    // FFmpeg build bundled with the app does not include WASAPI. Use DirectShow
+    // default capture instead, then fall back to webcam-audio / silent if
+    // Windows/FFmpeg cannot expose a separate microphone.
+    args.push('-thread_queue_size', '512', '-f', 'dshow', '-i', 'audio=default');
+  } else if (hasDirectShowAudio && audioInputMode === 'dshow-video' && webcamAudioDeviceName) {
+    // Some USB webcams expose the microphone as an audio pin on the video capture
+    // device and do not show a separate "DirectShow audio devices" entry. In that
+    // case `audio=default` fails, but `audio=<camera name>` can still open the
+    // camera's built-in microphone.
+    args.push('-thread_queue_size', '512', '-f', 'dshow', '-i', `audio=${webcamAudioDeviceName}`);
+  } else if (hasDirectShowAudio && audioDeviceName) {
     args.push('-thread_queue_size', '512', '-f', 'dshow', '-i', `audio=${audioDeviceName}`);
   } else {
     args.push('-f', 'lavfi', '-i', 'anullsrc=channel_layout=stereo:sample_rate=44100');
@@ -788,28 +995,52 @@ export const buildFfmpegCommand = (
     '-map',
     '0:v',
     '-map',
-    config.useAudio && audioDeviceName ? '1:a?' : '1:a',
+    hasDirectShowAudio ? '1:a?' : '1:a',
     '-vf',
-    'fps=30,scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,format=yuv420p',
+    `fps=${fps},scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,format=yuv420p`,
     ...encoderArgs,
     '-b:v',
     bitrate,
     '-maxrate',
     bitrate,
     '-bufsize',
-    `${Math.max(1, parseInt(bitrate, 10) * 2)}k`,
+    lowLatencyBufferSize,
     '-pix_fmt',
     'yuv420p',
     '-r',
     String(fps),
     '-g',
-    String(gop),
+    String(Math.min(gop, 30)),
+    '-keyint_min',
+    String(keyintMin),
+    '-sc_threshold',
+    '0',
+    '-x264-params',
+    `bframes=0:rc-lookahead=0:sync-lookahead=0:scenecut=0:keyint=${Math.min(gop, 30)}:min-keyint=${keyintMin}:sliced-threads=1`,
+    '-bf',
+    '0',
     '-c:a',
     'aac',
     '-b:a',
     '128k',
     '-ar',
     '44100',
+    '-flush_packets',
+    '1',
+    '-max_delay',
+    '0',
+    '-muxdelay',
+    '0',
+    '-muxpreload',
+    '0',
+    '-avioflags',
+    'direct',
+    '-rtmp_live',
+    'live',
+    '-tcp_nodelay',
+    '1',
+    '-flvflags',
+    'no_duration_filesize',
     '-f',
     'flv',
     outputUrl,
@@ -834,6 +1065,9 @@ export const buildFfmpegCommand = (
     videoEncoder,
     captureSource: useScreenCapture ? 'desktop-gdigrab' : 'directshow',
     cameraInputMode: useScreenCapture ? DESKTOP_CAPTURE_LABEL : `directshow-camera-${directShowInputMode}`,
+    audioEnabled: hasOutputAudio,
+    audioInputMode: audioInputMode === 'anullsrc' ? 'anullsrc' : audioInputMode,
+    audioDeviceName: audioDeviceName || (audioInputMode === 'dshow-default' ? 'default' : ''),
   });
 
   return {
@@ -848,6 +1082,9 @@ export const buildFfmpegCommand = (
     videoEncoder,
     captureSource: useScreenCapture ? 'desktop-gdigrab' : 'directshow',
     cameraInputMode: useScreenCapture ? DESKTOP_CAPTURE_LABEL : `directshow-camera-${directShowInputMode}`,
+    audioEnabled: hasOutputAudio,
+    audioInputMode: audioInputMode === 'anullsrc' ? 'anullsrc' : audioInputMode,
+    audioDeviceName: audioDeviceName || (audioInputMode === 'dshow-default' ? 'default' : ''),
   };
 };
 
@@ -873,6 +1110,11 @@ export const updateWindowsFfmpegOverlay = async (
     mode: snapshot.mode,
     currentPlayerIndex: snapshot.currentPlayerIndex,
     countdownTime: Math.ceil(Number(snapshot.countdownTime || 0)),
+    warmUpCountdownTime:
+      snapshot.warmUpCountdownTime == null
+        ? null
+        : Math.ceil(Number(snapshot.warmUpCountdownTime || 0)),
+    gameBreakEnabled: !!snapshot.gameBreakEnabled,
     totalTurns: snapshot.totalTurns,
     goal: snapshot.goal,
     players: (snapshot.players || []).slice(0, 2).map(player => ({
@@ -920,7 +1162,7 @@ export const updateWindowsFfmpegOverlay = async (
     }
     await RNFS.writeFile(
       paths.htmlPath,
-      `<!doctype html><html><head><meta charset="utf-8"><style>body{margin:0;background:transparent;color:white;font-family:Arial,sans-serif}.top{position:absolute;left:48px;top:28px;font-weight:900;font-size:36px}.score{position:absolute;left:7%;right:7%;bottom:5.2%;height:104px;background:rgba(201,29,36,.88);display:flex;align-items:center;justify-content:space-between;padding:0 42px;box-sizing:border-box}.name{font-size:28px;font-weight:800}.points{font-size:58px;font-weight:900}.meta{position:absolute;left:0;right:0;bottom:18px;text-align:center;font-size:20px}</style></head><body><div class="top">A+Plus</div><div class="score"><div class="name">${left.flag ? `${left.flag} ` : ''}${left.name}</div><div class="points">${left.score} - ${right.score}</div><div class="name">${right.name}${right.flag ? ` ${right.flag}` : ''}</div></div><div class="meta">Target ${snapshot.goal || '-'} · Turn ${snapshot.totalTurns || 0} · ${timerText}</div></body></html>`,
+      '<!doctype html><html><head><meta charset="utf-8"></head><body style="margin:0;background:transparent"></body></html>',
       'utf8',
     );
     lastOverlayPath = paths.jsonPath;
@@ -984,6 +1226,24 @@ export const startWindowsFfmpegYouTubeLive = async (
 
   logLiveAuditOnce();
 
+  const alreadyRunningStatus = await getWindowsFfmpegLiveStatus().catch(() => null);
+  const alreadyRunningStatusText = String(alreadyRunningStatus?.status || '');
+  if (alreadyRunningStatusText === 'live' || alreadyRunningStatusText === 'starting') {
+    liveState = alreadyRunningStatusText as WindowsFfmpegLiveState;
+    console.log('[LiveFfmpegProcess]', {
+      start: false,
+      pid: alreadyRunningStatus?.pid,
+      stderrSummary: 'duplicate start skipped: FFmpeg live process is already running',
+      status: alreadyRunningStatusText,
+      stopped: false,
+      exitCode: undefined,
+      error: undefined,
+      duplicateStartSkipped: true,
+    });
+    console.log('[LiveState]', {status: alreadyRunningStatusText, duplicateStartSkipped: true});
+    return {ok: true, pid: alreadyRunningStatus?.pid, alreadyRunning: true};
+  }
+
   const normalizedConfig: WindowsFfmpegLiveConfig = {
     platform: 'youtube',
     rtmpUrl: config.rtmpUrl || DEFAULT_YOUTUBE_RTMP_URL,
@@ -993,11 +1253,14 @@ export const startWindowsFfmpegYouTubeLive = async (
     ffmpegPath: normalizeNativeFfmpegPath(config.ffmpegPath),
     cameraDeviceName: config.cameraDeviceName,
     audioDeviceName: config.audioDeviceName,
-    useAudio: config.useAudio ?? false,
-    // Stable detached live process with production-quality 1080p30 output.
+    useAudio: config.useAudio ?? true,
+    audioInputMode: config.audioInputMode || 'anullsrc',
+    // Stable detached live process with balanced 1080p30 output.
+    // 5200k is high enough to avoid the soft 720p look, while the small VBV
+    // buffer keeps YouTube ultra-low latency from growing again.
     resolution: config.resolution || Resolution.FullHD,
     fps: config.fps || Fps.F30,
-    bitrate: config.bitrate || '8000k',
+    bitrate: config.bitrate || '5200k',
     overlayMode: 'none',
     videoEncoder: 'libx264',
   };
@@ -1015,6 +1278,7 @@ export const startWindowsFfmpegYouTubeLive = async (
     return {ok: false, error: i18n.t('ffmpegStreamKeyMissing') as string};
   }
 
+  await resetWindowsFfmpegOverlaySession('before-ffmpeg-start');
   await updateWindowsFfmpegOverlay(snapshot || {players: []});
 
   const ffmpegCheck = await checkFfmpegAvailable(normalizedConfig.ffmpegPath);
@@ -1044,6 +1308,13 @@ export const startWindowsFfmpegYouTubeLive = async (
   const deviceList = await listWindowsFfmpegVideoDevices(normalizedConfig.ffmpegPath);
   if (deviceList.ffmpegPath) {
     normalizedConfig.ffmpegPath = deviceList.ffmpegPath;
+  }
+
+  const detectedAudioDevice = pickDefaultMicrophoneDevice(deviceList.audioDevices || []);
+  if (!String(normalizedConfig.audioDeviceName || '').trim() && detectedAudioDevice) {
+    normalizedConfig.audioDeviceName = detectedAudioDevice;
+    normalizedConfig.audioInputMode = 'dshow';
+    normalizedConfig.useAudio = true;
   }
 
   const cameraCandidates = uniqueValues([
@@ -1085,6 +1356,23 @@ export const startWindowsFfmpegYouTubeLive = async (
     reason: 'camera-only-directshow-no-desktop-capture',
   });
 
+
+  // v71 stable live first: do not try to capture microphones during YouTube startup.
+  // In the packaged Windows app, FFmpeg DirectShow cannot enumerate audio devices
+  // even though the same ffmpeg.exe can record mic from PowerShell. Those retries
+  // kill the ingest process and keep YouTube stuck at ready/upcoming. Always give
+  // YouTube a stable AAC track using lavfi anullsrc; real microphone can be added
+  // later behind a separate experimental toggle.
+  normalizedConfig.useAudio = true;
+  normalizedConfig.audioDeviceName = '';
+  normalizedConfig.audioInputMode = 'anullsrc';
+
+  console.log('[LiveAudioDevice]', {
+    status: 'microphone-disabled-stable-live',
+    action: 'use-lavfi-anullsrc-only',
+    reason: 'keep-youtube-ingest-stable-and-start-in-parallel-with-gameplay',
+  });
+
   const nativeModule = getNativeModule();
 
   if (!nativeModule?.start) {
@@ -1102,15 +1390,21 @@ export const startWindowsFfmpegYouTubeLive = async (
     return {ok: false, error};
   }
 
-  const directShowInputModeCandidates = buildDirectShowInputModeCandidates();
+  const directShowInputModeCandidates = buildDirectShowInputModeCandidates(normalizedConfig.directShowInputMode);
   const encoderCandidates = buildEncoderCandidates(normalizedConfig.videoEncoder);
+  const audioCandidates: Array<Pick<WindowsFfmpegLiveConfig, 'useAudio' | 'audioDeviceName' | 'audioInputMode'>> = [
+    {useAudio: true, audioDeviceName: '', audioInputMode: 'anullsrc'},
+  ];
+
   let lastStartError = '';
 
   for (const cameraDeviceName of cameraCandidates) {
     for (const directShowInputMode of directShowInputModeCandidates) {
       for (const videoEncoder of encoderCandidates) {
+        for (const audioCandidate of audioCandidates) {
         const attemptConfig: WindowsFfmpegLiveConfig = {
           ...normalizedConfig,
+          ...audioCandidate,
           cameraDeviceName,
           directShowInputMode,
           videoEncoder,
@@ -1128,23 +1422,90 @@ export const startWindowsFfmpegYouTubeLive = async (
         ffmpegAvailable: !!ffmpegCheck?.available,
         videoEncoder,
         directShowInputMode,
+        audioEnabled: !!attemptConfig.useAudio,
+        audioInputMode: attemptConfig.audioInputMode || 'anullsrc',
+        audioDeviceName:
+          attemptConfig.audioDeviceName ||
+          (attemptConfig.audioInputMode === 'dshow-default'
+            ? 'default'
+            : attemptConfig.audioInputMode === 'dshow-video'
+              ? attemptConfig.cameraDeviceName || cameraDeviceName || ''
+              : ''),
         cameraCandidateIndex: cameraCandidates.indexOf(cameraDeviceName) + 1,
         cameraCandidateCount: cameraCandidates.length,
         commandPreview: '[hidden to avoid Metro/log pressure]',
       });
 
       liveState = 'starting';
-      console.log('[LiveState]', {status: 'starting', videoEncoder, cameraDeviceName, directShowInputMode});
+      console.log('[LiveState]', {
+        status: 'starting',
+        videoEncoder,
+        cameraDeviceName,
+        directShowInputMode,
+        audioEnabled: !!attemptConfig.useAudio,
+        audioInputMode: attemptConfig.audioInputMode || 'anullsrc',
+        audioDeviceName:
+          attemptConfig.audioDeviceName ||
+          (attemptConfig.audioInputMode === 'dshow-default'
+            ? 'default'
+            : attemptConfig.audioInputMode === 'dshow-video'
+              ? attemptConfig.cameraDeviceName || cameraDeviceName || ''
+              : ''),
+      });
 
       try {
-        const result = await nativeModule.start({
+        const nativeStartPromise = nativeModule.start({
           ffmpegPath: command.ffmpegPath || attemptConfig.ffmpegPath || '',
           args: command.args,
           commandMasked: command.commandMasked,
         });
+        const result = await Promise.race([
+          nativeStartPromise,
+          wait(18000).then(() => {
+            throw new Error('FFmpeg native start timed out before returning. This prevents the app from hanging on Đang tạo phiên live.');
+          }),
+        ]);
 
         if (result?.error) {
+          const errorText = String(result.error || '');
+          if (errorText.toLowerCase().includes('already running')) {
+            liveState = 'live';
+            console.log('[LiveFfmpegProcess]', {
+              start: false,
+              pid: result?.pid,
+              stderrSummary: errorText,
+              status: 'live',
+              stopped: false,
+              exitCode: undefined,
+              error: undefined,
+              duplicateStartSkipped: true,
+              videoEncoder,
+              directShowInputMode,
+              cameraDeviceName,
+            });
+            console.log('[LiveState]', {status: 'live', duplicateStartSkipped: true});
+            return {ok: true, pid: result?.pid, videoEncoder, alreadyRunning: true};
+          }
           throw new Error(result.error);
+        }
+
+        if (result?.alreadyRunning) {
+          liveState = 'live';
+          console.log('[LiveFfmpegProcess]', {
+            start: false,
+            pid: result?.pid,
+            stderrSummary: 'duplicate start skipped: native FFmpeg process is already live',
+            status: 'live',
+            stopped: false,
+            exitCode: undefined,
+            error: undefined,
+            duplicateStartSkipped: true,
+            videoEncoder,
+            directShowInputMode,
+            cameraDeviceName,
+          });
+          console.log('[LiveState]', {status: 'live', duplicateStartSkipped: true});
+          return {ok: true, pid: result?.pid, videoEncoder, alreadyRunning: true};
         }
 
         // Do not mark the app live immediately. The old flow returned success as
@@ -1152,8 +1513,8 @@ export const startWindowsFfmpegYouTubeLive = async (
         // FFmpeg had already exited with DirectShow/RTMP errors. Keep the process
         // alive for a short sanity window before accepting the live state.
         let lastStatus: any = null;
-        for (let attempt = 0; attempt < 4; attempt += 1) {
-          await wait(750);
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          await wait(350);
           lastStatus = await nativeModule.status?.();
           if (looksLikeEarlyFfmpegFailure(lastStatus)) {
             const failureSummary = getStartupFailureSummary(lastStatus);
@@ -1202,6 +1563,7 @@ export const startWindowsFfmpegYouTubeLive = async (
       }
       }
     }
+  }
   }
 
   liveState = 'error';
@@ -1290,6 +1652,8 @@ export const toWindowsFfmpegSnapshot = (snapshot: any): WindowsFfmpegOverlaySnap
     mode: snapshot?.gameSettings?.mode?.mode || snapshot?.gameMode,
     currentPlayerIndex: snapshot?.currentPlayerIndex,
     countdownTime: snapshot?.countdownTime,
+    warmUpCountdownTime: snapshot?.warmUpCountdownTime,
+    gameBreakEnabled: !!snapshot?.gameBreakEnabled,
     totalTurns: snapshot?.totalTurns,
     goal: snapshot?.goal || snapshot?.gameSettings?.players?.goal?.goal || snapshot?.playerSettings?.goal?.goal,
     players: players.map((player: any) => ({
@@ -1311,6 +1675,8 @@ export const createWindowsFfmpegSnapshotFromGameState = (params: {
   playerSettings?: any;
   currentPlayerIndex?: number;
   countdownTime?: number;
+  warmUpCountdownTime?: number;
+  gameBreakEnabled?: boolean;
   totalTurns?: number;
 }) =>
   toWindowsFfmpegSnapshot({
@@ -1319,6 +1685,8 @@ export const createWindowsFfmpegSnapshotFromGameState = (params: {
     gameMode: params.gameSettings?.mode?.mode,
     currentPlayerIndex: params.currentPlayerIndex,
     countdownTime: params.countdownTime,
+    warmUpCountdownTime: params.warmUpCountdownTime,
+    gameBreakEnabled: params.gameBreakEnabled,
     totalTurns: params.totalTurns,
     goal: params.gameSettings?.players?.goal?.goal || params.playerSettings?.goal?.goal,
     playerSettings: params.playerSettings,

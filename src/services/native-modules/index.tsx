@@ -11,7 +11,7 @@ const RemoteControlEventEmitter = RemoteControl
   ? new NativeEventEmitter(RemoteControl)
   : null;
 
-const eventNames = ['onRemoteKeyDown'];
+const eventNames = ['onRemoteKeyDown', 'onRemoteKeyUp'];
 
 const eventHandlers = eventNames.reduce((result, eventName) => {
   result[eventName] = new Map();
@@ -66,7 +66,30 @@ const registerRemoteControlListener = (
   addEventListener('onRemoteKeyDown', callback);
 };
 
+const callNative = async (methodName: string, ...args: any[]) => {
+  const method = RemoteControl?.[methodName];
+  if (typeof method !== 'function') {
+    if (__DEV__) {
+      console.log('[RemoteControl] native method missing', methodName, Object.keys(RemoteControl || {}));
+    }
+    return undefined;
+  }
+
+  try {
+    return await method(...args);
+  } catch (error) {
+    if (__DEV__) {
+      console.log('[RemoteControl] native method failed', methodName, error);
+    }
+    return undefined;
+  }
+};
+
 export const RemoteControlModule = {
   registerRemoteControlListener,
   removeAllRemoteControlListeners,
+  startListening: () => callNative('startListening'),
+  setEnabled: (enabled: boolean) => callNative('setEnabled', enabled),
+  scanAndConnect: () => callNative('scanAndConnect'),
+  disconnect: () => callNative('disconnect'),
 };
