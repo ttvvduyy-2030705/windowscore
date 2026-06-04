@@ -1357,57 +1357,21 @@ const GamePlayViewModel = () => {
   // }, [hasPermission]);
 
   useEffect(() => {
-    const isCaromRemoteTurnMode = isCaromGame(gameSettings?.category);
-
-    // Pool: NEW GAME still requires 3s hold before reset.
-    // Carom: NEW GAME is reused as "tăng lượt", so it fires immediately.
-    RemoteControl.instance.setNewGameHoldRequired?.(!isCaromRemoteTurnMode);
-
     remoteHandlersRef.current = {
-      start: () => {
-        console.log('[Remote][Start] toggle v11-carom-pool-separate-buttons', {
-          isStarted,
-          isPaused,
-          isMatchPaused,
-        });
-
-        if (isStarted) {
-          onPause();
-          return;
-        }
-
-        void onStart();
-      },
+      start: isStarted ? onPause : onStart,
       warmUp: warmUpCountdownTime ? onEndWarmUp : onWarmUp,
       stop: onToggleCountDown,
-      gameBreak: isCaromRemoteTurnMode
-        ? () => {
-            console.log('[Remote][Carom] BREAK -> decrease turns');
-            setTotalTurns(prev => Math.max(1, (Number(prev) || 1) - 1));
-          }
-        : onPoolBreak,
+      gameBreak: onPoolBreak,
       extension: onPressGiveMoreTime,
-      timer: isCaromRemoteTurnMode
-        ? () => {
-            console.log('[Remote][Carom] TIMER ignored');
-          }
-        : onResetTurn,
-      newGame: isCaromRemoteTurnMode
-        ? () => {
-            console.log('[Remote][Carom] NEW_GAME -> increase turns');
-            setTotalTurns(prev => Math.max(1, (Number(prev) || 0) + 1));
-          }
-        : onReset,
+      timer: onResetTurn,
+      newGame: onReset,
       up: () => onChangePlayerPoint(1, currentPlayerIndex, 0),
       down: () => onChangePlayerPoint(-1, currentPlayerIndex, 0),
       left: onEndTurn,
       right: onEndTurn,
     };
   }, [
-    gameSettings?.category,
     isStarted,
-    isPaused,
-    isMatchPaused,
     warmUpCountdownTime,
     onPause,
     onStart,
@@ -2030,40 +1994,24 @@ const GamePlayViewModel = () => {
   const onPressGiveMoreTime = useCallback(() => {
     const baseCountdown = Number(gameSettings?.mode?.countdownTime || 0);
     const configuredBonus = Number(gameSettings?.mode?.extraTimeBonus || 0);
-    const currentSettings = playerSettingsRef.current ?? playerSettings;
-    const currentPlayer = currentSettings?.playingPlayers?.[currentPlayerIndex];
-    const settingExtraTimeTurns = gameSettings?.mode?.extraTimeTurns;
-    const configuredExtraTimeTurns = Number(settingExtraTimeTurns);
-    const isUnlimitedExtraTimeTurns = settingExtraTimeTurns === 'infinity';
-    const playerRemainingTurns = currentPlayer?.proMode?.extraTimeTurns;
-    const remainingTurns =
-      typeof playerRemainingTurns === 'number'
-        ? playerRemainingTurns
-        : Number.isFinite(configuredExtraTimeTurns)
-          ? configuredExtraTimeTurns
-          : playerRemainingTurns;
-    const hasLimitedExtraTimeTurns =
-      !isUnlimitedExtraTimeTurns &&
-      (typeof remainingTurns === 'number' || Number.isFinite(configuredExtraTimeTurns));
+    const currentPlayer = playerSettings?.playingPlayers?.[currentPlayerIndex];
+    const remainingTurns = currentPlayer?.proMode?.extraTimeTurns;
 
-    console.log('[Extension] press v12-limit-fix', {
+    console.log('[Extension] press', {
       isStarted,
       baseCountdown,
       configuredBonus,
       currentCountdown: countdownTime,
       currentPlayerIndex,
-      settingExtraTimeTurns,
-      playerRemainingTurns,
       remainingTurns,
-      hasLimitedExtraTimeTurns,
     });
 
-    if (!isStarted || !currentSettings || !baseCountdown) {
+    if (!isStarted || !playerSettings || !baseCountdown) {
       console.log('[Extension] blocked: invalid state');
       return;
     }
 
-    if (hasLimitedExtraTimeTurns && Number(remainingTurns || 0) <= 0) {
+    if (typeof remainingTurns === 'number' && remainingTurns <= 0) {
       console.log('[Extension] blocked: no extra turns left');
       return;
     }
@@ -2075,40 +2023,6 @@ const GamePlayViewModel = () => {
           ? baseCountdown
           : 35;
 
-    if (hasLimitedExtraTimeTurns) {
-      const safeRemainingTurns = Math.max(0, Number(remainingTurns || 0));
-      const nextRemainingTurns = Math.max(0, safeRemainingTurns - 1);
-
-      const nextPlayerSettings = {
-        ...currentSettings,
-        playingPlayers: (currentSettings.playingPlayers || []).map(
-          (player, index) => {
-            if (index !== currentPlayerIndex) {
-              return player;
-            }
-
-            return {
-              ...player,
-              proMode: {
-                ...(player.proMode || {}),
-                extraTimeTurns: nextRemainingTurns,
-              },
-            } as Player;
-          },
-        ),
-      } as PlayerSettings;
-
-      // Important: update playerSettingsRef synchronously before adding time.
-      // Remote HID can fire very quickly; checking stale React state allowed
-      // spamming Extension beyond the configured turn limit.
-      setPlayerSettings(nextPlayerSettings);
-
-      console.log('[Extension] extra turn consumed v12-limit-fix', {
-        before: safeRemainingTurns,
-        after: nextRemainingTurns,
-      });
-    }
-
     setCountdownTime(prev => {
       const safePrev = Number.isFinite(prev) ? prev : baseCountdown;
       const next = safePrev + appliedBonus;
@@ -2117,6 +2031,35 @@ const GamePlayViewModel = () => {
     });
 
     setIsMatchPaused(false);
+
+    setPlayerSettings(prev => {
+      if (!prev?.playingPlayers?.length) {
+        return prev;
+      }
+
+      const playingPlayers = prev.playingPlayers.map((player, index) => {
+        if (index !== currentPlayerIndex || !player.proMode) {
+          return player;
+        }
+
+        if (typeof player.proMode.extraTimeTurns !== 'number') {
+          return player;
+        }
+
+        return {
+          ...player,
+          proMode: {
+            ...player.proMode,
+            extraTimeTurns: Math.max(0, player.proMode.extraTimeTurns - 1),
+          },
+        } as Player;
+      });
+
+      return {
+        ...prev,
+        playingPlayers,
+      } as PlayerSettings;
+    });
   }, [
     countdownTime,
     currentPlayerIndex,

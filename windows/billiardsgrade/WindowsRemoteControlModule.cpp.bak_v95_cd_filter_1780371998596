@@ -168,9 +168,9 @@ namespace
             return "START";
         if (key == "30" || key == "88" || key == "177" || key == "WARM" || key == "WARMUP" || key == "WARM_UP" || key == "MEDIA_PREVIOUS" || key == "MEDIA_PREVIOUS_TRACK" || key == "MEDIA_REWIND")
             return "WARM_UP";
-        if (key == "31" || key == "67" || key == "86" || key == "178" || key == "STOP" || key == "MEDIA_STOP" || key == "C" || key == "KEY_C")
+        if (key == "31" || key == "67" || key == "86" || key == "178" || key == "STOP" || key == "MEDIA_STOP")
             return "STOP";
-        if (key == "32" || key == "68" || key == "82" || key == "87" || key == "90" || key == "176" || key == "BREAK" || key == "MEDIA_NEXT" || key == "MEDIA_NEXT_TRACK" || key == "MEDIA_FAST_FORWARD" || key == "D" || key == "KEY_D")
+        if (key == "32" || key == "82" || key == "87" || key == "90" || key == "176" || key == "BREAK" || key == "MEDIA_NEXT" || key == "MEDIA_NEXT_TRACK" || key == "MEDIA_FAST_FORWARD")
             return "BREAK";
         if (key == "23" || key == "66" || key == "13" || key == "160" || key == "NEWGAME" || key == "NEW_GAME" || key == "RESET" || key == "RESTART" || key == "ENTER" || key == "OK" || key == "DPAD_CENTER" || key == "CENTER")
             return "NEW_GAME";
@@ -398,12 +398,10 @@ namespace
         case 80:
         case 179:
             return "START";
-        case 67: // APLUS remote STOP sends keyboard C on Windows
         case 83:
         case 169:
         case 178:
             return "STOP";
-        case 68: // APLUS remote BREAK sends keyboard D on Windows
         case 176:
             return "BREAK";
         case 66: // APLUS remote WARM UP sends keyboard B on Windows
@@ -446,10 +444,6 @@ namespace
             return "A";
         case 66:
             return "B";
-        case 67:
-            return "C";
-        case 68:
-            return "D";
         case 222:
             return "APOSTROPHE";
         case 13:
@@ -499,12 +493,12 @@ namespace
             if (IsAplusRemoteNoiseKey(key))
             {
                 args.Handled(true);
-                EmitRemoteStatus("hid-noise-swallowed-v8", "Ignored apostrophe noise from APLUS remote");
+                EmitRemoteStatus("hid-noise-swallowed-v6", "Ignored apostrophe noise from APLUS remote");
             }
             else
             {
                 auto keyName = VirtualKeyName(key);
-                EmitRemoteStatus("raw-hid-unmapped-v8", std::string("vkCode=") + std::to_string(static_cast<int>(key)) + ", keyName=" + keyName);
+                EmitRemoteStatus("raw-hid-unmapped-v6", std::string("vkCode=") + std::to_string(static_cast<int>(key)) + ", keyName=" + keyName);
             }
             return;
         }
@@ -592,10 +586,6 @@ namespace
             ch == static_cast<uint32_t>('A') ||
             ch == static_cast<uint32_t>('b') ||
             ch == static_cast<uint32_t>('B') ||
-            ch == static_cast<uint32_t>('c') ||
-            ch == static_cast<uint32_t>('C') ||
-            ch == static_cast<uint32_t>('d') ||
-            ch == static_cast<uint32_t>('D') ||
             ch == static_cast<uint32_t>('\''))
         {
             args.Handled(true);
@@ -943,10 +933,10 @@ namespace winrt::billiardsgrade::implementation
 
     void RemoteControlModule::StartListening() noexcept
     {
-        // V7: this APLUS remote is paired by Windows as HID keyboard/media keys.
+        // V6: this APLUS remote is paired by Windows as HID keyboard/media keys.
         // Attach the CoreWindow + Accelerator handlers only after gameplay asks for remote.
         EnsureKeyboardHook();
-        EmitRemoteStatus("hid-listening-v8", "Windows HID remote listener active; BLE scan disabled in v8");
+        EmitRemoteStatus("hid-listening-v6", "Windows HID remote listener active; BLE scan disabled in v6");
     }
 
     void RemoteControlModule::SetEnabled(bool enabled) noexcept
@@ -960,7 +950,7 @@ namespace winrt::billiardsgrade::implementation
             CloseBleDevice();
         }
 
-        EmitRemoteStatus(enabled ? "enabled-v8-hid-only" : "disabled-v8", enabled ? "Remote control enabled: HID only, break/stop/newgame-crash v8" : "Remote control disabled");
+        EmitRemoteStatus(enabled ? "enabled-v6-hid-only" : "disabled-v6", enabled ? "Remote control enabled: HID only, no BLE scan" : "Remote control disabled");
 
         if (!enabled)
         {
@@ -973,14 +963,14 @@ namespace winrt::billiardsgrade::implementation
     {
         try
         {
-            // V7: Do NOT scan/connect GATT BLE. The real remote appears as
+            // V6: Do NOT scan/connect GATT BLE. The real remote appears as
             // SmartRemote_* HID on Windows; trying GATT gives Access is denied
             // and lets Timer/Extension control system volume.
             g_enabled = true;
             EnsureKeyboardHook();
             StopBleWatcher();
             CloseBleDevice();
-            EmitRemoteStatus("hid-only-v7", "BLE scan skipped; using Windows HID keyboard/media events v7");
+            EmitRemoteStatus("hid-only-v6", "BLE scan skipped; using Windows HID keyboard/media events");
 
             JSValueObject result;
             result["ok"] = JSValue(true);

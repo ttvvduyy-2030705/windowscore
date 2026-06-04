@@ -168,9 +168,9 @@ namespace
             return "START";
         if (key == "30" || key == "88" || key == "177" || key == "WARM" || key == "WARMUP" || key == "WARM_UP" || key == "MEDIA_PREVIOUS" || key == "MEDIA_PREVIOUS_TRACK" || key == "MEDIA_REWIND")
             return "WARM_UP";
-        if (key == "31" || key == "67" || key == "86" || key == "178" || key == "STOP" || key == "MEDIA_STOP" || key == "C" || key == "KEY_C")
+        if (key == "31" || key == "67" || key == "86" || key == "178" || key == "STOP" || key == "MEDIA_STOP")
             return "STOP";
-        if (key == "32" || key == "68" || key == "82" || key == "87" || key == "90" || key == "176" || key == "BREAK" || key == "MEDIA_NEXT" || key == "MEDIA_NEXT_TRACK" || key == "MEDIA_FAST_FORWARD" || key == "D" || key == "KEY_D")
+        if (key == "32" || key == "82" || key == "87" || key == "90" || key == "176" || key == "BREAK" || key == "MEDIA_NEXT" || key == "MEDIA_NEXT_TRACK" || key == "MEDIA_FAST_FORWARD")
             return "BREAK";
         if (key == "23" || key == "66" || key == "13" || key == "160" || key == "NEWGAME" || key == "NEW_GAME" || key == "RESET" || key == "RESTART" || key == "ENTER" || key == "OK" || key == "DPAD_CENTER" || key == "CENTER")
             return "NEW_GAME";
@@ -180,54 +180,31 @@ namespace
 
     std::string LogicalKeyFromByte(uint8_t byte)
     {
-        // Android KeyEvent codes used by billiardsgrade remote.
-        switch (byte)
-        {
-        case 19:
+        auto value = static_cast<int>(byte);
+
+        // Android KeyEvent codes used by billiardsgrade remote and BLE byte reports.
+        if (value == 19)
             return "UP";
-        case 20:
+        if (value == 20)
             return "DOWN";
-        case 21:
+        if (value == 21)
             return "LEFT";
-        case 22:
+        if (value == 22)
             return "RIGHT";
-        case 24:
+        if (value == 24)
             return "EXTENSION";
-        case 25:
+        if (value == 25)
             return "TIMER";
-        case 29:
+        if (value == 29 || value == 85 || value == 126 || value == 127 || value == 179 || value == 205)
             return "START";
-        case 30:
+        if (value == 30 || value == 88 || value == 177 || value == 182)
             return "WARM_UP";
-        case 31:
+        if (value == 31 || value == 67 || value == 86 || value == 169 || value == 173 || value == 178 || value == 183)
             return "STOP";
-        case 32:
+        if (value == 32 || value == 68 || value == 82 || value == 87 || value == 90 || value == 166 || value == 167 || value == 176 || value == 180 || value == 181)
             return "BREAK";
-        case 23:
-        case 66:
+        if (value == 13 || value == 23 || value == 41 || value == 66 || value == 78 || value == 160)
             return "NEW_GAME";
-        case 85:
-        case 126:
-        case 127:
-        case 179:
-        case 205: // common consumer HID low byte for play/pause
-            return "START";
-        case 86:
-        case 178:
-        case 183: // common consumer HID low byte for stop
-            return "STOP";
-        case 87:
-        case 90:
-        case 176:
-        case 181: // next track
-            return "BREAK";
-        case 88:
-        case 177:
-        case 182: // previous track
-            return "WARM_UP";
-        default:
-            break;
-        }
 
         // Some BLE button boards send ASCII letters or Windows virtual key values.
         auto textKey = LogicalKeyFromString(std::string(1, static_cast<char>(byte)));
@@ -236,7 +213,7 @@ namespace
             return textKey;
         }
 
-        return LogicalKeyFromString(std::to_string(static_cast<int>(byte)));
+        return LogicalKeyFromString(std::to_string(value));
     }
 
     std::string LogicalKeyFromBleBytes(std::vector<uint8_t> const &bytes)
@@ -398,12 +375,10 @@ namespace
         case 80:
         case 179:
             return "START";
-        case 67: // APLUS remote STOP sends keyboard C on Windows
         case 83:
         case 169:
         case 178:
             return "STOP";
-        case 68: // APLUS remote BREAK sends keyboard D on Windows
         case 176:
             return "BREAK";
         case 66: // APLUS remote WARM UP sends keyboard B on Windows
@@ -446,10 +421,6 @@ namespace
             return "A";
         case 66:
             return "B";
-        case 67:
-            return "C";
-        case 68:
-            return "D";
         case 222:
             return "APOSTROPHE";
         case 13:
@@ -499,12 +470,6 @@ namespace
             if (IsAplusRemoteNoiseKey(key))
             {
                 args.Handled(true);
-                EmitRemoteStatus("hid-noise-swallowed-v8", "Ignored apostrophe noise from APLUS remote");
-            }
-            else
-            {
-                auto keyName = VirtualKeyName(key);
-                EmitRemoteStatus("raw-hid-unmapped-v8", std::string("vkCode=") + std::to_string(static_cast<int>(key)) + ", keyName=" + keyName);
             }
             return;
         }
@@ -524,6 +489,10 @@ namespace
     {
         switch (static_cast<int>(key))
         {
+        case 13: // Enter / New Game
+        case 30: // VK_ACCEPT / New Game
+        case 41: // VK_SELECT / New Game
+        case 78: // keyboard N / New Game
         case 173: // VolumeMute
         case 174: // VolumeDown
         case 175: // VolumeUp
@@ -592,10 +561,6 @@ namespace
             ch == static_cast<uint32_t>('A') ||
             ch == static_cast<uint32_t>('b') ||
             ch == static_cast<uint32_t>('B') ||
-            ch == static_cast<uint32_t>('c') ||
-            ch == static_cast<uint32_t>('C') ||
-            ch == static_cast<uint32_t>('d') ||
-            ch == static_cast<uint32_t>('D') ||
             ch == static_cast<uint32_t>('\''))
         {
             args.Handled(true);
@@ -943,24 +908,13 @@ namespace winrt::billiardsgrade::implementation
 
     void RemoteControlModule::StartListening() noexcept
     {
-        // V7: this APLUS remote is paired by Windows as HID keyboard/media keys.
-        // Attach the CoreWindow + Accelerator handlers only after gameplay asks for remote.
-        EnsureKeyboardHook();
-        EmitRemoteStatus("hid-listening-v8", "Windows HID remote listener active; BLE scan disabled in v8");
+        // Listener registration is JS-side only. Keep native startup lightweight.
     }
 
     void RemoteControlModule::SetEnabled(bool enabled) noexcept
     {
         g_enabled = enabled;
-
-        if (enabled)
-        {
-            EnsureKeyboardHook();
-            StopBleWatcher();
-            CloseBleDevice();
-        }
-
-        EmitRemoteStatus(enabled ? "enabled-v8-hid-only" : "disabled-v8", enabled ? "Remote control enabled: HID only, break/stop/newgame-crash v8" : "Remote control disabled");
+        EmitRemoteStatus(enabled ? "enabled" : "disabled", enabled ? "Remote control enabled" : "Remote control disabled");
 
         if (!enabled)
         {
@@ -973,19 +927,13 @@ namespace winrt::billiardsgrade::implementation
     {
         try
         {
-            // V7: Do NOT scan/connect GATT BLE. The real remote appears as
-            // SmartRemote_* HID on Windows; trying GATT gives Access is denied
-            // and lets Timer/Extension control system volume.
             g_enabled = true;
-            EnsureKeyboardHook();
-            StopBleWatcher();
-            CloseBleDevice();
-            EmitRemoteStatus("hid-only-v7", "BLE scan skipped; using Windows HID keyboard/media events v7");
+            StartBleScan();
 
             JSValueObject result;
             result["ok"] = JSValue(true);
-            result["status"] = JSValue("hid-only");
-            result["message"] = JSValue("Using Windows HID remote listener; BLE scan skipped");
+            result["status"] = JSValue("scanning");
+            result["message"] = JSValue("Scanning for BLE remote");
             promise.Resolve(std::move(result));
         }
         catch (winrt::hresult_error const &error)

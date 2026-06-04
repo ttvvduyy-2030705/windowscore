@@ -1,4 +1,4 @@
-import {useCallback, useContext, useEffect, useMemo, useRef, useState} from 'react';
+﻿import {useCallback, useContext, useEffect, useMemo, useRef, useState} from 'react';
 import {useFocusEffect, useNavigation, useRoute} from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {Alert, Platform} from 'react-native';
@@ -54,6 +54,7 @@ import {navigate, push} from 'utils/navigation';
 import {
   createYouTubeLiveSession,
   getYouTubeLiveEligibility,
+  getYouTubeLiveStatus,
   stopYouTubeLiveSession,
   type YouTubeEligibilityCheck,
   type YouTubeEligibilityResponse,
@@ -69,15 +70,32 @@ import {
 import {
   DEFAULT_YOUTUBE_RTMP_URL,
   createWindowsFfmpegSnapshotFromGameState,
+  getWindowsFfmpegLiveStatus,
+  isWindowsFfmpegLocalLiveRunning,
   maskStreamKey,
   startWindowsFfmpegYouTubeLive,
   stopWindowsFfmpegYouTubeLive,
   updateWindowsFfmpegOverlay,
   type WindowsFfmpegLiveConfig,
 } from 'services/livestream/WindowsFfmpegLiveEngine';
-import {pushAplusLiveScoreUpdate} from 'services/aplusLiveScore';
+import {
+  heartbeatAplusLiveScoreMatch,
+  pushAplusLiveScoreUpdate,
+} from 'services/aplusLiveScore';
+
+const formatVietnamLiveTitleTime = (date: Date = new Date()): string => {
+  const vietnamTime = new Date(date.getTime() + 7 * 60 * 60 * 1000);
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return `${pad(vietnamTime.getUTCDate())}/${pad(
+    vietnamTime.getUTCMonth() + 1,
+  )}/${vietnamTime.getUTCFullYear()} ${pad(vietnamTime.getUTCHours())}:${pad(
+    vietnamTime.getUTCMinutes(),
+  )}:${pad(vietnamTime.getUTCSeconds())} GMT+7`;
+};
 
 let countdownInterval: NodeJS.Timeout, warmUpCountdownInterval: NodeJS.Timeout;
+let pendingWindowsYouTubeDrainStopId = 0;
+const WINDOWS_YOUTUBE_LIVE_END_DRAIN_MS = 22000;
 const {CameraService} = NativeModules;
 
 const getSafeRunPoint = (value?: number) => {
@@ -145,6 +163,9 @@ type GameplayLiveRouteParams = {
   liveAccountName?: string;
   liveAccountId?: string;
   liveSetupToken?: string;
+  prestartedYouTubeLive?: boolean;
+  prestartedYouTubeBroadcastId?: string;
+  prestartedYouTubeWatchUrl?: string;
 };
 
 const normalizeGameplayLivestreamPlatform = (value: any) => {
@@ -300,13 +321,8 @@ const buildDefaultPool8Trackers = (): Pool8Tracker[] => [
   {sequence: [...DEFAULT_POOL8_RIGHT_SEQUENCE], activeIndex: 0},
 ];
 
-const getSafePool8Trackers = (trackers?: Pool8Tracker[] | null): Pool8Tracker[] =>
-  Array.isArray(trackers) && trackers.length > 0
-    ? trackers
-    : buildDefaultPool8Trackers();
-
-const resetPool8Trackers = (trackers?: Pool8Tracker[] | null): Pool8Tracker[] =>
-  getSafePool8Trackers(trackers).map(tracker => ({...tracker, activeIndex: 0}));
+const resetPool8Trackers = (trackers: Pool8Tracker[]): Pool8Tracker[] =>
+  trackers.map(tracker => ({...tracker, activeIndex: 0}));
 
 const REPLAY_RESUME_SNAPSHOT_STORAGE_KEY =
   '@APLUS_REPLAY_RESUME_SNAPSHOT_V3';
@@ -617,6 +633,8 @@ const GamePlayViewModel = () => {
   );
   const shouldUseYouTubeLive = selectedLivestreamPlatform === 'youtube';
   const shouldUseLocalRecordingOnly = selectedLivestreamPlatform !== 'youtube';
+  const isWindowsYouTubeLiveOnly =
+    Platform.OS === 'windows' && shouldUseYouTubeLive && !saveToDeviceWhileStreaming;
   const gameSettingsSignature = useMemo(() => {
     return buildGameSettingsSignature(gameSettings);
   }, [
@@ -648,6 +666,7 @@ const GamePlayViewModel = () => {
   const lastLiveSnapshotSyncAtRef = useRef(0);
   const lastReplayTimelineWriteSignatureRef = useRef('');
   const lastPruneCompletedSegmentsRef = useRef(0);
+  const lastExtensionPressAtRef = useRef(0);
   const remoteHandlersRef = useRef({
     start: () => {},
     warmUp: () => {},
@@ -680,6 +699,7 @@ const GamePlayViewModel = () => {
     };
   } | null>(null);
   const activeYouTubeBroadcastIdRef = useRef<string>('');
+  const appliedPrestartedYouTubeLiveRef = useRef(false);
   const isEndingGameRef = useRef(false);
   const appliedReplayResumeSnapshotRef = useRef(false);
   const initializedGameStateRef = useRef(false);
@@ -742,6 +762,11 @@ const GamePlayViewModel = () => {
   const winnerAlertShownRef = useRef(false);
   const pendingNewGameAfterViolateRef = useRef(false);
   const [isCameraReady, setIsCameraReady] = useState(false);
+  const isCameraReadyRef = useRef(false);
+
+  useEffect(() => {
+    isCameraReadyRef.current = isCameraReady;
+  }, [isCameraReady]);
   const [pool8FreeHole10Scores, setPool8FreeHole10Scores] = useState<number[]>([0, 0, 0, 0]);
   const [pool8FreeSetWinnerIndex, setPool8FreeSetWinnerIndex] = useState<number | null>(null);
   const [pool8Trackers, setPool8Trackers] = useState<Pool8Tracker[]>(buildDefaultPool8Trackers);
@@ -804,7 +829,7 @@ const GamePlayViewModel = () => {
         if (
           event.message.includes('cameraId was null') ||
           event.message.includes('webcam USB') ||
-          event.message.includes('Không tìm thấy camera')
+          event.message.includes('KhÃ´ng tÃ¬m tháº¥y camera')
         ) {
           pendingYouTubeNativeStartRef.current = null;
           shouldStartRecordingRef.current = false;
@@ -955,7 +980,9 @@ const GamePlayViewModel = () => {
 
 
   const [isStarted, setIsStarted] = useState(
-    gameSettings?.mode?.mode === 'fast' && selectedLivestreamPlatform !== 'youtube'
+    routeParams.prestartedYouTubeLive
+      ? true
+      : gameSettings?.mode?.mode === 'fast' && selectedLivestreamPlatform !== 'youtube'
       ? true
       : false,
   );
@@ -999,6 +1026,42 @@ const GamePlayViewModel = () => {
     setYouTubeNativeCameraLock(false);
     setYouTubeSourceLock(null);
   }, [shouldUseYouTubeLive]);
+
+
+  useEffect(() => {
+    if (!routeParams.prestartedYouTubeLive || appliedPrestartedYouTubeLiveRef.current) {
+      return;
+    }
+
+    appliedPrestartedYouTubeLiveRef.current = true;
+    const broadcastId = String(routeParams.prestartedYouTubeBroadcastId || '').trim();
+    activeYouTubeBroadcastIdRef.current = broadcastId;
+
+    console.log('[YouTube Live] restored prestarted live from settings', {
+      broadcastId,
+      watchUrl: routeParams.prestartedYouTubeWatchUrl || '',
+    });
+
+    pendingYouTubeNativeStartRef.current = null;
+    shouldStartRecordingRef.current = false;
+    pendingStartRecordingRef.current = false;
+    setYoutubeLiveOverlay(null);
+    setYoutubeLivePreparing(false);
+    setYoutubeLivePreviewActive(true);
+    setYouTubeNativeCameraLock(true);
+    setIsStarted(true);
+    setActiveGameplaySessionSync({
+      matchSessionId: matchSessionIdRef.current,
+      webcamFolderName,
+      savedAt: Date.now(),
+      source: 'settings-prestarted-youtube-live',
+    });
+  }, [
+    routeParams.prestartedYouTubeLive,
+    routeParams.prestartedYouTubeBroadcastId,
+    routeParams.prestartedYouTubeWatchUrl,
+    webcamFolderName,
+  ]);
 
   useEffect(() => {
     if (!youtubeLiveNativeMode || !isCameraReady) {
@@ -1170,7 +1233,7 @@ const GamePlayViewModel = () => {
     }
 
     console.log(
-      '[Replay] Khôi phục trận đang tạm dừng:',
+      '[Replay] KhÃ´i phá»¥c tráº­n Ä‘ang táº¡m dá»«ng:',
       snapshot?.matchSessionId,
       snapshot?.webcamFolderName,
     );
@@ -1184,7 +1247,7 @@ const GamePlayViewModel = () => {
     replayReturnAtRef.current = Date.now();
     setCameraSessionNonce(value => value + 1);
 
-    // Giữ lại snapshot nhưng tắt auto-restore để tránh focus lại là ghi đè state lần nữa.
+    // Giá»¯ láº¡i snapshot nhÆ°ng táº¯t auto-restore Ä‘á»ƒ trÃ¡nh focus láº¡i lÃ  ghi Ä‘Ã¨ state láº§n ná»¯a.
     await setReplayResumeSnapshot({
       ...snapshot!,
       restoreOnNextFocus: false,
@@ -1269,8 +1332,8 @@ const GamePlayViewModel = () => {
   }, [applyReplayResumeSnapshot, gameSettingsSignature, youtubeLiveNativeMode]);
 
   useEffect(() => {
-    // Không cho build mới / mở app mới tự restore trận cũ từ storage.
-    // Luồng "Xem lại -> Quay lại" vẫn dùng replay snapshot riêng.
+    // KhÃ´ng cho build má»›i / má»Ÿ app má»›i tá»± restore tráº­n cÅ© tá»« storage.
+    // Luá»“ng "Xem láº¡i -> Quay láº¡i" váº«n dÃ¹ng replay snapshot riÃªng.
     void clearPersistedLiveMatchSnapshot();
   }, []);
 
@@ -1344,6 +1407,8 @@ const GamePlayViewModel = () => {
           playerSettings: snapshot.playerSettings,
           currentPlayerIndex: snapshot.currentPlayerIndex,
           countdownTime: snapshot.countdownTime,
+          warmUpCountdownTime: snapshot.warmUpCountdownTime,
+          gameBreakEnabled: snapshot.gameBreakEnabled,
           totalTurns: snapshot.totalTurns,
         }),
       );
@@ -1356,65 +1421,100 @@ const GamePlayViewModel = () => {
   //      }
   // }, [hasPermission]);
 
+  const onRemoteStartToggle = useCallback(() => {
+    if (isStarted && !isPaused && isMatchPaused) {
+      console.log('[Remote][Start] resume stopped countdown');
+      setIsMatchPaused(false);
+      return;
+    }
+
+    console.log('[Remote][Start] pressed', {isStarted, isPaused});
+
+    if (!isStarted) {
+      void onStart();
+      return;
+    }
+
+    if (isPaused) {
+      console.log('[Remote][Start] resume paused match');
+      void setReplayResumeSnapshot(null);
+      setReplayReturnRequestSync(null);
+
+      if (pendingNewGameAfterViolateRef.current) {
+        pendingNewGameAfterViolateRef.current = false;
+        startNewGameAfterViolate();
+      } else {
+        _resetCountdown(true);
+      }
+
+      setIsPaused(false);
+      setIsMatchPaused(false);
+      shouldStartRecordingRef.current = !isWindowsYouTubeLiveOnly;
+      pendingStartRecordingRef.current = !isWindowsYouTubeLiveOnly;
+      return;
+    }
+
+    onPause();
+  }, [
+    isMatchPaused,
+    isStarted,
+    isPaused,
+    onStart,
+    onPause,
+    _resetCountdown,
+    startNewGameAfterViolate,
+    isWindowsYouTubeLiveOnly,
+  ]);
+
+    const onRemoteStopTimer = useCallback(() => {
+    console.log('[Remote][Stop] pressed', {
+      isStarted,
+      isPaused,
+      isMatchPaused,
+    });
+
+    if (!isStarted || isPaused) {
+      return;
+    }
+
+    // Remote Stop chá»‰ dá»«ng Ä‘á»“ng há»“ Ä‘áº¿m ngÆ°á»£c.
+    // KhÃ´ng dá»«ng live, khÃ´ng dá»«ng quay, khÃ´ng táº¡o vÃ¡n má»›i.
+    setIsMatchPaused(true);
+  }, [isStarted, isPaused, isMatchPaused]);
+
+const onRemoteBreak = useCallback(() => {
+    console.log('[Remote][Break] pressed', {
+      isStarted,
+      isPaused,
+      poolBreakEnabled,
+    });
+    onPoolBreak();
+  }, [isStarted, isPaused, poolBreakEnabled, onPoolBreak]);
+
   useEffect(() => {
-    const isCaromRemoteTurnMode = isCaromGame(gameSettings?.category);
-
-    // Pool: NEW GAME still requires 3s hold before reset.
-    // Carom: NEW GAME is reused as "tăng lượt", so it fires immediately.
-    RemoteControl.instance.setNewGameHoldRequired?.(!isCaromRemoteTurnMode);
-
     remoteHandlersRef.current = {
-      start: () => {
-        console.log('[Remote][Start] toggle v11-carom-pool-separate-buttons', {
-          isStarted,
-          isPaused,
-          isMatchPaused,
-        });
-
-        if (isStarted) {
-          onPause();
-          return;
-        }
-
-        void onStart();
-      },
+      start: onRemoteStartToggle,
       warmUp: warmUpCountdownTime ? onEndWarmUp : onWarmUp,
-      stop: onToggleCountDown,
-      gameBreak: isCaromRemoteTurnMode
-        ? () => {
-            console.log('[Remote][Carom] BREAK -> decrease turns');
-            setTotalTurns(prev => Math.max(1, (Number(prev) || 1) - 1));
-          }
-        : onPoolBreak,
+      stop: onRemoteStopTimer,
+      gameBreak: onRemoteBreak,
       extension: onPressGiveMoreTime,
-      timer: isCaromRemoteTurnMode
-        ? () => {
-            console.log('[Remote][Carom] TIMER ignored');
-          }
-        : onResetTurn,
-      newGame: isCaromRemoteTurnMode
-        ? () => {
-            console.log('[Remote][Carom] NEW_GAME -> increase turns');
-            setTotalTurns(prev => Math.max(1, (Number(prev) || 0) + 1));
-          }
-        : onReset,
+      timer: onResetTurn,
+      newGame: onReset,
       up: () => onChangePlayerPoint(1, currentPlayerIndex, 0),
       down: () => onChangePlayerPoint(-1, currentPlayerIndex, 0),
       left: onEndTurn,
       right: onEndTurn,
     };
   }, [
-    gameSettings?.category,
     isStarted,
     isPaused,
     isMatchPaused,
     warmUpCountdownTime,
-    onPause,
-    onStart,
+    onRemoteStartToggle,
     onEndWarmUp,
     onWarmUp,
-    onToggleCountDown,
-    onPoolBreak,
+    onRemoteStopTimer,
+    onRemoteBreak,
     onPressGiveMoreTime,
     onResetTurn,
     onReset,
@@ -1550,6 +1650,13 @@ const GamePlayViewModel = () => {
   }, [gameSettings, tryRestoreLiveMatchSnapshot, tryRestoreReplayResumeSnapshot]);
 
   useEffect(() => {
+    if (isWindowsYouTubeLiveOnly) {
+      shouldStartRecordingRef.current = false;
+      pendingStartRecordingRef.current = false;
+      clearRecordingStartRetry();
+      return;
+    }
+
     if (!isStarted || isPaused || !isCameraReady) {
       clearRecordingStartRetry();
       return;
@@ -1613,9 +1720,17 @@ const GamePlayViewModel = () => {
     clearRecordingStartRetry,
     webcamFolderName,
     youtubeLivePreviewActive,
+    isWindowsYouTubeLiveOnly,
   ]);
 
   useEffect(() => {
+    // YouTube live-only must not run local replay/history timeline writers.
+    // Keeping local replay writes active while FFmpeg is live can destabilize the RNW app
+    // exactly when the match timer starts. Live score/overlay updates continue separately.
+    if (isWindowsYouTubeLiveOnly) {
+      return;
+    }
+
     if (!webcamFolderName || !isStarted || isPaused || !playerSettings) {
       return;
     }
@@ -1691,6 +1806,7 @@ const GamePlayViewModel = () => {
     currentPlayerIndex,
     countdownTime,
     totalTurns,
+    isWindowsYouTubeLiveOnly,
   ]);
 
   useEffect(() => {
@@ -2028,42 +2144,36 @@ const GamePlayViewModel = () => {
   );
 
   const onPressGiveMoreTime = useCallback(() => {
+    const now = Date.now();
+    if (now - lastExtensionPressAtRef.current < 700) {
+      console.log('[Extension] blocked: duplicate remote press', {
+        elapsedMs: now - lastExtensionPressAtRef.current,
+      });
+      return;
+    }
+    lastExtensionPressAtRef.current = now;
+
     const baseCountdown = Number(gameSettings?.mode?.countdownTime || 0);
     const configuredBonus = Number(gameSettings?.mode?.extraTimeBonus || 0);
-    const currentSettings = playerSettingsRef.current ?? playerSettings;
-    const currentPlayer = currentSettings?.playingPlayers?.[currentPlayerIndex];
-    const settingExtraTimeTurns = gameSettings?.mode?.extraTimeTurns;
-    const configuredExtraTimeTurns = Number(settingExtraTimeTurns);
-    const isUnlimitedExtraTimeTurns = settingExtraTimeTurns === 'infinity';
-    const playerRemainingTurns = currentPlayer?.proMode?.extraTimeTurns;
-    const remainingTurns =
-      typeof playerRemainingTurns === 'number'
-        ? playerRemainingTurns
-        : Number.isFinite(configuredExtraTimeTurns)
-          ? configuredExtraTimeTurns
-          : playerRemainingTurns;
-    const hasLimitedExtraTimeTurns =
-      !isUnlimitedExtraTimeTurns &&
-      (typeof remainingTurns === 'number' || Number.isFinite(configuredExtraTimeTurns));
+    const latestPlayerSettings = playerSettingsRef.current || playerSettings;
+    const currentPlayer = latestPlayerSettings?.playingPlayers?.[currentPlayerIndex];
+    const remainingTurns = currentPlayer?.proMode?.extraTimeTurns;
 
-    console.log('[Extension] press v12-limit-fix', {
+    console.log('[Extension] press', {
       isStarted,
       baseCountdown,
       configuredBonus,
       currentCountdown: countdownTime,
       currentPlayerIndex,
-      settingExtraTimeTurns,
-      playerRemainingTurns,
       remainingTurns,
-      hasLimitedExtraTimeTurns,
     });
 
-    if (!isStarted || !currentSettings || !baseCountdown) {
+    if (!isStarted || !latestPlayerSettings || !baseCountdown) {
       console.log('[Extension] blocked: invalid state');
       return;
     }
 
-    if (hasLimitedExtraTimeTurns && Number(remainingTurns || 0) <= 0) {
+    if (typeof remainingTurns === 'number' && remainingTurns <= 0) {
       console.log('[Extension] blocked: no extra turns left');
       return;
     }
@@ -2075,39 +2185,34 @@ const GamePlayViewModel = () => {
           ? baseCountdown
           : 35;
 
-    if (hasLimitedExtraTimeTurns) {
-      const safeRemainingTurns = Math.max(0, Number(remainingTurns || 0));
-      const nextRemainingTurns = Math.max(0, safeRemainingTurns - 1);
+    setPlayerSettings(prev => {
+      if (!prev?.playingPlayers?.length) {
+        return prev;
+      }
 
-      const nextPlayerSettings = {
-        ...currentSettings,
-        playingPlayers: (currentSettings.playingPlayers || []).map(
-          (player, index) => {
-            if (index !== currentPlayerIndex) {
-              return player;
-            }
+      const playingPlayers = prev.playingPlayers.map((player, index) => {
+        if (index !== currentPlayerIndex || !player.proMode) {
+          return player;
+        }
 
-            return {
-              ...player,
-              proMode: {
-                ...(player.proMode || {}),
-                extraTimeTurns: nextRemainingTurns,
-              },
-            } as Player;
+        if (typeof player.proMode.extraTimeTurns !== 'number') {
+          return player;
+        }
+
+        return {
+          ...player,
+          proMode: {
+            ...player.proMode,
+            extraTimeTurns: Math.max(0, player.proMode.extraTimeTurns - 1),
           },
-        ),
-      } as PlayerSettings;
-
-      // Important: update playerSettingsRef synchronously before adding time.
-      // Remote HID can fire very quickly; checking stale React state allowed
-      // spamming Extension beyond the configured turn limit.
-      setPlayerSettings(nextPlayerSettings);
-
-      console.log('[Extension] extra turn consumed v12-limit-fix', {
-        before: safeRemainingTurns,
-        after: nextRemainingTurns,
+        } as Player;
       });
-    }
+
+      return {
+        ...prev,
+        playingPlayers,
+      } as PlayerSettings;
+    });
 
     setCountdownTime(prev => {
       const safePrev = Number.isFinite(prev) ? prev : baseCountdown;
@@ -2221,7 +2326,7 @@ const GamePlayViewModel = () => {
       if (isPool15OnlyGame(gameSettings?.category)) {
         setPool8SetWinnerIndex(null);
         setPool8Trackers(prev =>
-          resetPool8Trackers(getSafePool8Trackers(prev)),
+          resetPool8Trackers(prev.length ? prev : buildDefaultPool8Trackers()),
         );
       }
 
@@ -2425,7 +2530,7 @@ const GamePlayViewModel = () => {
     }
 
     setPool8Trackers(prev => {
-      const next = Array.isArray(prev) && prev.length >= 2 ? [...prev] : buildDefaultPool8Trackers();
+      const next = prev.length >= 2 ? [...prev] : buildDefaultPool8Trackers();
       return [next[1], next[0]];
     });
   }, [gameSettings?.category]);
@@ -2683,7 +2788,7 @@ const GamePlayViewModel = () => {
     setIsStarted(true);
 
     if (isPool15OnlyGame(gameSettings?.category)) {
-      setPool8Trackers(prev => resetPool8Trackers(getSafePool8Trackers(prev)));
+      setPool8Trackers(prev => resetPool8Trackers(prev.length ? prev : buildDefaultPool8Trackers()));
       setPool8SetWinnerIndex(null);
     }
   }, [gameSettings, isStarted, isPaused, poolBreakEnabled]);
@@ -2951,6 +3056,8 @@ const GamePlayViewModel = () => {
       return;
     }
 
+    pendingWindowsYouTubeDrainStopId += 1;
+
     const freeDisk =
       (await DeviceInfo.getFreeDiskStorage()) / (1024 * 1024 * 1024);
 
@@ -3052,22 +3159,68 @@ const GamePlayViewModel = () => {
     }
 
     if (Platform.OS === 'windows' && shouldUseYouTubeLive) {
+      const runningStatusBeforeCreate = await getWindowsFfmpegLiveStatus().catch(() => null);
+      const runningStatusText = String(runningStatusBeforeCreate?.status || '');
+      if (
+        isWindowsFfmpegLocalLiveRunning() ||
+        runningStatusText === 'live' ||
+        runningStatusText === 'starting'
+      ) {
+        console.log('[YouTube Live] duplicate start ignored: FFmpeg is already running', {
+          status: runningStatusText || 'live',
+          pid: runningStatusBeforeCreate?.pid,
+          activeBroadcastId: activeYouTubeBroadcastIdRef.current || '',
+        });
+        pendingYouTubeNativeStartRef.current = null;
+        shouldStartRecordingRef.current = false;
+        pendingStartRecordingRef.current = false;
+        setYoutubeLiveOverlay(null);
+        setYoutubeLivePreparing(false);
+        setYoutubeLivePreviewActive(true);
+        setYouTubeNativeCameraLock(true);
+        setYouTubeSourceLock(lockedLiveSource);
+        setIsStarted(true);
+        setActiveGameplaySessionSync({
+          matchSessionId: matchSessionIdRef.current,
+          webcamFolderName,
+          savedAt: Date.now(),
+          source: 'windows-youtube-live-duplicate-start-ignored',
+        });
+        return;
+      }
+
       console.log('[LiveWindowsMode]', {
-        selectedMode: 'ffmpeg-local-oauth',
+        selectedMode: 'ffmpeg-local-oauth-decoupled-start',
+        startsMatchImmediately: true,
         usesNgrok: false,
         usesMetro: false,
         usesRenderForAuth: true,
         usesRenderForStream: false,
       });
 
-      shouldStartRecordingRef.current = saveToDeviceWhileStreaming;
-      pendingStartRecordingRef.current = saveToDeviceWhileStreaming;
+      shouldStartRecordingRef.current = false;
+      pendingStartRecordingRef.current = false;
       pendingYouTubeNativeStartRef.current = null;
       setYoutubeLiveOverlay(null);
-      setYoutubeLivePreparing(true);
+      // v31: keep the in-app camera preview mounted while the match starts.
+      // The real test machine showed the preview only becomes stable after the
+      // gameplay/fullscreen layout settles. Releasing MediaCapture immediately
+      // made the app view lose camera, while YouTube still stayed â€œSáº¯p diá»…n raâ€.
+      // So for FFmpeg live we no longer switch the UI into native-live preview mode.
+      setYoutubeLivePreparing(false);
       setYoutubeLivePreviewActive(false);
       setYouTubeNativeCameraLock(false);
       setYouTubeSourceLock(null);
+
+      // Do not block the match start while YouTube creates a broadcast or FFmpeg warms up.
+      // YouTube/Render can take many seconds; the game must start immediately.
+      setIsStarted(true);
+      setActiveGameplaySessionSync({
+        matchSessionId: matchSessionIdRef.current,
+        webcamFolderName,
+        savedAt: Date.now(),
+        source: 'windows-youtube-live-start-match-immediately',
+      });
 
       const firstPlayerName =
         playerSettingsRef.current?.playingPlayers?.[0]?.name?.trim() ||
@@ -3077,7 +3230,7 @@ const GamePlayViewModel = () => {
         playerSettingsRef.current?.playingPlayers?.[1]?.name?.trim() ||
         playerSettings?.playingPlayers?.[1]?.name?.trim() ||
         'Player 2';
-      const youtubeTitle = `${firstPlayerName} vs ${secondPlayerName} - ${new Date().toLocaleString()}`;
+      const youtubeTitle = `${firstPlayerName} vs ${secondPlayerName} - ${formatVietnamLiveTitleTime()}`;
 
       const resolveIngestion = (session: any) => {
         const streamUrlWithKey = String(session?.streamUrlWithKey || '').trim();
@@ -3094,8 +3247,18 @@ const GamePlayViewModel = () => {
             '',
         ).trim();
 
+        const normalizeYouTubeIngestUrlForFfmpeg = (value: string) => {
+          const cleanValue = String(value || DEFAULT_YOUTUBE_RTMP_URL).trim().replace(/\/+$/g, '');
+          // v30: keep the exact YouTube ingest URL returned by the backend.
+          // v29 forced RTMPS -> RTMP, but the stream still stayed at
+          // streamStatus=ready. Use YouTube's provided RTMPS endpoint again
+          // while the native resolver is fixed to prefer the real WinGet
+          // ffmpeg.exe that successfully captured camtest.mp4 on this machine.
+          return cleanValue;
+        };
+
         if (streamUrl && streamName) {
-          return {rtmpUrl: streamUrl.replace(/\/+$/g, ''), streamKey: streamName};
+          return {rtmpUrl: normalizeYouTubeIngestUrlForFfmpeg(streamUrl), streamKey: streamName};
         }
 
         if (streamUrlWithKey) {
@@ -3103,14 +3266,14 @@ const GamePlayViewModel = () => {
           const lastSlash = clean.lastIndexOf('/');
           if (lastSlash > 0) {
             return {
-              rtmpUrl: clean.slice(0, lastSlash),
+              rtmpUrl: normalizeYouTubeIngestUrlForFfmpeg(clean.slice(0, lastSlash)),
               streamKey: clean.slice(lastSlash + 1),
             };
           }
         }
 
         return {
-          rtmpUrl: streamUrl || DEFAULT_YOUTUBE_RTMP_URL,
+          rtmpUrl: normalizeYouTubeIngestUrlForFfmpeg(streamUrl || DEFAULT_YOUTUBE_RTMP_URL),
           streamKey: streamName,
         };
       };
@@ -3118,17 +3281,52 @@ const GamePlayViewModel = () => {
       const prepareWindowsFfmpegYouTubeLive = async () => {
         let liveResponse: any = null;
 
+        const waitForCameraPreviewReady = async () => {
+          const startedAt = Date.now();
+          while (Date.now() - startedAt < 3500) {
+            if (isCameraReadyRef.current) {
+              console.log('[LiveCameraWarmup]', {ready: true, waitedMs: Date.now() - startedAt});
+              return true;
+            }
+            await new Promise(resolve => setTimeout(resolve, 150));
+          }
+          console.log('[LiveCameraWarmup]', {ready: false, waitedMs: Date.now() - startedAt});
+          return false;
+        };
+
+        const releaseWindowsPreviewBeforeFfmpeg = async (stage: string) => {
+          // v51: Windows live now keeps app preview and live upload running together.
+          // Native live capture uses its own MediaCapture frame reader in SharedReadOnly
+          // mode, so we should not unmount or release the preview camera anymore.
+          setYoutubeLivePreparing(true);
+          setYoutubeLivePreviewActive(true);
+          setYouTubeNativeCameraLock(true);
+          setYouTubeSourceLock(lockedLiveSource);
+
+          console.log('[LiveCameraSharedPreview] keep preview mounted while starting ffmpeg', {
+            stage,
+            source: lockedLiveSource,
+          });
+
+          await new Promise(resolve => setTimeout(resolve, 250));
+        };
+
         try {
+          await waitForCameraPreviewReady();
+          await releaseWindowsPreviewBeforeFfmpeg('before-youtube-create');
+
           const selectedLiveVisibility = await readYouTubeVisibilityFromStorage();
 
           liveResponse = await createYouTubeLiveSession({
             title: youtubeTitle,
             description: i18n.t("youtubeLiveDescription", {firstPlayerName, secondPlayerName}) as string,
             privacyStatus: selectedLiveVisibility,
+            scheduledStartTime: new Date(Date.now() + 1500).toISOString(),
             enableAutoStart: true,
-            enableAutoStop: true,
-            enableDvr: true,
-            recordFromStart: true,
+            enableAutoStop: false,
+            enableDvr: false,
+            recordFromStart: false,
+            latencyPreference: 'ultraLow',
             resolution: '1080p',
             frameRate: '30fps',
           });
@@ -3165,10 +3363,17 @@ const GamePlayViewModel = () => {
             streamKey: ingestion.streamKey,
             ffmpegPath: liveConfigLookup.WindowsFfmpegPath || '',
             cameraDeviceName: liveConfigLookup.WindowsFfmpegCameraDevice || '',
-            audioDeviceName: liveConfigLookup.WindowsFfmpegAudioDevice || '',
-            useAudio: Boolean(liveConfigLookup.WindowsFfmpegAudioDevice),
+            // v71 stable live first: disable microphone capture during startup.
+            // Keep a stable AAC track with FFmpeg lavfi anullsrc.
+            audioDeviceName: '',
+            useAudio: true,
+            audioInputMode: 'anullsrc',
             fps: 30,
-            bitrate: '6000k',
+            width: 1920,
+            height: 1080,
+            resolution: '1080p',
+            bitrate: '5200k',
+            directShowInputMode: 'mjpeg1080',
           };
 
           const snapshot = createWindowsFfmpegSnapshotFromGameState({
@@ -3176,7 +3381,13 @@ const GamePlayViewModel = () => {
             playerSettings: playerSettingsRef.current || playerSettings,
             currentPlayerIndex,
             countdownTime,
+            warmUpCountdownTime,
+            gameBreakEnabled,
             totalTurns,
+          });
+
+          console.log('[LiveCameraRelease] before ffmpeg camera-only start', {
+            reason: 'shared-preview-mode-v51',
           });
 
           const startResult = await startWindowsFfmpegYouTubeLive(
@@ -3204,14 +3415,123 @@ const GamePlayViewModel = () => {
           }
 
           setYoutubeLivePreparing(false);
-          setYoutubeLivePreviewActive(false);
-          setIsStarted(true);
+          // v34: keep the app camera preview unmounted while FFmpeg owns the webcam.
+          // This prevents MediaCapture from stealing the USB camera back and killing
+          // the YouTube ingest. The app should show live-state UI instead of trying
+          // to preview the same camera twice.
+          setYoutubeLivePreviewActive(true);
+          setYouTubeNativeCameraLock(true);
+          // Match was already started before this async live setup began.
+          // Keep gameplay independent from live setup completion.
           setActiveGameplaySessionSync({
             matchSessionId: matchSessionIdRef.current,
             webcamFolderName,
             savedAt: Date.now(),
-            source: 'windows-ffmpeg-oauth-live-start',
+            source: 'windows-ffmpeg-oauth-live-started-after-match',
           });
+
+          // v28: YouTube often stays at â€œSáº¯p diá»…n raâ€ until the backend polls
+          // liveStreams.status.streamStatus and explicitly transitions the bound
+          // broadcast to live. The backend /status endpoint already contains the
+          // transition logic, but the Windows app was not calling it after FFmpeg
+          // started. Poll it in the background so the match can keep running while
+          // YouTube moves ready -> live once ingest becomes active.
+          const pollBroadcastId = String(activeYouTubeBroadcastIdRef.current || '').trim();
+          if (pollBroadcastId) {
+            (async () => {
+              for (let attempt = 1; attempt <= 30; attempt += 1) {
+                if (activeYouTubeBroadcastIdRef.current !== pollBroadcastId) {
+                  return;
+                }
+
+                try {
+                  const status: any = await getYouTubeLiveStatus(pollBroadcastId);
+                  const broadcastStatus = String(
+                    status?.broadcast?.status?.lifeCycleStatus || '',
+                  );
+                  const streamStatus = String(
+                    status?.stream?.status?.streamStatus || '',
+                  );
+
+                  const ffmpegStatus = await getWindowsFfmpegLiveStatus();
+                  console.log('[YouTube Live Status Poll]', {
+                    attempt,
+                    broadcastId: pollBroadcastId,
+                    broadcastStatus,
+                    streamStatus,
+                    autoTransitioned: Boolean(status?.autoTransitioned),
+                    ffmpegStatus: ffmpegStatus?.status,
+                    ffmpegPid: ffmpegStatus?.pid,
+                    ffmpegStderrSummary: ffmpegStatus?.stderrSummary || ffmpegStatus?.error || '',
+                  });
+
+                  if (broadcastStatus === 'live' || broadcastStatus === 'complete') {
+                    return;
+                  }
+
+                  if (Boolean((status as any)?.redundantTransition)) {
+                    console.log('[YouTube Live Status Poll] redundant transition marker; keep waiting for real YouTube status', {
+                      attempt,
+                      broadcastId: pollBroadcastId,
+                    });
+                  }
+
+                  if (
+                    ffmpegStatus?.status === 'stopped' ||
+                    ffmpegStatus?.status === 'error'
+                  ) {
+                    const ffmpegMessage =
+                      ffmpegStatus?.stderrSummary ||
+                      ffmpegStatus?.error ||
+                      'FFmpeg Ä‘Ã£ dá»«ng trÆ°á»›c khi YouTube nháº­n Ä‘Æ°á»£c tÃ­n hiá»‡u live.';
+                    console.log('[YouTube Live Status Poll] FFmpeg stopped before YouTube live', {
+                      attempt,
+                      broadcastId: pollBroadcastId,
+                      broadcastStatus,
+                      streamStatus,
+                      ffmpegMessage,
+                    });
+
+                    activeYouTubeBroadcastIdRef.current = '';
+                    setYoutubeLivePreviewActive(false);
+                    setYoutubeLivePreparing(false);
+                    setYouTubeNativeCameraLock(false);
+
+                    try {
+                      await stopWindowsFfmpegYouTubeLive('ffmpeg-stopped-before-youtube-live');
+                    } catch {}
+                    try {
+                      await stopYouTubeLiveSession(pollBroadcastId);
+                    } catch (stopError) {
+                      console.log('[YouTube Live Status Poll] stop failed after FFmpeg died', stopError);
+                    }
+
+                    showYouTubeLiveFailure(
+                      null,
+                      `KhÃ´ng live Ä‘Æ°á»£c YouTube vÃ¬ FFmpeg khÃ´ng má»Ÿ Ä‘Æ°á»£c camera/RTMP. Chi tiáº¿t: ${ffmpegMessage}`,
+                    );
+                    return;
+                  }
+                } catch (statusError: any) {
+                  const message = String(statusError?.message || statusError?.payload?.message || statusError || '');
+                  if (message.toLowerCase().includes('redundant transition')) {
+                    console.log('[YouTube Live Status Poll] redundant transition; keep waiting for real live status', {
+                      attempt,
+                      broadcastId: pollBroadcastId,
+                    });
+                    await new Promise(resolve => setTimeout(resolve, attempt <= 10 ? 800 : 1200));
+                    continue;
+                  }
+                  console.log('[YouTube Live Status Poll] failed', {
+                    attempt,
+                    message,
+                  });
+                }
+
+                await new Promise(resolve => setTimeout(resolve, attempt <= 10 ? 800 : 1200));
+              }
+            })();
+          }
         } catch (error: any) {
           console.log('[YouTube Live] Windows FFmpeg OAuth/create/start failed:', {
             message: error?.message || String(error),
@@ -3222,7 +3542,7 @@ const GamePlayViewModel = () => {
           activeYouTubeBroadcastIdRef.current = '';
           setYoutubeLivePreparing(false);
           setYoutubeLivePreviewActive(false);
-          setIsStarted(false);
+          // Do not stop the match if livestream setup fails. The match and timer are independent.
           setYouTubeSourceLock(null);
 
           try {
@@ -3312,7 +3632,7 @@ const GamePlayViewModel = () => {
     const secondPlayerName =
       playerSettings?.playingPlayers?.[1]?.name?.trim() || 'Player 2';
 
-    const youtubeTitle = `${firstPlayerName} vs ${secondPlayerName} - ${new Date().toLocaleString()}`;
+    const youtubeTitle = `${firstPlayerName} vs ${secondPlayerName} - ${formatVietnamLiveTitleTime()}`;
 
     const prepareYouTubeLive = async () => {
       try {
@@ -3326,8 +3646,14 @@ const GamePlayViewModel = () => {
           title: youtubeTitle,
           description: i18n.t("youtubeLiveDescription", {firstPlayerName, secondPlayerName}) as string,
           privacyStatus: selectedLiveVisibility,
+          scheduledStartTime: new Date(Date.now() + 1500).toISOString(),
           enableAutoStart: true,
-          enableAutoStop: true,
+          enableAutoStop: false,
+          enableDvr: false,
+          recordFromStart: false,
+          latencyPreference: 'ultraLow',
+          resolution: '1080p',
+          frameRate: '30fps',
         });
 
         console.log('[YouTube Live] created:', liveResponse?.session);
@@ -3346,7 +3672,7 @@ const GamePlayViewModel = () => {
             width: 1920,
             height: 1080,
             fps: 30,
-            bitrate: 8000 * 1024,
+            bitrate: 5200 * 1024,
             audioBitrate: 128 * 1024,
             sampleRate: 44100,
             isStereo: true,
@@ -3415,6 +3741,8 @@ const GamePlayViewModel = () => {
     shouldUseYouTubeLive,
     showYouTubeLiveFailure,
     totalTurns,
+    warmUpCountdownTime,
+    gameBreakEnabled,
     webcamFolderName,
   ]);
 
@@ -3485,16 +3813,16 @@ const GamePlayViewModel = () => {
         startNewGameAfterViolate();
         setIsPaused(false);
 
-        shouldStartRecordingRef.current = true;
-        pendingStartRecordingRef.current = true;
+        shouldStartRecordingRef.current = !isWindowsYouTubeLiveOnly;
+        pendingStartRecordingRef.current = !isWindowsYouTubeLiveOnly;
         return;
       }
 
       _resetCountdown(true);
       setIsPaused(false);
 
-      shouldStartRecordingRef.current = true;
-      pendingStartRecordingRef.current = true;
+      shouldStartRecordingRef.current = !isWindowsYouTubeLiveOnly;
+      pendingStartRecordingRef.current = !isWindowsYouTubeLiveOnly;
       return;
     }
 
@@ -3503,12 +3831,22 @@ const GamePlayViewModel = () => {
     pendingStartRecordingRef.current = false;
     setIsPaused(true);
 
-    void stopVideoRecording(false).catch(error => {
-      console.log('[Replay] async stop on pause failed:', error);
-    });
-  }, [isPaused, _resetCountdown, startNewGameAfterViolate, youtubeLiveNativeMode]);
+    if (!isWindowsYouTubeLiveOnly) {
+      void stopVideoRecording(false).catch(error => {
+        console.log('[Replay] async stop on pause failed:', error);
+      });
+    }
+  }, [isPaused, _resetCountdown, startNewGameAfterViolate, youtubeLiveNativeMode, isWindowsYouTubeLiveOnly]);
 
   const onReplay = useCallback(async () => {
+    if (isWindowsYouTubeLiveOnly) {
+      Alert.alert(
+        i18n.t('txtwarn'),
+        'Replay táº¡m táº¯t khi Ä‘ang livestream YouTube trÃªn Windows Ä‘á»ƒ trÃ¡nh crash app. Livestream váº«n cháº¡y bÃ¬nh thÆ°á»ng.',
+      );
+      return;
+    }
+
     if (!isStarted || !isPaused || !webcamFolderName) {
       return;
     }
@@ -3519,8 +3857,8 @@ const GamePlayViewModel = () => {
 
       await flushReplayScoreboardTimeline(webcamFolderName);
 
-      // Chỉ mở replay khi clip gần nhất đã finalize xong.
-      // Đây là chỗ dễ gây crash/blank replay nhất nếu bấm replay quá nhanh ngay sau khi pause.
+      // Chá»‰ má»Ÿ replay khi clip gáº§n nháº¥t Ä‘Ã£ finalize xong.
+      // ÄÃ¢y lÃ  chá»— dá»… gÃ¢y crash/blank replay nháº¥t náº¿u báº¥m replay quÃ¡ nhanh ngay sau khi pause.
       const recordedPath = youtubeLivePreviewActive
         ? null
         : await stopVideoRecording(false);
@@ -3608,7 +3946,51 @@ const GamePlayViewModel = () => {
     webcamFolderName,
     winner,
     youtubeLivePreviewActive,
+    isWindowsYouTubeLiveOnly,
   ]);
+
+  const scheduleWindowsYouTubeLiveDrainStop = useCallback(
+    (broadcastId: string, reason = 'end-match') => {
+      const cleanBroadcastId = String(broadcastId || '').trim();
+      const drainStopId = ++pendingWindowsYouTubeDrainStopId;
+
+      console.log('[YouTube Live DrainStop] scheduled', {
+        reason,
+        broadcastId: cleanBroadcastId,
+        drainMs: WINDOWS_YOUTUBE_LIVE_END_DRAIN_MS,
+      });
+
+      setTimeout(() => {
+        void (async () => {
+          if (drainStopId !== pendingWindowsYouTubeDrainStopId) {
+            console.log('[YouTube Live DrainStop] skipped because a newer live session started', {
+              reason,
+              broadcastId: cleanBroadcastId,
+              drainStopId,
+              currentDrainStopId: pendingWindowsYouTubeDrainStopId,
+            });
+            return;
+          }
+
+          try {
+            await stopWindowsFfmpegYouTubeLive(`${reason}-drain-tail`);
+          } catch (ffmpegStopError) {
+            console.log('[YouTube Live DrainStop] FFmpeg stop failed:', ffmpegStopError);
+          }
+
+          if (cleanBroadcastId) {
+            try {
+              await stopYouTubeLiveSession(cleanBroadcastId);
+              console.log('[YouTube Live DrainStop] stopped broadcast after tail:', cleanBroadcastId);
+            } catch (youtubeStopError) {
+              console.log('[YouTube Live DrainStop] stop broadcast failed:', youtubeStopError);
+            }
+          }
+        })();
+      }, WINDOWS_YOUTUBE_LIVE_END_DRAIN_MS);
+    },
+    [],
+  );
 
   const onStop = useCallback(async () => {
   Alert.alert(i18n.t('stop'), i18n.t('msgStopGame'), [
@@ -3633,30 +4015,43 @@ const GamePlayViewModel = () => {
           pendingStartRecordingRef.current = false;
           pendingYouTubeNativeStartRef.current = null;
           setYoutubeLivePreparing(false);
-          await stopYouTubeNativeLive();
-          if (Platform.OS === 'windows') {
-            await stopWindowsFfmpegYouTubeLive('end-match');
-          }
 
           const activeYouTubeBroadcastId = activeYouTubeBroadcastIdRef.current;
           activeYouTubeBroadcastIdRef.current = '';
-          if (activeYouTubeBroadcastId) {
-            try {
-              await stopYouTubeLiveSession(activeYouTubeBroadcastId);
-              console.log('[YouTube Live] stopped broadcast:', activeYouTubeBroadcastId);
-            } catch (youtubeStopError) {
-              console.log('[YouTube Live] stop broadcast failed:', youtubeStopError);
+
+          if (Platform.OS === 'windows' && shouldUseYouTubeLive) {
+            // YouTube player can be 10-20s behind even when ingest is current.
+            // Keep FFmpeg pushing the last live camera frames for a short tail,
+            // then stop the broadcast. This prevents viewers from losing the last
+            // delayed seconds when the operator exits the match screen.
+            scheduleWindowsYouTubeLiveDrainStop(activeYouTubeBroadcastId, 'end-match');
+          } else {
+            await stopYouTubeNativeLive();
+            if (Platform.OS === 'windows') {
+              await stopWindowsFfmpegYouTubeLive('end-match');
+            }
+
+            if (activeYouTubeBroadcastId) {
+              try {
+                await stopYouTubeLiveSession(activeYouTubeBroadcastId);
+                console.log('[YouTube Live] stopped broadcast:', activeYouTubeBroadcastId);
+              } catch (youtubeStopError) {
+                console.log('[YouTube Live] stop broadcast failed:', youtubeStopError);
+              }
             }
           }
 
           setYoutubeLivePreviewActive(false);
           setIsCameraReady(false);
 
-          const stoppedRecordingPath = await stopVideoRecording(false);
-          const recordedPath =
-            stoppedRecordingPath ??
-            lastRecordedVideoPathRef.current ??
-            (await getLatestReplaySegmentPath());
+          const stoppedRecordingPath = isWindowsYouTubeLiveOnly
+            ? null
+            : await stopVideoRecording(false);
+          const recordedPath = isWindowsYouTubeLiveOnly
+            ? undefined
+            : stoppedRecordingPath ??
+              lastRecordedVideoPathRef.current ??
+              (await getLatestReplaySegmentPath());
 
           let finalVideoExists = false;
           let finalVideoSize = 0;
@@ -3697,7 +4092,7 @@ const GamePlayViewModel = () => {
             shouldShowToUser: false,
           });
 
-          if (!recordedPath) {
+          if (!recordedPath && !isWindowsYouTubeLiveOnly) {
             isEndingGameRef.current = false;
 
             console.log('[VideoAvailabilityMessage]', {
@@ -3733,8 +4128,12 @@ const GamePlayViewModel = () => {
             return;
           }
 
-          await flushReplayScoreboardTimeline(webcamFolderName);
-          const replayTimeline = await loadReplayScoreboardTimeline(webcamFolderName);
+          if (!isWindowsYouTubeLiveOnly) {
+            await flushReplayScoreboardTimeline(webcamFolderName);
+          }
+          const replayTimeline = isWindowsYouTubeLiveOnly
+            ? null
+            : await loadReplayScoreboardTimeline(webcamFolderName);
           const overlayLastSnapshot = replayTimeline?.entries?.length
             ? replayTimeline.entries[replayTimeline.entries.length - 1]
             : undefined;
@@ -3770,7 +4169,7 @@ const GamePlayViewModel = () => {
             durationMs: finalDurationSeconds * 1000,
           };
 
-          if (Platform.OS === 'windows') {
+          if (Platform.OS === 'windows' && !isWindowsYouTubeLiveOnly) {
             try {
               const historyFolder = await exportMatchToArchive(
                 webcamFolderName,
@@ -3851,6 +4250,9 @@ const GamePlayViewModel = () => {
   playerSettings,
   saveToDeviceWhileStreaming,
   webcamFolderName,
+  isWindowsYouTubeLiveOnly,
+  shouldUseYouTubeLive,
+  scheduleWindowsYouTubeLiveDrainStop,
 ]);
 
   const onReset = useCallback(() => {
@@ -3860,13 +4262,9 @@ const GamePlayViewModel = () => {
     setReplayReturnRequestSync(null);
     const shouldResetRackScore = false;
 
-    const safePlayingPlayers = Array.isArray(playerSettings?.playingPlayers)
-      ? playerSettings.playingPlayers
-      : [];
-
     const newPlayerSettings = {
       ...playerSettings,
-      playingPlayers: safePlayingPlayers.map(player => ({
+      playingPlayers: playerSettings?.playingPlayers.map(player => ({
         ...player,
         totalPoint: shouldResetRackScore ? 0 : player.totalPoint,
         violate: 0,
@@ -3896,7 +4294,7 @@ const GamePlayViewModel = () => {
 
     if (isPool15OnlyGame(gameSettings?.category)) {
       setPool8SetWinnerIndex(null);
-      setPool8Trackers(prev => resetPool8Trackers(getSafePool8Trackers(prev)));
+      setPool8Trackers(prev => resetPool8Trackers(prev.length ? prev : buildDefaultPool8Trackers()));
       setIsMatchPaused(false);
       setPoolBreakEnabled(false);
       return;
@@ -3946,6 +4344,13 @@ const GamePlayViewModel = () => {
   };
 
   const startVideoRecording = () => {
+    if (isWindowsYouTubeLiveOnly) {
+      console.log('[Replay] skip start: windows YouTube live-only mode');
+      shouldStartRecordingRef.current = false;
+      pendingStartRecordingRef.current = false;
+      return false;
+    }
+
     if (!cameraRef.current) {
       console.log('[Replay] skip start: cameraRef null');
       return false;
@@ -4001,8 +4406,8 @@ const GamePlayViewModel = () => {
           try {
             if (video?.path) {
               if (ENABLE_SEGMENT_OVERLAY_BURN && finalPath) {
-                // Bật lại chỉ khi thực sự cần file replay có overlay cứng trong video.
-                // Mặc định tắt để ưu tiên độ mượt và tránh spike FFmpeg sau mỗi segment.
+                // Báº­t láº¡i chá»‰ khi thá»±c sá»± cáº§n file replay cÃ³ overlay cá»©ng trong video.
+                // Máº·c Ä‘á»‹nh táº¯t Ä‘á»ƒ Æ°u tiÃªn Ä‘á»™ mÆ°á»£t vÃ  trÃ¡nh spike FFmpeg sau má»—i segment.
               }
 
               const registeringSegmentIndex = currentReplaySegmentIndexRef.current;
@@ -4144,6 +4549,17 @@ const GamePlayViewModel = () => {
   };
 
   const stopVideoRecording = async (restartAfterStop = false) => {
+    if (isWindowsYouTubeLiveOnly) {
+      restartAfterStopRef.current = false;
+      shouldStartRecordingRef.current = false;
+      pendingStartRecordingRef.current = false;
+      isRecordingRef.current = false;
+      isStoppingRecordingRef.current = false;
+      setIsRecording(false);
+      console.log('[Replay] skip stop: windows YouTube live-only mode');
+      return undefined;
+    }
+
     if (recordingRotateTimeoutRef.current) {
       clearTimeout(recordingRotateTimeoutRef.current);
       recordingRotateTimeoutRef.current = null;
@@ -4227,6 +4643,8 @@ const GamePlayViewModel = () => {
         playerSettings,
         totalTurns,
         totalTime,
+        countdownTime,
+        countdownBaseTime: gameSettings?.mode?.countdownTime,
         currentPlayerIndex,
         winner,
         isStarted,
@@ -4243,11 +4661,36 @@ const GamePlayViewModel = () => {
     playerSettings,
     totalTurns,
     totalTime,
+    countdownTime,
+    gameSettings?.mode?.countdownTime,
     currentPlayerIndex,
     winner,
     isStarted,
     isPaused,
     isMatchPaused,
+  ]);
+
+  useEffect(() => {
+    const config = gameSettings?.aplusLiveScore;
+
+    if (!config?.enabled || !config.matchId) {
+      return;
+    }
+
+    const heartbeat = () => {
+      void heartbeatAplusLiveScoreMatch(config).catch(error => {
+        console.log('[AplusLiveScore] heartbeat failed:', error?.message || error);
+      });
+    };
+
+    heartbeat();
+    const interval = setInterval(heartbeat, 20000);
+
+    return () => clearInterval(interval);
+  }, [
+    gameSettings?.aplusLiveScore?.enabled,
+    gameSettings?.aplusLiveScore?.matchId,
+    gameSettings?.aplusLiveScore?.sessionToken,
   ]);
 
   return useMemo(() => {
@@ -4410,3 +4853,4 @@ const GamePlayViewModel = () => {
 };
 
 export default GamePlayViewModel;
+

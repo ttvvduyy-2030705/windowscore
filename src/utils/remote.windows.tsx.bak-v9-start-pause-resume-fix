@@ -4,7 +4,7 @@ import {RemoteControlKeys, RemoteControlKeysNative} from 'types/bluetooth';
 const DEBUG_REMOTE = true;
 const NEW_GAME_HOLD_DURATION_MS = 3000;
 const NEW_GAME_RELEASE_GRACE_MS = 900;
-const REMOTE_WINDOWS_BUILD = 'v11-carom-pool-separate-buttons';
+const REMOTE_WINDOWS_BUILD = 'v8-break-stop-newgame-crash-fix';
 
 const nativeRemote =
   NativeModules.RemoteControl ??
@@ -28,9 +28,6 @@ class RemoteControlWindows {
   private _newGameHoldTriggered = false;
   private _newGameHoldCallback: Function | null = null;
   private _lastBleStatus: any = null;
-  private _lastStartKeyDownAt = 0;
-  private _newGameHoldRequired = true;
-  private _newGameImmediateKeyDownActive = false;
 
   private constructor() {
     this.initializeKeySlots();
@@ -285,7 +282,6 @@ class RemoteControlWindows {
 
     if (resetTriggered) {
       this._newGameHoldTriggered = false;
-      this._newGameImmediateKeyDownActive = false;
     }
   };
 
@@ -445,48 +441,12 @@ class RemoteControlWindows {
       eventKey.normalizedFromCode === 'NEW_GAME' ||
       eventKey.normalizedFromResolved === 'NEW_GAME'
     ) {
-      if (this._newGameHoldRequired) {
-        this.handleNewGameHold(callback, isKeyUp);
-        return;
-      }
-
-      // Carom mode reuses the physical NEW GAME button as "tăng lượt".
-      // It must fire immediately, but only once per physical press.
-      if (isKeyUp) {
-        this._newGameImmediateKeyDownActive = false;
-        return;
-      }
-
-      if (repeatCount > 0 || this._newGameImmediateKeyDownActive) {
-        return;
-      }
-
-      this._newGameImmediateKeyDownActive = true;
-
-      if (typeof callback === 'function') {
-        callback();
-      }
+      this.handleNewGameHold(callback, isKeyUp);
       return;
     }
 
     if (isKeyUp || repeatCount > 0) {
       return;
-    }
-
-    // Real APLUS START is keyboard A. Windows may emit several key-down
-    // events with repeatCount=0 while the physical button is held. Without
-    // this guard, a single press can pause and immediately call pause again
-    // before React refreshes the handler refs.
-    if (eventKey.normalizedFromCode === 'START') {
-      const now = Date.now();
-      if (now - this._lastStartKeyDownAt < 450) {
-        debugRemoteLog('[Remote][Windows] START duplicate ignored', {
-          deltaMs: now - this._lastStartKeyDownAt,
-          build: REMOTE_WINDOWS_BUILD,
-        });
-        return;
-      }
-      this._lastStartKeyDownAt = now;
     }
 
     if (typeof callback === 'function') {
@@ -515,15 +475,6 @@ class RemoteControlWindows {
   };
 
   getLastStatus = () => this._lastBleStatus;
-
-  setNewGameHoldRequired = (required: boolean) => {
-    this._newGameHoldRequired = !!required;
-    this.clearNewGameHold(true);
-    debugRemoteLog('[Remote][Windows] new game hold required:', {
-      required: this._newGameHoldRequired,
-      build: REMOTE_WINDOWS_BUILD,
-    });
-  };
 
   setEnabled = (enabled: boolean) => {
     this.ensureNativeListener();

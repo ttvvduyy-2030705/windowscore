@@ -1,6 +1,0 @@
-V81 remote fix
-- Added extra Windows media/browser key mappings for Break and Stop.
-- Stop now pauses countdown only; Start resumes.
-- Added remote-side debounce for Extension/Timer/Start/Stop/Break.
-- Extension now reads/decrements the latest player extra-time turns from playerSettingsRef, preventing one held VolumeUp press from consuming all turns.
-- Native status message: v81-break-stop-extension-guard.

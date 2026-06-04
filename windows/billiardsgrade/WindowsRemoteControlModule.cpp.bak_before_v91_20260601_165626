@@ -1,4 +1,4 @@
-#include "pch.h"
+﻿#include "pch.h"
 #include "WindowsRemoteControlModule.h"
 
 #include <algorithm>
@@ -7,9 +7,18 @@
 #include <cwctype>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <sstream>
 #include <string>
 #include <vector>
+
+#ifndef APLUS_REMOTE_LOWLEVEL_KEYBOARD_HOOK_AVAILABLE
+#if defined(WINAPI_FAMILY_PARTITION) && WINAPI_FAMILY_PARTITION(WINAPI_PARTITION_DESKTOP)
+#define APLUS_REMOTE_LOWLEVEL_KEYBOARD_HOOK_AVAILABLE 1
+#else
+#define APLUS_REMOTE_LOWLEVEL_KEYBOARD_HOOK_AVAILABLE 0
+#endif
+#endif
 
 #include <winrt/Windows.ApplicationModel.Core.h>
 #include <winrt/Windows.Devices.Bluetooth.h>
@@ -62,6 +71,10 @@ namespace
     uint64_t g_connectedBluetoothAddress = 0;
     std::string g_lastBleLogicalKey;
     bool g_bleLogicalKeyDown = false;
+#if APLUS_REMOTE_LOWLEVEL_KEYBOARD_HOOK_AVAILABLE
+    HHOOK g_lowLevelKeyboardHook = nullptr;
+    std::set<DWORD> g_lowLevelDownKeys;
+#endif
 
     std::wstring ToLower(std::wstring value)
     {
@@ -160,19 +173,23 @@ namespace
         if (key == "22" || key == "39" || key == "RIGHT" || key == "DPAD_RIGHT" || key == "ARROW_RIGHT" || key == "VK_RIGHT")
             return "RIGHT";
 
-        if (key == "24" || key == "175" || key == "EXTENSION" || key == "EXTRA_TIME" || key == "ADD_TIME" || key == "VOLUME_UP")
+        if (key == "24" || key == "EXTENSION" || key == "EXTRA_TIME" || key == "ADD_TIME")
             return "EXTENSION";
-        if (key == "25" || key == "174" || key == "TIMER" || key == "TIME" || key == "CLOCK" || key == "VOLUME_DOWN")
+        if (key == "175" || key == "VOLUME_UP")
+            return "EXTENSION";
+        if (key == "25" || key == "TIMER" || key == "TIME" || key == "CLOCK")
+            return "TIMER";
+        if (key == "174" || key == "VOLUME_DOWN")
             return "TIMER";
         if (key == "29" || key == "85" || key == "126" || key == "127" || key == "179" || key == "START" || key == "PLAY" || key == "PAUSE" || key == "PLAY_PAUSE" || key == "MEDIA_PLAY" || key == "MEDIA_PLAY_PAUSE" || key == "MEDIA_PAUSE")
             return "START";
         if (key == "30" || key == "88" || key == "177" || key == "WARM" || key == "WARMUP" || key == "WARM_UP" || key == "MEDIA_PREVIOUS" || key == "MEDIA_PREVIOUS_TRACK" || key == "MEDIA_REWIND")
             return "WARM_UP";
-        if (key == "31" || key == "67" || key == "86" || key == "178" || key == "STOP" || key == "MEDIA_STOP" || key == "C" || key == "KEY_C")
+        if (key == "13" || key == "ENTER" || key == "OK" || if (key == "13" || key == "ENTER" || key == "OK" || key == "31" || key == "67" || key == "86" || key == "169" || key == "173" || key == "178" || key == "183" || key == "STOP" || key == "MEDIA_STOP" || key == "VOLUME_MUTE" || key == "MEDIA_MUTE" || key == "BROWSER_STOP" || key == "BROWSER_SEARCH")
             return "STOP";
-        if (key == "32" || key == "68" || key == "82" || key == "87" || key == "90" || key == "176" || key == "BREAK" || key == "MEDIA_NEXT" || key == "MEDIA_NEXT_TRACK" || key == "MEDIA_FAST_FORWARD" || key == "D" || key == "KEY_D")
+        if (key == "32" || key == "87" || key == "90" || key == "166" || key == "167" || key == "176" || key == "180" || key == "181" || key == "182" || key == "82" || key == "87" || key == "90" || key == "166" || key == "167" || key == "176" || key == "180" || key == "181" || key == "182" || key == "BREAK" || key == "MEDIA_NEXT" || key == "MEDIA_NEXT_TRACK" || key == "MEDIA_FAST_FORWARD" || key == "BROWSER_BACK" || key == "BROWSER_FORWARD" || key == "LAUNCH_MAIL" || key == "LAUNCH_MEDIA_SELECT" || key == "LAUNCH_APP1" || key == "LAUNCH_APP2")
             return "BREAK";
-        if (key == "23" || key == "66" || key == "13" || key == "160" || key == "NEWGAME" || key == "NEW_GAME" || key == "RESET" || key == "RESTART" || key == "ENTER" || key == "OK" || key == "DPAD_CENTER" || key == "CENTER")
+        if (key == "23" || key == "66"  || key == "160" || key == "NEWGAME" || key == "NEW_GAME" || key == "RESET" || key == "RESTART"  || key == "OK" || key == "DPAD_CENTER" || key == "CENTER")
             return "NEW_GAME";
 
         return "";
@@ -209,21 +226,27 @@ namespace
         case 85:
         case 126:
         case 127:
+        case 178: // VK_MEDIA_STOP / physical Stop
+            return "STOP";
         case 179:
         case 205: // common consumer HID low byte for play/pause
             return "START";
         case 86:
-        case 178:
+        case 169:
+        case 173:
         case 183: // common consumer HID low byte for stop
             return "STOP";
         case 87:
         case 90:
+        case 166:
+        case 167:
         case 176:
-        case 181: // next track
+        case 180:
+        case 181:
+        case 182: // next/launch/browser keys used by some remotes for Break
             return "BREAK";
         case 88:
         case 177:
-        case 182: // previous track
             return "WARM_UP";
         default:
             break;
@@ -398,13 +421,16 @@ namespace
         case 80:
         case 179:
             return "START";
-        case 67: // APLUS remote STOP sends keyboard C on Windows
         case 83:
         case 169:
-        case 178:
+        case 173:
+        case 183:
             return "STOP";
-        case 68: // APLUS remote BREAK sends keyboard D on Windows
+        case 166:
+        case 167:
         case 176:
+        case 180:
+        case 181:
             return "BREAK";
         case 66: // APLUS remote WARM UP sends keyboard B on Windows
         case 87:
@@ -412,17 +438,18 @@ namespace
             return "WARM_UP";
         case 69:
         case 107:
-        case 175: // VirtualKey::VolumeUp - APLUS remote EXTENSION / Thêm giờ
+            return "EXTENSION";
+        case 175: // Real Windows HID mapping: physical ThÃƒÂªm giÃ¡Â»Â sends VolumeUp.
             return "EXTENSION";
         case 84:
         case 109:
-        case 174: // VirtualKey::VolumeDown - APLUS remote TIMER / Bấm giờ
             return "TIMER";
-        case 13:
+        case 174: // Real Windows HID mapping: physical BÃ¡ÂºÂ¥m giÃ¡Â»Â sends VolumeDown.
+            return "TIMER";
         case 30:
         case 41:
         case 78:
-            return "NEW_GAME";
+            return "STOP";
         default:
             return "";
         }
@@ -446,10 +473,6 @@ namespace
             return "A";
         case 66:
             return "B";
-        case 67:
-            return "C";
-        case 68:
-            return "D";
         case 222:
             return "APOSTROPHE";
         case 13:
@@ -460,8 +483,19 @@ namespace
             return "SELECT";
         case 179:
             return "MEDIA_PLAY_PAUSE";
-        case 178:
-            return "MEDIA_STOP";
+        case 166:
+            return "BROWSER_BACK";
+        case 167:
+            return "BROWSER_FORWARD";
+        case 169:
+            return "BROWSER_STOP";
+        case 180:
+            return "LAUNCH_MAIL";
+        case 181:
+            return "LAUNCH_MEDIA_SELECT";
+            return "LAUNCH_APP1";
+        case 183:
+            return "LAUNCH_APP2";
         case 176:
             return "MEDIA_NEXT_TRACK";
         case 177:
@@ -499,12 +533,6 @@ namespace
             if (IsAplusRemoteNoiseKey(key))
             {
                 args.Handled(true);
-                EmitRemoteStatus("hid-noise-swallowed-v8", "Ignored apostrophe noise from APLUS remote");
-            }
-            else
-            {
-                auto keyName = VirtualKeyName(key);
-                EmitRemoteStatus("raw-hid-unmapped-v8", std::string("vkCode=") + std::to_string(static_cast<int>(key)) + ", keyName=" + keyName);
             }
             return;
         }
@@ -524,13 +552,18 @@ namespace
     {
         switch (static_cast<int>(key))
         {
+        case 166: // BrowserBack
+        case 167: // BrowserForward
+        case 169: // BrowserStop
         case 173: // VolumeMute
         case 174: // VolumeDown
         case 175: // VolumeUp
         case 176: // MediaNextTrack
         case 177: // MediaPreviousTrack
-        case 178: // MediaStop
         case 179: // MediaPlayPause
+        case 180: // LaunchMail
+        case 181: // LaunchMediaSelect
+        case 183: // LaunchApp2
         case 205: // Play/Pause on some SDKs/remotes
             return true;
         default:
@@ -569,7 +602,7 @@ namespace
         }
 
         // This is the important part for the APLUS remote on Windows:
-        // TIMER / EXTENSION are exposed by Windows as VolumeDown / VolumeUp.
+        // This remote exposes BÃ¡ÂºÂ¥m giÃ¡Â»Â / ThÃƒÂªm giÃ¡Â»Â as system volume keys on Windows.
         // Marking the accelerator as handled prevents Windows from changing system volume
         // and lets the scoreboard receive the button press instead.
         args.Handled(true);
@@ -592,18 +625,167 @@ namespace
             ch == static_cast<uint32_t>('A') ||
             ch == static_cast<uint32_t>('b') ||
             ch == static_cast<uint32_t>('B') ||
-            ch == static_cast<uint32_t>('c') ||
-            ch == static_cast<uint32_t>('C') ||
-            ch == static_cast<uint32_t>('d') ||
-            ch == static_cast<uint32_t>('D') ||
             ch == static_cast<uint32_t>('\''))
         {
             args.Handled(true);
         }
     }
 
+#if APLUS_REMOTE_LOWLEVEL_KEYBOARD_HOOK_AVAILABLE
+    bool IsLowLevelRemoteVirtualKey(DWORD vkCode)
+    {
+        switch (vkCode)
+        {
+        case VK_UP:
+        case VK_DOWN:
+        case VK_LEFT:
+        case VK_RIGHT:
+        case VK_RETURN:
+        case VK_SPACE:
+        case VK_VOLUME_UP:
+        case VK_VOLUME_DOWN:
+        case VK_VOLUME_MUTE:
+        case VK_MEDIA_NEXT_TRACK:
+        case VK_MEDIA_PREV_TRACK:
+        case VK_MEDIA_STOP:
+        case VK_MEDIA_PLAY_PAUSE:
+        case 'A':
+        case 'B':
+        case 'E':
+        case 'N':
+        case 'P':
+        case 'S':
+        case 'T':
+        case 'W':
+        case VK_OEM_7:
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
+    {
+        if (nCode != HC_ACTION || lParam == 0)
+        {
+            return CallNextHookEx(g_lowLevelKeyboardHook, nCode, wParam, lParam);
+        }
+
+        auto info = reinterpret_cast<KBDLLHOOKSTRUCT *>(lParam);
+        DWORD vkCode = info ? info->vkCode : 0;
+
+        if (!g_enabled || !IsLowLevelRemoteVirtualKey(vkCode))
+        {
+            return CallNextHookEx(g_lowLevelKeyboardHook, nCode, wParam, lParam);
+        }
+
+        auto key = static_cast<VirtualKey>(vkCode);
+        auto logicalKey = LogicalKeyFromVirtualKey(key);
+
+        if (logicalKey.empty())
+        {
+            if (vkCode == VK_OEM_7)
+            {
+                // Swallow apostrophe noise produced by the WARM UP button on some units.
+                return 1;
+            }
+            return CallNextHookEx(g_lowLevelKeyboardHook, nCode, wParam, lParam);
+        }
+
+        const bool isKeyDown = wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN;
+        const bool isKeyUp = wParam == WM_KEYUP || wParam == WM_SYSKEYUP;
+
+        if (!isKeyDown && !isKeyUp)
+        {
+            return 1;
+        }
+
+        int repeatCount = 0;
+        if (isKeyDown)
+        {
+            if (g_lowLevelDownKeys.find(vkCode) != g_lowLevelDownKeys.end())
+            {
+                repeatCount = 1;
+            }
+            else
+            {
+                g_lowLevelDownKeys.insert(vkCode);
+            }
+        }
+        else
+        {
+            g_lowLevelDownKeys.erase(vkCode);
+        }
+
+        auto keyName = VirtualKeyName(key);
+        EmitRemoteKey(
+            logicalKey,
+            isKeyUp ? 1 : 0,
+            static_cast<int>(vkCode),
+            static_cast<int>(info ? info->scanCode : 0),
+            "windows-lowlevel-hid",
+            keyName,
+            repeatCount);
+
+        // Critical: block Windows from receiving the system volume/media/text key.
+        return 1;
+    }
+
+#endif
+
+    void EnsureLowLevelKeyboardHook() noexcept
+    {
+#if APLUS_REMOTE_LOWLEVEL_KEYBOARD_HOOK_AVAILABLE
+        std::lock_guard<std::mutex> lock(g_remoteMutex);
+        if (g_lowLevelKeyboardHook != nullptr)
+        {
+            return;
+        }
+
+        try
+        {
+            g_lowLevelKeyboardHook = SetWindowsHookExW(
+                WH_KEYBOARD_LL,
+                LowLevelKeyboardProc,
+                GetModuleHandleW(nullptr),
+                0);
+        }
+        catch (...)
+        {
+            g_lowLevelKeyboardHook = nullptr;
+        }
+#else
+        // React Native Windows UWP/AppContainer builds do not expose the desktop
+        // low-level hook APIs (CallNextHookEx / SetWindowsHookEx). Keep the app
+        // buildable and use CoreWindow/AcceleratorKey HID handling instead.
+#endif
+    }
+
+    void RemoveLowLevelKeyboardHook() noexcept
+    {
+#if APLUS_REMOTE_LOWLEVEL_KEYBOARD_HOOK_AVAILABLE
+        std::lock_guard<std::mutex> lock(g_remoteMutex);
+        g_lowLevelDownKeys.clear();
+        if (g_lowLevelKeyboardHook != nullptr)
+        {
+            try
+            {
+                UnhookWindowsHookEx(g_lowLevelKeyboardHook);
+            }
+            catch (...)
+            {
+            }
+            g_lowLevelKeyboardHook = nullptr;
+        }
+#endif
+    }
+
     void EnsureKeyboardHook() noexcept
     {
+        // CoreWindow handlers do not always receive media/volume keys before Windows.
+        // The low-level hook is the reliable path for the Bluetooth HID remote.
+        EnsureLowLevelKeyboardHook();
+
         try
         {
             auto coreWindow = CoreApplication::MainView().CoreWindow();
@@ -943,10 +1125,11 @@ namespace winrt::billiardsgrade::implementation
 
     void RemoteControlModule::StartListening() noexcept
     {
-        // V7: this APLUS remote is paired by Windows as HID keyboard/media keys.
-        // Attach the CoreWindow + Accelerator handlers only after gameplay asks for remote.
+        // Windows Bluetooth remotes are usually exposed as HID keyboard/media devices,
+        // not as BLE GATT controllers. Attach the CoreWindow keyboard/accelerator hook
+        // lazily when JS asks for remote control, so buttons go to the app instead of Windows.
         EnsureKeyboardHook();
-        EmitRemoteStatus("hid-listening-v8", "Windows HID remote listener active; BLE scan disabled in v8");
+        EmitRemoteStatus("hid-listening", "Windows HID remote listener is active v81-break-stop-extension-guard");
     }
 
     void RemoteControlModule::SetEnabled(bool enabled) noexcept
@@ -955,15 +1138,16 @@ namespace winrt::billiardsgrade::implementation
 
         if (enabled)
         {
+            // Must be installed when the in-game Ã„ÂiÃ¡Â»Âu khiÃ¡Â»Æ’n toggle is enabled.
+            // Without this, the paired remote controls Windows volume/text input only.
             EnsureKeyboardHook();
-            StopBleWatcher();
-            CloseBleDevice();
         }
 
-        EmitRemoteStatus(enabled ? "enabled-v8-hid-only" : "disabled-v8", enabled ? "Remote control enabled: HID only, break/stop/newgame-crash v8" : "Remote control disabled");
+        EmitRemoteStatus(enabled ? "enabled" : "disabled", enabled ? "Remote control enabled v81-break-stop-extension-guard" : "Remote control disabled");
 
         if (!enabled)
         {
+            RemoveLowLevelKeyboardHook();
             StopBleWatcher();
             CloseBleDevice();
         }
@@ -973,19 +1157,16 @@ namespace winrt::billiardsgrade::implementation
     {
         try
         {
-            // V7: Do NOT scan/connect GATT BLE. The real remote appears as
-            // SmartRemote_* HID on Windows; trying GATT gives Access is denied
-            // and lets Timer/Extension control system volume.
             g_enabled = true;
+            // Even when BLE scan does not find anything, a paired Bluetooth remote can still
+            // be visible to Windows as HID keyboard/media keys. Keep that listener active.
             EnsureKeyboardHook();
-            StopBleWatcher();
-            CloseBleDevice();
-            EmitRemoteStatus("hid-only-v7", "BLE scan skipped; using Windows HID keyboard/media events v7");
+            StartBleScan();
 
             JSValueObject result;
             result["ok"] = JSValue(true);
-            result["status"] = JSValue("hid-only");
-            result["message"] = JSValue("Using Windows HID remote listener; BLE scan skipped");
+            result["status"] = JSValue("scanning");
+            result["message"] = JSValue("Scanning for BLE remote");
             promise.Resolve(std::move(result));
         }
         catch (winrt::hresult_error const &error)
@@ -1032,3 +1213,10 @@ namespace winrt::billiardsgrade::implementation
     {
     }
 }
+
+
+
+
+
+
+

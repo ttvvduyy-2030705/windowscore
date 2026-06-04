@@ -4,7 +4,7 @@ import {RemoteControlKeys, RemoteControlKeysNative} from 'types/bluetooth';
 const DEBUG_REMOTE = true;
 const NEW_GAME_HOLD_DURATION_MS = 3000;
 const NEW_GAME_RELEASE_GRACE_MS = 900;
-const REMOTE_WINDOWS_BUILD = 'v11-carom-pool-separate-buttons';
+const REMOTE_WINDOWS_BUILD = 'v6-hid-only-newgame-trace';
 
 const nativeRemote =
   NativeModules.RemoteControl ??
@@ -28,9 +28,6 @@ class RemoteControlWindows {
   private _newGameHoldTriggered = false;
   private _newGameHoldCallback: Function | null = null;
   private _lastBleStatus: any = null;
-  private _lastStartKeyDownAt = 0;
-  private _newGameHoldRequired = true;
-  private _newGameImmediateKeyDownActive = false;
 
   private constructor() {
     this.initializeKeySlots();
@@ -106,7 +103,6 @@ class RemoteControlWindows {
       '23': 'NEW_GAME',
       '66': 'NEW_GAME',
       '67': 'STOP',
-      '68': 'BREAK',
       '82': 'BREAK',
       '85': 'START',
       '86': 'STOP',
@@ -122,6 +118,7 @@ class RemoteControlWindows {
       '8': 'NEW_GAME',
       '13': 'NEW_GAME',
       '27': 'NEW_GAME',
+      '30': 'NEW_GAME',
       '35': 'NEW_GAME',
       '36': 'NEW_GAME',
       '41': 'NEW_GAME',
@@ -189,17 +186,11 @@ class RemoteControlWindows {
       MEDIA_STOP: 'STOP',
       KEY_S: 'STOP',
       S: 'STOP',
-      // Real APLUS remote STOP sends keyboard C on Windows.
-      KEY_C: 'STOP',
-      C: 'STOP',
 
       BREAK: 'BREAK',
       MEDIA_NEXT: 'BREAK',
       MEDIA_NEXT_TRACK: 'BREAK',
       MEDIA_FAST_FORWARD: 'BREAK',
-      // Real APLUS remote BREAK sends keyboard D on Windows.
-      KEY_D: 'BREAK',
-      D: 'BREAK',
 
       WARM: 'WARM_UP',
       WARMUP: 'WARM_UP',
@@ -285,7 +276,6 @@ class RemoteControlWindows {
 
     if (resetTriggered) {
       this._newGameHoldTriggered = false;
-      this._newGameImmediateKeyDownActive = false;
     }
   };
 
@@ -345,77 +335,6 @@ class RemoteControlWindows {
     }, NEW_GAME_HOLD_DURATION_MS);
   };
 
-  private getRemoteControlEnumNameForValue = (value: any): string | null => {
-    const raw = String(value ?? '');
-    const match = Object.entries(RemoteControlKeys).find(
-      ([, enumValue]) => String(enumValue) === raw,
-    );
-    return match?.[0] ?? null;
-  };
-
-  private setCallbackForKey = (key: any, callback: Function | null) => {
-    if (key === null || key === undefined || key === '') {
-      return;
-    }
-
-    const raw = String(key);
-    const normalized = this.normalizeKeyCode(raw);
-
-    this._keyEvents[raw] = callback;
-    this._keyEvents[normalized] = callback;
-
-    const enumNameForRawValue = this.getRemoteControlEnumNameForValue(raw);
-    if (enumNameForRawValue) {
-      this._keyEvents[enumNameForRawValue] = callback;
-      this._keyEvents[this.normalizeKeyCode(enumNameForRawValue)] = callback;
-    }
-
-    const enumValueForNormalizedName = (RemoteControlKeys as any)[normalized];
-    if (enumValueForNormalizedName !== undefined) {
-      this._keyEvents[String(enumValueForNormalizedName)] = callback;
-    }
-  };
-
-  private getCallbackForEventKey = (eventKey: any) => {
-    const candidates = [
-      eventKey.normalizedFromCode,
-      eventKey.preferredPhysicalCode,
-      eventKey.normalizedFromResolved,
-      eventKey.rawResolvedKey,
-      eventKey.rawKeyCode,
-      eventKey.rawKeyCodeInt,
-      eventKey.rawScanCode,
-    ];
-
-    for (const candidate of candidates) {
-      if (candidate === null || candidate === undefined || candidate === '') {
-        continue;
-      }
-
-      const raw = String(candidate);
-      const normalized = this.normalizeKeyCode(raw);
-      const enumNameForValue = this.getRemoteControlEnumNameForValue(raw);
-      const enumValueForNormalizedName = (RemoteControlKeys as any)[normalized];
-
-      const keysToTry = [
-        raw,
-        normalized,
-        enumNameForValue,
-        enumNameForValue ? this.normalizeKeyCode(enumNameForValue) : null,
-        enumValueForNormalizedName !== undefined ? String(enumValueForNormalizedName) : null,
-      ].filter(Boolean) as string[];
-
-      for (const key of keysToTry) {
-        const callback = this._keyEvents[key];
-        if (typeof callback === 'function') {
-          return callback;
-        }
-      }
-    }
-
-    return null;
-  };
-
   private dispatchRemoteEvent = (
     data: RemoteControlKeysNative,
     isKeyUp: boolean,
@@ -439,54 +358,23 @@ class RemoteControlWindows {
       text: (data as any)?.text,
     });
 
-    const callback = this.getCallbackForEventKey(eventKey);
+    const callback =
+      this._keyEvents[eventKey.normalizedFromCode] ??
+      this._keyEvents[String(eventKey.preferredPhysicalCode)] ??
+      this._keyEvents[eventKey.normalizedFromResolved] ??
+      this._keyEvents[String(eventKey.rawResolvedKey)] ??
+      null;
 
     if (
       eventKey.normalizedFromCode === 'NEW_GAME' ||
       eventKey.normalizedFromResolved === 'NEW_GAME'
     ) {
-      if (this._newGameHoldRequired) {
-        this.handleNewGameHold(callback, isKeyUp);
-        return;
-      }
-
-      // Carom mode reuses the physical NEW GAME button as "tăng lượt".
-      // It must fire immediately, but only once per physical press.
-      if (isKeyUp) {
-        this._newGameImmediateKeyDownActive = false;
-        return;
-      }
-
-      if (repeatCount > 0 || this._newGameImmediateKeyDownActive) {
-        return;
-      }
-
-      this._newGameImmediateKeyDownActive = true;
-
-      if (typeof callback === 'function') {
-        callback();
-      }
+      this.handleNewGameHold(callback, isKeyUp);
       return;
     }
 
     if (isKeyUp || repeatCount > 0) {
       return;
-    }
-
-    // Real APLUS START is keyboard A. Windows may emit several key-down
-    // events with repeatCount=0 while the physical button is held. Without
-    // this guard, a single press can pause and immediately call pause again
-    // before React refreshes the handler refs.
-    if (eventKey.normalizedFromCode === 'START') {
-      const now = Date.now();
-      if (now - this._lastStartKeyDownAt < 450) {
-        debugRemoteLog('[Remote][Windows] START duplicate ignored', {
-          deltaMs: now - this._lastStartKeyDownAt,
-          build: REMOTE_WINDOWS_BUILD,
-        });
-        return;
-      }
-      this._lastStartKeyDownAt = now;
     }
 
     if (typeof callback === 'function') {
@@ -515,15 +403,6 @@ class RemoteControlWindows {
   };
 
   getLastStatus = () => this._lastBleStatus;
-
-  setNewGameHoldRequired = (required: boolean) => {
-    this._newGameHoldRequired = !!required;
-    this.clearNewGameHold(true);
-    debugRemoteLog('[Remote][Windows] new game hold required:', {
-      required: this._newGameHoldRequired,
-      build: REMOTE_WINDOWS_BUILD,
-    });
-  };
 
   setEnabled = (enabled: boolean) => {
     this.ensureNativeListener();
@@ -617,7 +496,11 @@ class RemoteControlWindows {
     this.ensureNativeListener();
     this.initializeKeySlots();
 
-    this.setCallbackForKey(event, callback);
+    const rawEvent = String(event);
+    const normalizedEvent = this.normalizeKeyCode(event);
+
+    this._keyEvents[rawEvent] = callback;
+    this._keyEvents[normalizedEvent] = callback;
   };
 
   registerKeyEvent = (event: RemoteControlKeys | string, callback: Function) => {
@@ -625,7 +508,11 @@ class RemoteControlWindows {
   };
 
   clearKeyEvent = (event: RemoteControlKeys | string) => {
-    this.setCallbackForKey(event, null);
+    const rawEvent = String(event);
+    const normalizedEvent = this.normalizeKeyCode(event);
+
+    this._keyEvents[rawEvent] = null;
+    this._keyEvents[normalizedEvent] = null;
   };
 
   unregisterKeyEvents = (event: RemoteControlKeys | string) => {

@@ -1,8 +1,0 @@
-V83: In-app-only remote cleanup.
-- Removes v82/v82b external PowerShell guard dependency.
-- Removes F13/F14 guard key mapping.
-- Fixes build issue caused by duplicated native switch cases from previous patch attempts.
-- Keeps physical mapping found from logs:
-  * VolumeDown = Bấm giờ / TIMER
-  * VolumeUp   = Thêm giờ / EXTENSION
-Important: Windows may still display the system volume OSD because these buttons are real Windows system volume keys.

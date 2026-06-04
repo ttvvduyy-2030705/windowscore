@@ -3,8 +3,6 @@ import {RemoteControlKeys, RemoteControlKeysNative} from 'types/bluetooth';
 
 const DEBUG_REMOTE = true;
 const NEW_GAME_HOLD_DURATION_MS = 3000;
-const NEW_GAME_RELEASE_GRACE_MS = 900;
-const REMOTE_WINDOWS_BUILD = 'v11-carom-pool-separate-buttons';
 
 const nativeRemote =
   NativeModules.RemoteControl ??
@@ -24,13 +22,11 @@ class RemoteControlWindows {
   private _registeredToNative = false;
   private _enabled = false;
   private _newGameHoldTimeout: ReturnType<typeof setTimeout> | null = null;
-  private _newGameReleaseCancelTimeout: ReturnType<typeof setTimeout> | null = null;
   private _newGameHoldTriggered = false;
-  private _newGameHoldCallback: Function | null = null;
+  private _startNewGameFallbackTimeout: ReturnType<typeof setTimeout> | null = null;
+  private _startNewGameFallbackTriggered = false;
+  private _pressedKeys: {[key: string]: boolean} = {};
   private _lastBleStatus: any = null;
-  private _lastStartKeyDownAt = 0;
-  private _newGameHoldRequired = true;
-  private _newGameImmediateKeyDownActive = false;
 
   private constructor() {
     this.initializeKeySlots();
@@ -75,7 +71,6 @@ class RemoteControlWindows {
     );
 
     try {
-      debugRemoteLog('[Remote][Windows] init', REMOTE_WINDOWS_BUILD);
       nativeRemote?.startListening?.();
       nativeRemote?.ping?.();
     } catch (error) {
@@ -106,7 +101,6 @@ class RemoteControlWindows {
       '23': 'NEW_GAME',
       '66': 'NEW_GAME',
       '67': 'STOP',
-      '68': 'BREAK',
       '82': 'BREAK',
       '85': 'START',
       '86': 'STOP',
@@ -119,16 +113,7 @@ class RemoteControlWindows {
       '160': 'NEW_GAME',
 
       // Windows virtual-key/media key values for paired Bluetooth remotes.
-      '8': 'NEW_GAME',
       '13': 'NEW_GAME',
-      '27': 'NEW_GAME',
-      '35': 'NEW_GAME',
-      '36': 'NEW_GAME',
-      '41': 'NEW_GAME',
-      '45': 'NEW_GAME',
-      '46': 'NEW_GAME',
-      '78': 'NEW_GAME',
-      '93': 'NEW_GAME',
       '37': 'LEFT',
       '38': 'UP',
       '39': 'RIGHT',
@@ -143,12 +128,16 @@ class RemoteControlWindows {
       '109': 'TIMER',
       '174': 'TIMER',
       '175': 'EXTENSION',
+      '173': 'STOP',
+      '166': 'BREAK',
+      '167': 'BREAK',
       '176': 'BREAK',
+      '180': 'BREAK',
       '177': 'WARM_UP',
       '178': 'STOP',
       '179': 'START',
       '181': 'BREAK',
-      '182': 'WARM_UP',
+      '182': 'BREAK',
       '183': 'STOP',
       '205': 'START',
 
@@ -179,7 +168,7 @@ class RemoteControlWindows {
       MEDIA_PLAY: 'START',
       MEDIA_PLAY_PAUSE: 'START',
       MEDIA_PAUSE: 'START',
-      SPACE: 'START',
+      SPACE: 'BREAK',
       KEY_A: 'START',
       KEY_P: 'START',
       A: 'START',
@@ -187,19 +176,21 @@ class RemoteControlWindows {
 
       STOP: 'STOP',
       MEDIA_STOP: 'STOP',
+      BROWSER_STOP: 'STOP',
+      BROWSER_SEARCH: 'STOP',
       KEY_S: 'STOP',
       S: 'STOP',
-      // Real APLUS remote STOP sends keyboard C on Windows.
-      KEY_C: 'STOP',
-      C: 'STOP',
 
       BREAK: 'BREAK',
+      BROWSER_BACK: 'BREAK',
       MEDIA_NEXT: 'BREAK',
       MEDIA_NEXT_TRACK: 'BREAK',
       MEDIA_FAST_FORWARD: 'BREAK',
-      // Real APLUS remote BREAK sends keyboard D on Windows.
-      KEY_D: 'BREAK',
-      D: 'BREAK',
+      BROWSER_FORWARD: 'BREAK',
+      LAUNCH_MAIL: 'BREAK',
+      LAUNCH_MEDIA_SELECT: 'BREAK',
+      LAUNCH_APP1: 'BREAK',
+      LAUNCH_APP2: 'BREAK',
 
       WARM: 'WARM_UP',
       WARMUP: 'WARM_UP',
@@ -217,6 +208,8 @@ class RemoteControlWindows {
       TIME: 'TIMER',
       CLOCK: 'TIMER',
       VOLUME_DOWN: 'TIMER',
+      VOLUME_MUTE: 'STOP',
+      MEDIA_MUTE: 'STOP',
       KEY_T: 'TIMER',
       T: 'TIMER',
 
@@ -276,144 +269,71 @@ class RemoteControlWindows {
       this._newGameHoldTimeout = null;
     }
 
-    if (this._newGameReleaseCancelTimeout) {
-      clearTimeout(this._newGameReleaseCancelTimeout);
-      this._newGameReleaseCancelTimeout = null;
-    }
-
-    this._newGameHoldCallback = null;
-
     if (resetTriggered) {
       this._newGameHoldTriggered = false;
-      this._newGameImmediateKeyDownActive = false;
     }
   };
 
-  private scheduleNewGameReleaseCancel = () => {
-    if (this._newGameReleaseCancelTimeout) {
-      clearTimeout(this._newGameReleaseCancelTimeout);
+
+  private clearStartNewGameFallbackHold = (resetTriggered: boolean) => {
+    if (this._startNewGameFallbackTimeout) {
+      clearTimeout(this._startNewGameFallbackTimeout);
+      this._startNewGameFallbackTimeout = null;
     }
 
-    this._newGameReleaseCancelTimeout = setTimeout(() => {
-      this._newGameReleaseCancelTimeout = null;
-      if (!this._newGameHoldTriggered) {
-        debugRemoteLog('[Remote][Windows] NEW_GAME released before 3s, cancelled', REMOTE_WINDOWS_BUILD);
-        this.clearNewGameHold(true);
+    if (resetTriggered) {
+      this._startNewGameFallbackTriggered = false;
+    }
+  };
+
+  private handleStartNewGameFallbackHold = (
+    callback: Function | null,
+    isKeyUp: boolean,
+  ) => {
+    if (isKeyUp) {
+      this.clearStartNewGameFallbackHold(true);
+      return;
+    }
+
+    if (
+      this._startNewGameFallbackTimeout ||
+      this._startNewGameFallbackTriggered
+    ) {
+      return;
+    }
+
+    this._startNewGameFallbackTimeout = setTimeout(() => {
+      this._startNewGameFallbackTimeout = null;
+      this._startNewGameFallbackTriggered = true;
+
+      debugRemoteLog(
+        '[Remote][Windows] START long-hold fallback -> NEW_GAME v99',
+      );
+
+      if (typeof callback === 'function') {
+        callback();
       }
-    }, NEW_GAME_RELEASE_GRACE_MS);
+    }, NEW_GAME_HOLD_DURATION_MS);
   };
 
   private handleNewGameHold = (callback: Function | null, isKeyUp: boolean) => {
     if (isKeyUp) {
-      // Some HID remotes send down/up pulses while the physical key is still held.
-      // Delay cancel slightly so a 3s hold can still be detected.
-      if (this._newGameHoldTriggered) {
-        this.clearNewGameHold(true);
-      } else {
-        this.scheduleNewGameReleaseCancel();
-      }
+      this.clearNewGameHold(true);
       return;
     }
 
-    if (this._newGameReleaseCancelTimeout) {
-      clearTimeout(this._newGameReleaseCancelTimeout);
-      this._newGameReleaseCancelTimeout = null;
-    }
-
-    if (this._newGameHoldTriggered) {
+    if (this._newGameHoldTimeout || this._newGameHoldTriggered) {
       return;
     }
-
-    this._newGameHoldCallback = callback;
-
-    if (this._newGameHoldTimeout) {
-      return;
-    }
-
-    debugRemoteLog('[Remote][Windows] NEW_GAME hold started', REMOTE_WINDOWS_BUILD);
 
     this._newGameHoldTimeout = setTimeout(() => {
       this._newGameHoldTimeout = null;
       this._newGameHoldTriggered = true;
 
-      debugRemoteLog('[Remote][Windows] NEW_GAME hold 3s triggered', REMOTE_WINDOWS_BUILD);
-
-      const newGameCallback = this._newGameHoldCallback ?? callback;
-      if (typeof newGameCallback === 'function') {
-        newGameCallback();
+      if (typeof callback === 'function') {
+        callback();
       }
     }, NEW_GAME_HOLD_DURATION_MS);
-  };
-
-  private getRemoteControlEnumNameForValue = (value: any): string | null => {
-    const raw = String(value ?? '');
-    const match = Object.entries(RemoteControlKeys).find(
-      ([, enumValue]) => String(enumValue) === raw,
-    );
-    return match?.[0] ?? null;
-  };
-
-  private setCallbackForKey = (key: any, callback: Function | null) => {
-    if (key === null || key === undefined || key === '') {
-      return;
-    }
-
-    const raw = String(key);
-    const normalized = this.normalizeKeyCode(raw);
-
-    this._keyEvents[raw] = callback;
-    this._keyEvents[normalized] = callback;
-
-    const enumNameForRawValue = this.getRemoteControlEnumNameForValue(raw);
-    if (enumNameForRawValue) {
-      this._keyEvents[enumNameForRawValue] = callback;
-      this._keyEvents[this.normalizeKeyCode(enumNameForRawValue)] = callback;
-    }
-
-    const enumValueForNormalizedName = (RemoteControlKeys as any)[normalized];
-    if (enumValueForNormalizedName !== undefined) {
-      this._keyEvents[String(enumValueForNormalizedName)] = callback;
-    }
-  };
-
-  private getCallbackForEventKey = (eventKey: any) => {
-    const candidates = [
-      eventKey.normalizedFromCode,
-      eventKey.preferredPhysicalCode,
-      eventKey.normalizedFromResolved,
-      eventKey.rawResolvedKey,
-      eventKey.rawKeyCode,
-      eventKey.rawKeyCodeInt,
-      eventKey.rawScanCode,
-    ];
-
-    for (const candidate of candidates) {
-      if (candidate === null || candidate === undefined || candidate === '') {
-        continue;
-      }
-
-      const raw = String(candidate);
-      const normalized = this.normalizeKeyCode(raw);
-      const enumNameForValue = this.getRemoteControlEnumNameForValue(raw);
-      const enumValueForNormalizedName = (RemoteControlKeys as any)[normalized];
-
-      const keysToTry = [
-        raw,
-        normalized,
-        enumNameForValue,
-        enumNameForValue ? this.normalizeKeyCode(enumNameForValue) : null,
-        enumValueForNormalizedName !== undefined ? String(enumValueForNormalizedName) : null,
-      ].filter(Boolean) as string[];
-
-      for (const key of keysToTry) {
-        const callback = this._keyEvents[key];
-        if (typeof callback === 'function') {
-          return callback;
-        }
-      }
-    }
-
-    return null;
   };
 
   private dispatchRemoteEvent = (
@@ -439,55 +359,57 @@ class RemoteControlWindows {
       text: (data as any)?.text,
     });
 
-    const callback = this.getCallbackForEventKey(eventKey);
+    const callback =
+      this._keyEvents[eventKey.normalizedFromCode] ??
+      this._keyEvents[String(eventKey.preferredPhysicalCode)] ??
+      this._keyEvents[eventKey.normalizedFromResolved] ??
+      this._keyEvents[String(eventKey.rawResolvedKey)] ??
+      null;
+
+    const dispatchKey =
+      eventKey.normalizedFromCode ||
+      eventKey.normalizedFromResolved ||
+      String(eventKey.preferredPhysicalCode ?? '');
+
+    if (isKeyUp) {
+      delete this._pressedKeys[dispatchKey];
+
+      if (
+        eventKey.normalizedFromCode === 'START' ||
+        eventKey.normalizedFromResolved === 'START'
+      ) {
+        this.clearStartNewGameFallbackHold(true);
+      }
+    }
 
     if (
       eventKey.normalizedFromCode === 'NEW_GAME' ||
       eventKey.normalizedFromResolved === 'NEW_GAME'
     ) {
-      if (this._newGameHoldRequired) {
-        this.handleNewGameHold(callback, isKeyUp);
-        return;
-      }
-
-      // Carom mode reuses the physical NEW GAME button as "tăng lượt".
-      // It must fire immediately, but only once per physical press.
-      if (isKeyUp) {
-        this._newGameImmediateKeyDownActive = false;
-        return;
-      }
-
-      if (repeatCount > 0 || this._newGameImmediateKeyDownActive) {
-        return;
-      }
-
-      this._newGameImmediateKeyDownActive = true;
-
-      if (typeof callback === 'function') {
-        callback();
-      }
+      this.handleNewGameHold(callback, isKeyUp);
       return;
+    }
+
+    if (
+      eventKey.normalizedFromCode === 'START' ||
+      eventKey.normalizedFromResolved === 'START'
+    ) {
+      this.handleStartNewGameFallbackHold(this._keyEvents.NEW_GAME, isKeyUp);
     }
 
     if (isKeyUp || repeatCount > 0) {
       return;
     }
 
-    // Real APLUS START is keyboard A. Windows may emit several key-down
-    // events with repeatCount=0 while the physical button is held. Without
-    // this guard, a single press can pause and immediately call pause again
-    // before React refreshes the handler refs.
-    if (eventKey.normalizedFromCode === 'START') {
-      const now = Date.now();
-      if (now - this._lastStartKeyDownAt < 450) {
-        debugRemoteLog('[Remote][Windows] START duplicate ignored', {
-          deltaMs: now - this._lastStartKeyDownAt,
-          build: REMOTE_WINDOWS_BUILD,
-        });
-        return;
-      }
-      this._lastStartKeyDownAt = now;
+    if (this._pressedKeys[dispatchKey]) {
+      debugRemoteLog('[Remote][Windows] held-key duplicate blocked v99:', {
+        dispatchKey,
+        repeatCount,
+      });
+      return;
     }
+
+    this._pressedKeys[dispatchKey] = true;
 
     if (typeof callback === 'function') {
       callback();
@@ -516,21 +438,14 @@ class RemoteControlWindows {
 
   getLastStatus = () => this._lastBleStatus;
 
-  setNewGameHoldRequired = (required: boolean) => {
-    this._newGameHoldRequired = !!required;
-    this.clearNewGameHold(true);
-    debugRemoteLog('[Remote][Windows] new game hold required:', {
-      required: this._newGameHoldRequired,
-      build: REMOTE_WINDOWS_BUILD,
-    });
-  };
-
   setEnabled = (enabled: boolean) => {
     this.ensureNativeListener();
     this._enabled = !!enabled;
 
     if (!this._enabled) {
       this.clearNewGameHold(true);
+      this.clearStartNewGameFallbackHold(true);
+      this._pressedKeys = {};
       try {
         nativeRemote?.setEnabled?.(false);
         nativeRemote?.disconnect?.();
@@ -541,11 +456,11 @@ class RemoteControlWindows {
     }
 
     try {
-      debugRemoteLog('[Remote][Windows] enable', REMOTE_WINDOWS_BUILD);
       nativeRemote?.startListening?.();
       nativeRemote?.setEnabled?.(true);
-      // V6: do not start BLE/GATT. The physical APLUS remote is HID on Windows.
-      // BLE connect produced Access is denied and allowed volume keys to escape to Windows.
+      // Remote Bluetooth kiểu TV thường vào Windows dưới dạng HID keyboard/media.
+      // Vẫn scan BLE nếu có, nhưng HID listener mới là đường chính để bắt nút thật.
+      nativeRemote?.scanAndConnect?.();
     } catch (error) {
       debugRemoteLog('[Remote][Windows] scan/connect failed:', error);
     }
@@ -555,8 +470,6 @@ class RemoteControlWindows {
     this.ensureNativeListener();
     this._enabled = true;
     try {
-      debugRemoteLog('[Remote][Windows] scanAndConnect redirected to HID only', REMOTE_WINDOWS_BUILD);
-      nativeRemote?.startListening?.();
       nativeRemote?.setEnabled?.(true);
       return await nativeRemote?.scanAndConnect?.();
     } catch (error) {
@@ -617,7 +530,11 @@ class RemoteControlWindows {
     this.ensureNativeListener();
     this.initializeKeySlots();
 
-    this.setCallbackForKey(event, callback);
+    const rawEvent = String(event);
+    const normalizedEvent = this.normalizeKeyCode(event);
+
+    this._keyEvents[rawEvent] = callback;
+    this._keyEvents[normalizedEvent] = callback;
   };
 
   registerKeyEvent = (event: RemoteControlKeys | string, callback: Function) => {
@@ -625,7 +542,11 @@ class RemoteControlWindows {
   };
 
   clearKeyEvent = (event: RemoteControlKeys | string) => {
-    this.setCallbackForKey(event, null);
+    const rawEvent = String(event);
+    const normalizedEvent = this.normalizeKeyCode(event);
+
+    this._keyEvents[rawEvent] = null;
+    this._keyEvents[normalizedEvent] = null;
   };
 
   unregisterKeyEvents = (event: RemoteControlKeys | string) => {
