@@ -35,6 +35,7 @@ export type AplusLiveScoreConfig = {
   matchId: string;
   matchNumber: string;
   sessionToken?: string;
+  lockExpiresAt?: string;
   rawMatch?: any;
 };
 
@@ -635,6 +636,23 @@ export const fetchAplusTournaments = async (): Promise<AplusTournament[]> => {
     .filter(tournament => Boolean(tournament.id && tournament.name));
 };
 
+const isAplusLiveScoreAuthError = (error: unknown) => {
+  const message = String((error as Error)?.message || error || '').toLowerCase();
+
+  return (
+    message.includes('401') ||
+    message.includes('403') ||
+    message.includes('unauthorized') ||
+    message.includes('forbidden') ||
+    message.includes('live api key') ||
+    message.includes('api key') ||
+    message.includes('không có quyền') ||
+    message.includes('khong co quyen') ||
+    message.includes('không hợp lệ') ||
+    message.includes('khong hop le')
+  );
+};
+
 export const fetchAplusMatchByNumber = async (
   tournament: AplusTournament,
   matchNumber: string,
@@ -647,9 +665,11 @@ export const fetchAplusMatchByNumber = async (
   const variants = normalizeAplusMatchCodeVariants(safeMatchNumber);
   const retryDelays = [0, 450, 900, 1600, 2600, 4200];
   let lastError: any = null;
+  let lastAvailableCodes: string[] = [];
+  let lastListTotal = 0;
   let lookupTournament = tournament;
 
-  console.log('[AplusLiveScore][MATCH_LOOKUP_START_V2]', {
+  console.log('[AplusLiveScore][MATCH_LOOKUP_START_V3_LIVE_LIST_FIRST]', {
     tournamentId: tournament.id,
     tournamentName: tournament.name,
     input: safeMatchNumber,
@@ -670,7 +690,55 @@ export const fetchAplusMatchByNumber = async (
 
     lookupTournament = await refreshTournamentBeforeMatchLookup(lookupTournament);
 
-    // 1) Thử endpoint lookup trực tiếp với nhiều dạng mã: T1, T01, 1, 01.
+    // 1) Ưu tiên cách ổn định nhất: lấy danh sách trận public từ live-api rồi tự tìm trong app.
+    // Cách này tránh lỗi 401 của endpoint by-code và tránh gọi nhầm admin API cũ.
+    try {
+      const matches = await fetchFreshMatchListForTournament(lookupTournament);
+      lastListTotal = matches.length;
+      lastAvailableCodes = matches
+        .slice(0, 100)
+        .map(item => getMatchCodeCandidatesFromRaw(item).join('/'))
+        .filter(Boolean);
+
+      const found = findMatchInListByCode(matches, variants);
+
+      if (found) {
+        const match = normalizeMatch(found, lookupTournament, safeMatchNumber);
+        if (match.id) {
+          console.log('[AplusLiveScore][MATCH_LOOKUP_OK_LIST_FIRST]', {
+            input: safeMatchNumber,
+            attempt: attempt + 1,
+            variants,
+            matchId: match.id,
+            matchNumber: match.matchNumber,
+            totalMatches: matches.length,
+          });
+          return match;
+        }
+
+        lastError = new Error('Live API trả về trận nhưng thiếu matchId.');
+      }
+
+      console.log('[AplusLiveScore][MATCH_LOOKUP_LIST_NOT_FOUND]', {
+        input: safeMatchNumber,
+        attempt: attempt + 1,
+        variants,
+        tournamentId: lookupTournament.id,
+        totalMatches: matches.length,
+        availableCodes: lastAvailableCodes,
+      });
+    } catch (error: any) {
+      lastError = error;
+      console.log('[AplusLiveScore][MATCH_LOOKUP_LIST_FAILED]', {
+        input: safeMatchNumber,
+        attempt: attempt + 1,
+        tournamentId: lookupTournament.id,
+        message: error?.message || String(error),
+      });
+    }
+
+    // 2) Fallback phụ: thử by-code. Nếu endpoint này trả 401/API key thì bỏ qua,
+    // không cho UI hiện "Không có quyền truy cập" vì danh sách trận public mới là nguồn chính.
     for (const code of variants) {
       try {
         const data = await requestJson(
@@ -684,7 +752,7 @@ export const fetchAplusMatchByNumber = async (
 
         const match = normalizeMatch(data, lookupTournament, code);
         if (match.id) {
-          console.log('[AplusLiveScore][MATCH_LOOKUP_OK_DIRECT]', {
+          console.log('[AplusLiveScore][MATCH_LOOKUP_OK_DIRECT_FALLBACK]', {
             input: safeMatchNumber,
             attempt: attempt + 1,
             usedCode: code,
@@ -696,61 +764,37 @@ export const fetchAplusMatchByNumber = async (
 
         lastError = new Error('Web trả về trận nhưng thiếu matchId.');
       } catch (error: any) {
-        lastError = error;
-        console.log('[AplusLiveScore][MATCH_LOOKUP_DIRECT_MISS]', {
+        const authError = isAplusLiveScoreAuthError(error);
+        if (!authError) {
+          lastError = error;
+        }
+
+        console.log('[AplusLiveScore][MATCH_LOOKUP_DIRECT_FALLBACK_MISS]', {
           input: safeMatchNumber,
           attempt: attempt + 1,
           triedCode: code,
+          ignoredAuthError: authError,
           message: error?.message || String(error),
         });
       }
     }
+  }
 
-    // 2) Fallback chắc hơn: tải toàn bộ matches mới nhất của giải rồi tự tìm trong app.
-    try {
-      const matches = await fetchFreshMatchListForTournament(lookupTournament);
-      const found = findMatchInListByCode(matches, variants);
+  const availableText = lastAvailableCodes.length
+    ? lastAvailableCodes.slice(0, 30).join(', ')
+    : 'chưa có trận nào trong live-api';
 
-      if (found) {
-        const match = normalizeMatch(found, lookupTournament, safeMatchNumber);
-        if (match.id) {
-          console.log('[AplusLiveScore][MATCH_LOOKUP_OK_LIST]', {
-            input: safeMatchNumber,
-            attempt: attempt + 1,
-            variants,
-            matchId: match.id,
-            matchNumber: match.matchNumber,
-            totalMatches: matches.length,
-          });
-          return match;
-        }
-      }
-
-      console.log('[AplusLiveScore][MATCH_LOOKUP_LIST_NOT_FOUND]', {
-        input: safeMatchNumber,
-        attempt: attempt + 1,
-        variants,
-        tournamentId: lookupTournament.id,
-        totalMatches: matches.length,
-        availableCodes: matches
-          .slice(0, 100)
-          .map(item => getMatchCodeCandidatesFromRaw(item).join('/'))
-          .filter(Boolean),
-      });
-    } catch (error: any) {
-      lastError = error;
-      console.log('[AplusLiveScore][MATCH_LOOKUP_LIST_FAILED]', {
-        input: safeMatchNumber,
-        attempt: attempt + 1,
-        tournamentId: lookupTournament.id,
-        message: error?.message || String(error),
-      });
-    }
+  if (lastError && !isAplusLiveScoreAuthError(lastError)) {
+    throw new Error(
+      lastError?.message ||
+        `Không tìm thấy trận ${safeMatchNumber}. Mã trận đang có: ${availableText}.`,
+    );
   }
 
   throw new Error(
-    lastError?.message ||
-      `Không tìm thấy trận ${safeMatchNumber}. Trận mới tạo có thể chưa được live API sync xong, bấm Tải giải rồi thử lại sau vài giây.`,
+    `Không tìm thấy trận ${safeMatchNumber} trong giải ${lookupTournament.name}. ` +
+      `App đã lấy danh sách trận từ live-api nhưng chưa thấy mã này. ` +
+      `Số trận live-api đang có: ${lastListTotal}. Mã đang có: ${availableText}.`,
   );
 };
 

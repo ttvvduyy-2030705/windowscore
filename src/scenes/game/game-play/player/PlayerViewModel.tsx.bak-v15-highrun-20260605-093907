@@ -43,25 +43,6 @@ const getSafeRunPoint = (value?: number) => {
   return Number.isFinite(numeric) ? numeric : 0;
 };
 
-const getDisplayTopTwoRuns = (player: Player) => {
-  const runs = [
-    getSafeRunPoint(player.proMode?.highestRate),
-    getSafeRunPoint(player.proMode?.secondHighestRate),
-  ];
-  const currentPoint = getSafeRunPoint(player.proMode?.currentPoint);
-
-  if (currentPoint > 0) {
-    runs.push(currentPoint);
-  }
-
-  runs.sort((a, b) => b - a);
-
-  return {
-    highestRate: runs[0] || 0,
-    secondHighestRate: runs[1] || 0,
-  };
-};
-
 const PlayerViewModel = (props: Props) => {
   const {requireAplusPro} = useAplusPro();
   const [nameEditable, setNameEditable] = useState(false);
@@ -70,7 +51,8 @@ const PlayerViewModel = (props: Props) => {
     Number(props.player.proMode?.currentPoint || 0),
   );
 
-  const {highestRate, secondHighestRate} = getDisplayTopTwoRuns(props.player);
+  const highestRate = getSafeRunPoint(props.player.proMode?.highestRate);
+  const secondHighestRate = getSafeRunPoint(props.player.proMode?.secondHighestRate);
   const averagePoint = formatAverage(Number(props.player.proMode?.average || 0));
   const targetGoal = Number(props.gameSettings?.players?.goal?.goal || 0);
   const currentTotalPoint = Number(props.player.totalPoint || 0);

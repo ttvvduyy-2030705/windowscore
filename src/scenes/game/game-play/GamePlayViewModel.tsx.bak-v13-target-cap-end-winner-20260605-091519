@@ -98,44 +98,6 @@ const getTopTwoRuns = (player: Player, currentPoint: number) => {
   };
 };
 
-const commitCurrentRunStatsForPlayers = (
-  settings?: PlayerSettings,
-  totalTurnsValue?: number,
-): PlayerSettings | undefined => {
-  if (!settings?.playingPlayers?.length) {
-    return settings;
-  }
-
-  const completedTurns = Math.max(1, Number(totalTurnsValue || 0) + 1);
-
-  return {
-    ...settings,
-    playingPlayers: settings.playingPlayers.map(player => {
-      const currentPoint = getSafeRunPoint(player.proMode?.currentPoint);
-
-      if (!player.proMode || currentPoint <= 0) {
-        return player;
-      }
-
-      const {highestRate, secondHighestRate} = getTopTwoRuns(player, currentPoint);
-      const average = Number(
-        (Number(player.totalPoint || 0) / completedTurns).toFixed(2),
-      );
-
-      return {
-        ...player,
-        proMode: {
-          ...player.proMode,
-          highestRate,
-          secondHighestRate,
-          average,
-          currentPoint: 0,
-        },
-      };
-    }),
-  };
-};
-
 const playCountdownBeepSafely = () => {
   try {
     const soundModule = Sound as any;
@@ -455,67 +417,29 @@ const getScoreSnapshotTotal = (score?: number[] | null) =>
 const getScoreSnapshotFromPlayerSettings = (settings?: PlayerSettings | null) =>
   getFinalScoreSnapshot(settings);
 
-const deriveWinnerPlayerFromScore = (
+const deriveWinnerNameFromScore = (
   settings?: PlayerSettings | null,
   finalScore?: number[],
-): Player | undefined => {
+) => {
   const players = Array.isArray(settings?.playingPlayers)
     ? settings!.playingPlayers
     : [];
 
-  if (!players.length) {
+  if (!players.length || !Array.isArray(finalScore) || !finalScore.length) {
     return undefined;
   }
 
-  const scoreSource = Array.isArray(finalScore) && finalScore.length
-    ? finalScore
-    : getFinalScoreSnapshot(settings);
-
-  if (!Array.isArray(scoreSource) || !scoreSource.length) {
-    return players[0];
-  }
-
   let winnerIndex = 0;
-  let winnerScore = Number(scoreSource[0] || 0);
+  let winnerScore = Number(finalScore[0] || 0);
 
-  scoreSource.forEach((score, index) => {
+  finalScore.forEach((score, index) => {
     if (Number(score || 0) > winnerScore) {
       winnerIndex = index;
       winnerScore = Number(score || 0);
     }
   });
 
-  return players[winnerIndex];
-};
-
-const deriveWinnerNameFromScore = (
-  settings?: PlayerSettings | null,
-  finalScore?: number[],
-) => deriveWinnerPlayerFromScore(settings, finalScore)?.name;
-
-const getTargetGoalValue = (settings?: GameSettings | null) => {
-  const rawGoal = settings?.players?.goal?.goal;
-  const goal = Number(rawGoal || 0);
-  return Number.isFinite(goal) && goal > 0 ? goal : 0;
-};
-
-const clampScoreDeltaToGoal = (
-  currentScore: number,
-  requestedDelta: number,
-  targetGoal: number,
-) => {
-  const safeCurrent = Number.isFinite(currentScore) ? currentScore : 0;
-  const safeDelta = Number.isFinite(requestedDelta) ? requestedDelta : 0;
-
-  if (safeDelta > 0 && targetGoal > 0) {
-    return Math.min(targetGoal, safeCurrent + safeDelta) - safeCurrent;
-  }
-
-  if (safeDelta < 0) {
-    return Math.max(0, safeCurrent + safeDelta) - safeCurrent;
-  }
-
-  return safeDelta;
+  return players[winnerIndex]?.name;
 };
 
 const setReplayResumeSnapshotSync = (snapshot: ReplayResumeSnapshot | null) => {
@@ -2023,29 +1947,25 @@ const GamePlayViewModel = () => {
       }
 
       const player = playerSettings.playingPlayers[index];
-      if (!player) {
-        return;
-      }
-
-      const targetGoal = getTargetGoalValue(gameSettings);
-      const currentTotalPoint = Number(player.totalPoint || 0);
-      const actualAddedPoint = clampScoreDeltaToGoal(
-        currentTotalPoint,
-        Number(addedPoint || 0),
-        targetGoal,
+      const nextTotalPoint = Number(player?.totalPoint || 0) + addedPoint;
+      const nextCurrentPoint = Number(player?.proMode?.currentPoint || 0) + addedPoint;
+      const winnerRuns = player ? getTopTwoRuns(player, nextCurrentPoint) : undefined;
+      const winnerAverage = Number(
+        (nextTotalPoint / Math.max(1, totalTurns + 1)).toFixed(2),
       );
-
-      // v13: chạm điểm mục tiêu thì chặn tăng thêm, nhưng vẫn cho giảm điểm.
-      // Không tự hiện thắng ở đây; chỉ bấm Kết thúc mới chốt người thắng.
-      if (actualAddedPoint === 0) {
-        console.log('[TargetScoreLimit] blocked point change v13', {
-          index,
-          currentTotalPoint,
-          requestedDelta: addedPoint,
-          targetGoal,
-        });
-        return;
-      }
+      const winnerPlayer =
+        player && nextTotalPoint >= Number(gameSettings.players.goal.goal || 0)
+          ? ({
+              ...player,
+              totalPoint: nextTotalPoint,
+              proMode: {
+                ...player.proMode,
+                ...(winnerRuns || {}),
+                average: winnerAverage,
+                currentPoint: nextCurrentPoint,
+              },
+            } as Player)
+          : undefined;
 
       setPlayerSettings(
         prev =>
@@ -2053,31 +1973,28 @@ const GamePlayViewModel = () => {
             ...prev,
             playingPlayers: prev?.playingPlayers.map((currentPlayer, playerIndex) => {
               if (index === playerIndex) {
-                const updatedTotalPoint = Math.max(
-                  0,
-                  Number(currentPlayer.totalPoint || 0) + actualAddedPoint,
-                );
-                const updatedCurrentPoint = Math.max(
-                  0,
-                  Number(currentPlayer.proMode?.currentPoint || 0) + actualAddedPoint,
-                );
-                const updatedAverage = Number(
-                  (updatedTotalPoint / Math.max(1, totalTurns + 1)).toFixed(2),
-                );
+                const updatedCurrentPoint =
+                  Number(currentPlayer.proMode?.currentPoint || 0) + addedPoint;
+                const updatedRuns = winnerPlayer
+                  ? getTopTwoRuns(currentPlayer, updatedCurrentPoint)
+                  : undefined;
 
                 return {
                   ...currentPlayer,
-                  totalPoint: updatedTotalPoint,
-                  proMode: currentPlayer.proMode
-                    ? {
-                        ...currentPlayer.proMode,
-                        // v15: Không ghi High Run khi đang cộng từng điểm trong cùng 1 lượt.
-                        // HR1/HR2 hiển thị live sẽ được tính từ currentPoint ở PlayerViewModel,
-                        // còn HR thật chỉ được chốt khi đổi lượt hoặc kết thúc trận.
-                        average: updatedAverage,
-                        currentPoint: updatedCurrentPoint,
-                      }
-                    : currentPlayer.proMode,
+                  totalPoint: currentPlayer.totalPoint + addedPoint,
+                  proMode: {
+                    ...currentPlayer.proMode,
+                    ...(updatedRuns || {}),
+                    average: winnerPlayer
+                      ? Number(
+                          (
+                            (Number(currentPlayer.totalPoint || 0) + addedPoint) /
+                            Math.max(1, totalTurns + 1)
+                          ).toFixed(2),
+                        )
+                      : currentPlayer.proMode?.average,
+                    currentPoint: updatedCurrentPoint,
+                  },
                 };
               }
 
@@ -2085,6 +2002,15 @@ const GamePlayViewModel = () => {
             }),
           } as PlayerSettings),
       );
+
+      if (winnerPlayer) {
+        setWinner(winnerPlayer);
+        setIsStarted(false);
+        setIsPaused(false);
+        setIsMatchPaused(true);
+        showWinnerAlertAndGoBack(winnerPlayer);
+        return;
+      }
 
       if (!isPoolGame(gameSettings.category)) {
         _resetCountdown();
@@ -2097,7 +2023,7 @@ const GamePlayViewModel = () => {
       playerSettings,
       winner,
       _resetCountdown,
-      totalTurns,
+      showWinnerAlertAndGoBack,
     ],
   );
 
@@ -2223,14 +2149,9 @@ const GamePlayViewModel = () => {
       const isThreeFoulPenalty = !reset && nextViolate >= 3 && opponentIndex >= 0;
       const opponentPlayer = isThreeFoulPenalty ? players[opponentIndex] : undefined;
       const opponentScoreBefore = Number(opponentPlayer?.totalPoint || 0);
-      const opponentScoreDelta = isThreeFoulPenalty
-        ? clampScoreDeltaToGoal(
-            opponentScoreBefore,
-            1,
-            getTargetGoalValue(gameSettings),
-          )
-        : 0;
-      const opponentScoreAfter = opponentScoreBefore + opponentScoreDelta;
+      const opponentScoreAfter = isThreeFoulPenalty
+        ? opponentScoreBefore + 1
+        : opponentScoreBefore;
       const matchPausedBefore = Boolean(isPaused || isMatchPaused);
       const timerRunningBefore = Boolean(isStarted && !isPaused && !isMatchPaused);
       const recordingActiveBefore = Boolean(
@@ -2247,12 +2168,7 @@ const GamePlayViewModel = () => {
             ...player,
             totalPoint:
               index === opponentIndex
-                ? Number(player.totalPoint || 0) +
-                  clampScoreDeltaToGoal(
-                    Number(player.totalPoint || 0),
-                    1,
-                    getTargetGoalValue(gameSettings),
-                  )
+                ? Number(player.totalPoint || 0) + 1
                 : player.totalPoint,
             violate: 0,
             scoredBalls: [],
@@ -2387,51 +2303,35 @@ const GamePlayViewModel = () => {
         return;
       }
 
-      const targetPlayer = playerSettings.playingPlayers[playerIndex];
+      const winnerPlayer = playerSettings.playingPlayers[playerIndex];
+      const announcedWinnerPlayer = addMatchPoint
+        ? ({...winnerPlayer, totalPoint: Number(winnerPlayer.totalPoint || 0) + 1} as Player)
+        : winnerPlayer;
 
-      if (addMatchPoint) {
-        const targetGoal = getTargetGoalValue(gameSettings);
-        const currentTotalPoint = Number(targetPlayer.totalPoint || 0);
-        const actualAddedPoint = clampScoreDeltaToGoal(
-          currentTotalPoint,
-          1,
-          targetGoal,
-        );
-
-        if (actualAddedPoint !== 0) {
-          setPlayerSettings(
-            prev =>
-              ({
-                ...prev,
-                playingPlayers: prev?.playingPlayers.map((player, currentIndex) => {
-                  if (playerIndex === currentIndex) {
-                    return {
-                      ...player,
-                      totalPoint: Number(player.totalPoint || 0) + actualAddedPoint,
-                    } as Player;
-                  }
-
-                  return player;
-                }),
-              } as PlayerSettings),
-          );
-        }
-
-        // v13: ăn bi/chốt ván chỉ cộng điểm đến tối đa điểm mục tiêu;
-        // chưa tự báo thắng trận, phải bấm Kết thúc mới hiện người thắng.
-        setIsMatchPaused(true);
-        return;
-      }
-
-      const announcedWinnerPlayer = targetPlayer;
       setWinner(announcedWinnerPlayer);
       setIsStarted(false);
       setIsPaused(false);
       setIsMatchPaused(true);
 
+      if (addMatchPoint) {
+        setPlayerSettings(
+          prev =>
+            ({
+              ...prev,
+              playingPlayers: prev?.playingPlayers.map((player, currentIndex) => {
+                if (playerIndex === currentIndex) {
+                  return {...player, totalPoint: player.totalPoint + 1};
+                }
+
+                return player;
+              }),
+            } as PlayerSettings),
+        );
+      }
+
       showWinnerAlertAndGoBack(announcedWinnerPlayer);
     },
-    [gameSettings, playerSettings, showWinnerAlertAndGoBack],
+    [playerSettings, showWinnerAlertAndGoBack],
   );
 
   const onSelectWinner = useCallback(() => {
@@ -2471,9 +2371,7 @@ const GamePlayViewModel = () => {
         return;
       }
 
-      const targetGoal = getTargetGoalValue(gameSettings);
-      const maxPoint = targetGoal > 0 ? Math.min(8, targetGoal) : 8;
-      const nextPoint = Math.min(maxPoint, Number(targetPlayer.totalPoint || 0) + 1);
+      const nextPoint = Math.min(8, Number(targetPlayer.totalPoint || 0) + 1);
       const newPlayingPlayers = playerSettings.playingPlayers.map(
         (player, index) => {
           if (index === playerIndex) {
@@ -2490,11 +2388,12 @@ const GamePlayViewModel = () => {
       setPlayerSettings({...playerSettings, playingPlayers: newPlayingPlayers});
 
       if (nextPoint >= 8) {
-        console.log('[TargetScoreLimit] pool15-only point reached; wait for end button v13', {
-          playerIndex,
-          nextPoint,
-        });
+        const winnerPlayer = newPlayingPlayers[playerIndex];
+        setWinner(winnerPlayer);
+        setIsStarted(false);
+        setIsPaused(false);
         setIsMatchPaused(true);
+        showWinnerAlertAndGoBack(winnerPlayer);
       }
     },
     [
@@ -2554,18 +2453,11 @@ const GamePlayViewModel = () => {
       }
 
       if (activeBall === BallType.B8) {
-        const targetGoal = getTargetGoalValue(gameSettings);
         const updatedPlayers = playerSettings.playingPlayers.map((player, index) =>
           index === playerIndex
             ? ({
                 ...player,
-                totalPoint:
-                  Number(player.totalPoint || 0) +
-                  clampScoreDeltaToGoal(
-                    Number(player.totalPoint || 0),
-                    1,
-                    targetGoal,
-                  ),
+                totalPoint: Number(player.totalPoint || 0) + 1,
               } as Player)
             : player,
         );
@@ -2575,13 +2467,13 @@ const GamePlayViewModel = () => {
         setIsMatchPaused(true);
 
         const setWinnerPlayer = updatedPlayers[playerIndex];
+        const targetGoal = Number(gameSettings?.players?.goal?.goal || 0);
 
         if (Number(setWinnerPlayer?.totalPoint || 0) >= targetGoal && targetGoal > 0) {
-          console.log('[TargetScoreLimit] target reached; wait for end button v13', {
-            playerIndex,
-            targetGoal,
-            score: Number(setWinnerPlayer?.totalPoint || 0),
-          });
+          setWinner(setWinnerPlayer);
+          setIsStarted(false);
+          setIsPaused(false);
+          showWinnerAlertAndGoBack(setWinnerPlayer);
         }
 
         return;
@@ -2655,18 +2547,11 @@ const GamePlayViewModel = () => {
         const scoredCount = nextCurrentPlayer?.scoredBalls?.length || 0;
 
         if (scoredCount >= 8) {
-          const targetGoal = getTargetGoalValue(gameSettings);
           const updatedPlayers = newPlayingPlayers.map((player, index) =>
             index === currentPlayerIndex
               ? ({
                   ...player,
-                  totalPoint:
-                    Number(player.totalPoint || 0) +
-                    clampScoreDeltaToGoal(
-                      Number(player.totalPoint || 0),
-                      1,
-                      targetGoal,
-                    ),
+                  totalPoint: Number(player.totalPoint || 0) + 1,
                 } as Player)
               : player,
           );
@@ -2676,12 +2561,12 @@ const GamePlayViewModel = () => {
           setIsMatchPaused(true);
 
           const setWinnerPlayer = updatedPlayers[currentPlayerIndex];
+          const targetGoal = Number(gameSettings?.players?.goal?.goal || 0);
           if (Number(setWinnerPlayer?.totalPoint || 0) >= targetGoal && targetGoal > 0) {
-            console.log('[TargetScoreLimit] target reached; wait for end button v13', {
-              playerIndex: currentPlayerIndex,
-              targetGoal,
-              score: Number(setWinnerPlayer?.totalPoint || 0),
-            });
+            setWinner(setWinnerPlayer);
+            setIsStarted(false);
+            setIsPaused(false);
+            showWinnerAlertAndGoBack(setWinnerPlayer);
           }
           return;
         }
@@ -3726,305 +3611,247 @@ const GamePlayViewModel = () => {
   ]);
 
   const onStop = useCallback(async () => {
-    // v14: Nếu chưa bắt đầu trận thì nút Kết thúc vẫn là thoát trận như cũ.
-    // Khi trận đã bắt đầu, nút Kết thúc chỉ chốt người thắng và hiện thông báo/overlay.
-    // Người dùng bấm nút Kết thúc trong thông báo/overlay thì mới thoát khỏi trận.
-    if (!isStarted) {
-      Alert.alert(i18n.t('stop'), i18n.t('msgStopGame'), [
-        {
-          text: i18n.t('txtCancel'),
-          style: 'cancel',
-        },
-        {
-          text: i18n.t('stop'),
-          onPress: () => {
-            void setReplayResumeSnapshot(null);
-            void setLiveMatchSnapshot(null);
-            setReplayReturnRequestSync(null);
-            navigateBackAfterWinner();
-          },
-        },
-      ]);
-      return;
-    }
-
-    if (isEndingGameRef.current) {
-      return;
-    }
-
-    isEndingGameRef.current = true;
-
-    try {
-      void setReplayResumeSnapshot(null);
-      void setLiveMatchSnapshot(null);
-      setReplayReturnRequestSync(null);
-      shouldStartRecordingRef.current = false;
-      pendingStartRecordingRef.current = false;
-      pendingYouTubeNativeStartRef.current = null;
-      setYoutubeLivePreparing(false);
-      await stopYouTubeNativeLive();
-      if (Platform.OS === 'windows') {
-        await stopWindowsFfmpegYouTubeLive('end-match');
-      }
-
-      const activeYouTubeBroadcastId = activeYouTubeBroadcastIdRef.current;
-      activeYouTubeBroadcastIdRef.current = '';
-      if (activeYouTubeBroadcastId) {
-        try {
-          await stopYouTubeLiveSession(activeYouTubeBroadcastId);
-          console.log('[YouTube Live] stopped broadcast:', activeYouTubeBroadcastId);
-        } catch (youtubeStopError) {
-          console.log('[YouTube Live] stop broadcast failed:', youtubeStopError);
+  Alert.alert(i18n.t('stop'), i18n.t('msgStopGame'), [
+    {
+      text: i18n.t('txtCancel'),
+      style: 'cancel',
+    },
+    {
+      text: i18n.t('stop'),
+      onPress: async () => {
+        if (isEndingGameRef.current) {
+          return;
         }
-      }
 
-      setYoutubeLivePreviewActive(false);
-      setIsCameraReady(false);
+        isEndingGameRef.current = true;
 
-      const stoppedRecordingPath = await stopVideoRecording(false);
-      const recordedPath =
-        stoppedRecordingPath ??
-        lastRecordedVideoPathRef.current ??
-        (await getLatestReplaySegmentPath());
-
-      let finalVideoExists = false;
-      let finalVideoSize = 0;
-      if (recordedPath) {
         try {
-          finalVideoExists = await RNFS.exists(recordedPath);
-          if (finalVideoExists) {
-            const stat = await RNFS.stat(recordedPath);
-            finalVideoSize = Number(stat?.size || 0);
+          void setReplayResumeSnapshot(null);
+          void setLiveMatchSnapshot(null);
+          setReplayReturnRequestSync(null);
+          shouldStartRecordingRef.current = false;
+          pendingStartRecordingRef.current = false;
+          pendingYouTubeNativeStartRef.current = null;
+          setYoutubeLivePreparing(false);
+          await stopYouTubeNativeLive();
+          if (Platform.OS === 'windows') {
+            await stopWindowsFfmpegYouTubeLive('end-match');
           }
-        } catch (statError) {
-          console.log('[HistoryFinalize] final video stat failed', statError);
-        }
-      }
 
-      console.log('[Replay] recorded path before endGame:', recordedPath);
-      console.log('[EndMatchAfterReplay]', {
-        currentScoreAtEnd: getScoreSnapshotFromPlayerSettings(
-          playerSettingsRef.current || playerSettings,
-        ),
-        finalCommittedScore: getScoreSnapshotFromPlayerSettings(
-          playerSettingsRef.current || playerSettings,
-        ),
-        historyVideoPath: recordedPath,
-        replayVideoPath: undefined,
-        usedVideoPathForHistory: recordedPath,
-        isUsingReplayPathForHistory: false,
-        showedVideoNotAvailable: false,
-        reasonIfVideoUnavailable: recordedPath ? undefined : 'no-history-or-recording-file-found-yet',
-      });
-      console.log('[VideoAvailabilityMessage]', {
-        context: 'end-match-v14-winner-first',
-        messageShown: false,
-        checkedPath: recordedPath,
-        checkedPathType: 'history',
-        exists: finalVideoExists,
-        size: finalVideoSize,
-        shouldShowToUser: false,
-      });
+          const activeYouTubeBroadcastId = activeYouTubeBroadcastIdRef.current;
+          activeYouTubeBroadcastIdRef.current = '';
+          if (activeYouTubeBroadcastId) {
+            try {
+              await stopYouTubeLiveSession(activeYouTubeBroadcastId);
+              console.log('[YouTube Live] stopped broadcast:', activeYouTubeBroadcastId);
+            } catch (youtubeStopError) {
+              console.log('[YouTube Live] stop broadcast failed:', youtubeStopError);
+            }
+          }
 
-      let overlayLastSettings: PlayerSettings | undefined;
-      let overlayLastSnapshotScore: number[] = [];
-      try {
-        if (webcamFolderName) {
+          setYoutubeLivePreviewActive(false);
+          setIsCameraReady(false);
+
+          const stoppedRecordingPath = await stopVideoRecording(false);
+          const recordedPath =
+            stoppedRecordingPath ??
+            lastRecordedVideoPathRef.current ??
+            (await getLatestReplaySegmentPath());
+
+          let finalVideoExists = false;
+          let finalVideoSize = 0;
+          if (recordedPath) {
+            try {
+              finalVideoExists = await RNFS.exists(recordedPath);
+              if (finalVideoExists) {
+                const stat = await RNFS.stat(recordedPath);
+                finalVideoSize = Number(stat?.size || 0);
+              }
+            } catch (statError) {
+              console.log('[HistoryFinalize] final video stat failed', statError);
+            }
+          }
+
+          console.log('[Replay] recorded path before endGame:', recordedPath);
+          console.log('[EndMatchAfterReplay]', {
+            currentScoreAtEnd: getScoreSnapshotFromPlayerSettings(
+              playerSettingsRef.current || playerSettings,
+            ),
+            finalCommittedScore: getScoreSnapshotFromPlayerSettings(
+              playerSettingsRef.current || playerSettings,
+            ),
+            historyVideoPath: recordedPath,
+            replayVideoPath: undefined,
+            usedVideoPathForHistory: recordedPath,
+            isUsingReplayPathForHistory: false,
+            showedVideoNotAvailable: false,
+            reasonIfVideoUnavailable: recordedPath ? undefined : 'no-history-or-recording-file-found-yet',
+          });
+          console.log('[VideoAvailabilityMessage]', {
+            context: 'end-match',
+            messageShown: false,
+            checkedPath: recordedPath,
+            checkedPathType: 'history',
+            exists: finalVideoExists,
+            size: finalVideoSize,
+            shouldShowToUser: false,
+          });
+
+          if (!recordedPath) {
+            isEndingGameRef.current = false;
+
+            console.log('[VideoAvailabilityMessage]', {
+              context: 'end-match',
+              messageShown: true,
+              checkedPath: recordedPath,
+              checkedPathType: 'history',
+              exists: false,
+              size: 0,
+              shouldShowToUser: true,
+            });
+
+            Alert.alert(
+              i18n.t('txtwarn'),
+              totalTime > 0
+                ? i18n.t('msgVideoNotAvailableExit')
+                : i18n.t('msgNoRecordingExit'),
+              [
+                {
+                  text: i18n.t('txtCancel'),
+                  style: 'cancel',
+                },
+                {
+                  text: i18n.t('txtExitWithoutSaving'),
+                  style: 'destructive',
+                  onPress: () => {
+                    goBack();
+                  },
+                },
+              ],
+            );
+
+            return;
+          }
+
           await flushReplayScoreboardTimeline(webcamFolderName);
           const replayTimeline = await loadReplayScoreboardTimeline(webcamFolderName);
           const overlayLastSnapshot = replayTimeline?.entries?.length
             ? replayTimeline.entries[replayTimeline.entries.length - 1]
             : undefined;
-          overlayLastSettings = overlayLastSnapshot?.playerSettings as
+          const overlayLastSettings = overlayLastSnapshot?.playerSettings as
             | PlayerSettings
             | undefined;
-          overlayLastSnapshotScore = getFinalScoreSnapshot(overlayLastSettings);
-        }
-      } catch (timelineError) {
-        console.log('[HistoryFinalize] replay timeline load failed v14', timelineError);
-      }
+          const scoreBeforeFinalize = getFinalScoreSnapshot(playerSettings);
+          const latestStatePlayerSettings = playerSettingsRef.current || playerSettings;
+          const latestStateScore = getFinalScoreSnapshot(latestStatePlayerSettings);
+          const overlayLastSnapshotScore = getFinalScoreSnapshot(overlayLastSettings);
+          const useOverlayAsFinal =
+            overlayLastSettings &&
+            getScoreSnapshotTotal(overlayLastSnapshotScore) >=
+              getScoreSnapshotTotal(latestStateScore);
+          const finalPlayerSettings = cloneReplayValue(
+            useOverlayAsFinal ? overlayLastSettings : latestStatePlayerSettings,
+          );
+          const finalCommittedScore = getFinalScoreSnapshot(finalPlayerSettings);
+          const finalWinnerName =
+            winnerRef.current?.name ||
+            deriveWinnerNameFromScore(finalPlayerSettings, finalCommittedScore);
+          const finalTurn = totalTurnsRef.current;
+          const finalDurationSeconds = Math.max(
+            0,
+            Number(totalTimeRef.current || totalTime || 0),
+          );
+          const exportOptions = {
+            finalScore: finalCommittedScore,
+            winnerName: finalWinnerName,
+            finalPlayers: finalPlayerSettings?.playingPlayers,
+            finalTurn,
+            endedAt: Date.now(),
+            durationMs: finalDurationSeconds * 1000,
+          };
 
-      const scoreBeforeFinalize = getFinalScoreSnapshot(playerSettings);
-      const latestStatePlayerSettings = playerSettingsRef.current || playerSettings;
-      const latestStateScore = getFinalScoreSnapshot(latestStatePlayerSettings);
-      const useOverlayAsFinal =
-        overlayLastSettings &&
-        getScoreSnapshotTotal(overlayLastSnapshotScore) >=
-          getScoreSnapshotTotal(latestStateScore);
-      const finalPlayerSettings = commitCurrentRunStatsForPlayers(
-        cloneReplayValue(
-          useOverlayAsFinal ? overlayLastSettings : latestStatePlayerSettings,
-        ),
-        totalTurnsRef.current || totalTurns,
-      );
-      const finalCommittedScore = getFinalScoreSnapshot(finalPlayerSettings);
-      const finalWinnerPlayer =
-        winnerRef.current ||
-        deriveWinnerPlayerFromScore(finalPlayerSettings, finalCommittedScore);
-      const finalWinnerName = finalWinnerPlayer?.name;
-      const finalTurn = totalTurnsRef.current;
-      const finalDurationSeconds = Math.max(
-        0,
-        Number(totalTimeRef.current || totalTime || 0),
-      );
-      const exportOptions = {
-        finalScore: finalCommittedScore,
-        winnerName: finalWinnerName,
-        finalPlayers: finalPlayerSettings?.playingPlayers,
-        finalTurn,
-        endedAt: Date.now(),
-        durationMs: finalDurationSeconds * 1000,
-      };
-
-      if (webcamFolderName) {
-        if (Platform.OS === 'windows') {
-          try {
-            const historyFolder = await exportMatchToArchive(
-              webcamFolderName,
-              exportOptions,
-            );
-            await deleteReplayFolder(webcamFolderName, {includeArchive: false});
-            console.log('[History] savedVideoPath =', historyFolder);
-            console.log('[HistoryFinalize]', {
-              matchId: webcamFolderName,
-              scoreBeforeFinalize,
-              overlayLastSnapshotScore,
-              finalCommittedScore,
-              savedHistoryScore: finalCommittedScore,
-              winner: finalWinnerName,
-              historyRecordPath: historyFolder,
-              finalVideoPath: recordedPath,
-              finalVideoExists,
-              finalVideoSize,
-              marker: 'v14-end-button-winner-alert-before-exit',
-            });
-          } catch (exportError) {
-            console.log('[HistoryVideo] error', exportError);
+          if (Platform.OS === 'windows') {
+            try {
+              const historyFolder = await exportMatchToArchive(
+                webcamFolderName,
+                exportOptions,
+              );
+              await deleteReplayFolder(webcamFolderName, {includeArchive: false});
+              console.log('[History] savedVideoPath =', historyFolder);
+              console.log('[HistoryFinalize]', {
+                matchId: webcamFolderName,
+                scoreBeforeFinalize,
+                overlayLastSnapshotScore,
+                finalCommittedScore,
+                savedHistoryScore: finalCommittedScore,
+                winner: finalWinnerName,
+                historyRecordPath: historyFolder,
+                finalVideoPath: recordedPath,
+                finalVideoExists,
+                finalVideoSize,
+              });
+            } catch (exportError) {
+              console.log('[HistoryVideo] error', exportError);
+            }
+          } else if (saveToDeviceWhileStreaming) {
+            try {
+              const historyFolder = await exportMatchToArchive(
+                webcamFolderName,
+                exportOptions,
+              );
+              await deleteReplayFolder(webcamFolderName, {includeArchive: false});
+              console.log('[HistoryFinalize]', {
+                matchId: webcamFolderName,
+                scoreBeforeFinalize,
+                overlayLastSnapshotScore,
+                finalCommittedScore,
+                savedHistoryScore: finalCommittedScore,
+                winner: finalWinnerName,
+                historyRecordPath: historyFolder,
+                finalVideoPath: recordedPath,
+                finalVideoExists,
+                finalVideoSize,
+              });
+            } catch (exportError) {
+              console.log('[Replay] export full match failed:', exportError);
+            }
           }
-        } else if (saveToDeviceWhileStreaming) {
-          try {
-            const historyFolder = await exportMatchToArchive(
-              webcamFolderName,
-              exportOptions,
-            );
-            await deleteReplayFolder(webcamFolderName, {includeArchive: false});
-            console.log('[HistoryFinalize]', {
-              matchId: webcamFolderName,
-              scoreBeforeFinalize,
-              overlayLastSnapshotScore,
-              finalCommittedScore,
-              savedHistoryScore: finalCommittedScore,
-              winner: finalWinnerName,
-              historyRecordPath: historyFolder,
-              finalVideoPath: recordedPath,
-              finalVideoExists,
-              finalVideoSize,
-              marker: 'v14-end-button-winner-alert-before-exit',
-            });
-          } catch (exportError) {
-            console.log('[Replay] export full match failed:', exportError);
-          }
-        }
-      }
 
-      if (gameSettings) {
-        dispatch(
-          gameActions.endGame({
-            realm,
-            gameSettings: {
-              ...gameSettings,
-              players: finalPlayerSettings || playerSettings,
-              totalTime: finalDurationSeconds || totalTime,
-              webcamFolderName,
-              replayPath: recordedPath,
-              saveToDeviceWhileStreaming,
-            },
-          }),
-        );
-      }
-
-      clearActiveGameplaySessionSync();
-      setReplayResumeSnapshotSync(null);
-      setLiveMatchSnapshotSync(null);
-
-      if (finalPlayerSettings) {
-        setPlayerSettings(finalPlayerSettings);
-      }
-
-      if (finalWinnerPlayer?.name) {
-        const finalWinnerForUi = cloneReplayValue(finalWinnerPlayer);
-        winnerRef.current = finalWinnerForUi;
-        setWinner(finalWinnerForUi);
-        setIsStarted(false);
-        setIsPaused(false);
-        setIsMatchPaused(true);
-
-        const shouldUseCaromWinnerSummary =
-          isCaromGame(gameSettings?.category) &&
-          gameSettings?.mode?.mode === 'pro' &&
-          (finalPlayerSettings?.playingPlayers?.length || 0) === 2;
-
-        console.log('[EndMatchWinner] v14-end-button-winner-alert-before-exit', {
-          winner: finalWinnerName,
-          finalCommittedScore,
-          showCaromSummary: shouldUseCaromWinnerSummary,
-        });
-
-        isEndingGameRef.current = false;
-
-        if (shouldUseCaromWinnerSummary) {
-          return;
-        }
-
-        winnerAlertShownRef.current = true;
-        Alert.alert(
-          i18n.t('txtWin'),
-          i18n.t('msgWinner', {player: finalWinnerForUi.name}),
-          [
-            {
-              text: i18n.t('stop'),
-              onPress: () => {
-                winnerAlertShownRef.current = false;
-                navigateBackAfterWinner();
+          dispatch(
+            gameActions.endGame({
+              realm,
+              gameSettings: {
+                ...gameSettings,
+                players: finalPlayerSettings || playerSettings,
+                totalTime: finalDurationSeconds || totalTime,
+                webcamFolderName,
+                replayPath: recordedPath,
+                saveToDeviceWhileStreaming,
               },
-            },
-          ],
-          {cancelable: false},
-        );
-        return;
-      }
+            }),
+          );
 
-      // Nếu hòa hoặc thiếu tên người chơi, vẫn không thoát âm thầm ngay.
-      // Người dùng phải xác nhận Kết thúc trong thông báo này.
-      isEndingGameRef.current = false;
-      Alert.alert(
-        i18n.t('stop'),
-        i18n.t('msgStopGame'),
-        [
-          {
-            text: i18n.t('stop'),
-            onPress: () => {
-              navigateBackAfterWinner();
-            },
-          },
-        ],
-        {cancelable: false},
-      );
-    } catch (error) {
-      isEndingGameRef.current = false;
-      console.error(JSON.stringify(error));
-    }
-  }, [
-    dispatch,
-    realm,
-    totalTime,
-    gameSettings,
-    playerSettings,
-    saveToDeviceWhileStreaming,
-    webcamFolderName,
-    isStarted,
-    navigateBackAfterWinner,
+          clearActiveGameplaySessionSync();
+          setReplayResumeSnapshotSync(null);
+          setLiveMatchSnapshotSync(null);
+
+          goBack();
+        } catch (error) {
+          isEndingGameRef.current = false;
+          console.error(JSON.stringify(error));
+        }
+      },
+    },
   ]);
+}, [
+  dispatch,
+  realm,
+  totalTime,
+  gameSettings,
+  playerSettings,
+  saveToDeviceWhileStreaming,
+  webcamFolderName,
+]);
 
   const onReset = useCallback(() => {
     pendingNewGameAfterViolateRef.current = false;

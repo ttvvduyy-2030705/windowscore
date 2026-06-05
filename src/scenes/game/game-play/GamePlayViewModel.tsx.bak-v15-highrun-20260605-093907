@@ -98,44 +98,6 @@ const getTopTwoRuns = (player: Player, currentPoint: number) => {
   };
 };
 
-const commitCurrentRunStatsForPlayers = (
-  settings?: PlayerSettings,
-  totalTurnsValue?: number,
-): PlayerSettings | undefined => {
-  if (!settings?.playingPlayers?.length) {
-    return settings;
-  }
-
-  const completedTurns = Math.max(1, Number(totalTurnsValue || 0) + 1);
-
-  return {
-    ...settings,
-    playingPlayers: settings.playingPlayers.map(player => {
-      const currentPoint = getSafeRunPoint(player.proMode?.currentPoint);
-
-      if (!player.proMode || currentPoint <= 0) {
-        return player;
-      }
-
-      const {highestRate, secondHighestRate} = getTopTwoRuns(player, currentPoint);
-      const average = Number(
-        (Number(player.totalPoint || 0) / completedTurns).toFixed(2),
-      );
-
-      return {
-        ...player,
-        proMode: {
-          ...player.proMode,
-          highestRate,
-          secondHighestRate,
-          average,
-          currentPoint: 0,
-        },
-      };
-    }),
-  };
-};
-
 const playCountdownBeepSafely = () => {
   try {
     const soundModule = Sound as any;
@@ -2061,6 +2023,9 @@ const GamePlayViewModel = () => {
                   0,
                   Number(currentPlayer.proMode?.currentPoint || 0) + actualAddedPoint,
                 );
+                const updatedRuns = actualAddedPoint > 0
+                  ? getTopTwoRuns(currentPlayer, updatedCurrentPoint)
+                  : undefined;
                 const updatedAverage = Number(
                   (updatedTotalPoint / Math.max(1, totalTurns + 1)).toFixed(2),
                 );
@@ -2071,9 +2036,7 @@ const GamePlayViewModel = () => {
                   proMode: currentPlayer.proMode
                     ? {
                         ...currentPlayer.proMode,
-                        // v15: Không ghi High Run khi đang cộng từng điểm trong cùng 1 lượt.
-                        // HR1/HR2 hiển thị live sẽ được tính từ currentPoint ở PlayerViewModel,
-                        // còn HR thật chỉ được chốt khi đổi lượt hoặc kết thúc trận.
+                        ...(updatedRuns || {}),
                         average: updatedAverage,
                         currentPoint: updatedCurrentPoint,
                       }
@@ -3851,11 +3814,8 @@ const GamePlayViewModel = () => {
         overlayLastSettings &&
         getScoreSnapshotTotal(overlayLastSnapshotScore) >=
           getScoreSnapshotTotal(latestStateScore);
-      const finalPlayerSettings = commitCurrentRunStatsForPlayers(
-        cloneReplayValue(
-          useOverlayAsFinal ? overlayLastSettings : latestStatePlayerSettings,
-        ),
-        totalTurnsRef.current || totalTurns,
+      const finalPlayerSettings = cloneReplayValue(
+        useOverlayAsFinal ? overlayLastSettings : latestStatePlayerSettings,
       );
       const finalCommittedScore = getFinalScoreSnapshot(finalPlayerSettings);
       const finalWinnerPlayer =
