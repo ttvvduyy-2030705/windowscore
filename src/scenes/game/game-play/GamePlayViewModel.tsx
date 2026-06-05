@@ -4216,38 +4216,158 @@ const GamePlayViewModel = () => {
     }
   };
 
+  const resolveAplusTargetScoreFromSettings = useCallback(() => {
+    const rawTarget =
+      (gameSettings as any)?.players?.goal?.goal ??
+      (gameSettings as any)?.players?.goal ??
+      (gameSettings as any)?.goal ??
+      (gameSettings as any)?.targetScore ??
+      (playerSettings as any)?.goal ??
+      (playerSettings as any)?.targetScore ??
+      (playerSettings?.playingPlayers?.[0] as any)?.goal ??
+      (playerSettings?.playingPlayers?.[1] as any)?.goal ??
+      0;
+
+    const num = Number(rawTarget);
+    return Number.isFinite(num) && num > 0 ? num : 0;
+  }, [gameSettings, playerSettings]);
+
+  const resolveAplusCountdownBaseTimeFromSettings = useCallback(() => {
+    const rawBase =
+      (gameSettings as any)?.mode?.countdownTime ??
+      (gameSettings as any)?.countdownTime ??
+      (gameSettings as any)?.countdown?.time ??
+      (gameSettings as any)?.timerDuration ??
+      countdownTime ??
+      40;
+
+    const num = Number(rawBase);
+    return Number.isFinite(num) && num > 0 ? num : 40;
+  }, [gameSettings, countdownTime]);
+
+  const aplusLiveScoreLastSignatureRef = useRef('');
+  const aplusLiveScoreLastPushAtRef = useRef(0);
+
+  const pushAplusLiveScoreSnapshot = useCallback(
+    async (reason: string, force = false) => {
+      if (!gameSettings?.aplusLiveScore?.enabled) {
+        return;
+      }
+
+      const players = playerSettings?.playingPlayers || [];
+      const score1 = Number(players[0]?.totalPoint || 0);
+      const score2 = Number(players[1]?.totalPoint || 0);
+      const safeCountdownTime = Math.max(0, Math.round(Number(countdownTime ?? 0)));
+      const safeCountdownBaseTime = resolveAplusCountdownBaseTimeFromSettings();
+      const safeTargetScore = resolveAplusTargetScoreFromSettings();
+      const safeTurns = Math.max(0, Math.round(Number(totalTurns ?? 0)));
+      const safeTotalTime = Math.max(0, Math.round(Number(totalTime ?? 0)));
+      const running = Boolean(isStarted && !isPaused && !isMatchPaused && !winner);
+
+      const signature = [
+        gameSettings?.aplusLiveScore?.matchId || '',
+        score1,
+        score2,
+        safeTurns,
+        safeTotalTime,
+        safeCountdownTime,
+        safeCountdownBaseTime,
+        safeTargetScore,
+        currentPlayerIndex,
+        winner ? 'winner' : '',
+        isStarted ? 'started' : 'not-started',
+        isPaused ? 'paused' : 'not-paused',
+        isMatchPaused ? 'match-paused' : 'match-not-paused',
+        running ? 'timer-running' : 'timer-stopped',
+      ].join('|');
+
+      const now = Date.now();
+      const sameAsLast = signature === aplusLiveScoreLastSignatureRef.current;
+      const tooSoon = now - aplusLiveScoreLastPushAtRef.current < 250;
+
+      // Để countdown bám app: vẫn cho gửi tối đa nhanh hơn, có chặn request trùng quá sát khi force=true.
+      // Tránh spam nhiều request trùng trong cùng một nhịp render.
+      if (!force && sameAsLast) {
+        return;
+      }
+
+      if (tooSoon && sameAsLast) {
+        return;
+      }
+
+      aplusLiveScoreLastSignatureRef.current = signature;
+      aplusLiveScoreLastPushAtRef.current = now;
+
+      try {
+        await pushAplusLiveScoreUpdate({
+          gameSettings,
+          playerSettings,
+          totalTurns: safeTurns,
+          totalTime: safeTotalTime,
+          countdownTime: safeCountdownTime,
+          countdownBaseTime: safeCountdownBaseTime,
+          targetScore: safeTargetScore,
+          currentPlayerIndex,
+          winner,
+          isStarted,
+          isPaused,
+          isMatchPaused,
+        });
+
+        console.log('[AplusLiveScore] push ok:', {
+          reason,
+          score1,
+          score2,
+          turnCount: safeTurns,
+          countdownTime: safeCountdownTime,
+          countdownBaseTime: safeCountdownBaseTime,
+          targetScore: safeTargetScore,
+          running,
+        });
+      } catch (error: any) {
+        console.log('[AplusLiveScore] push failed:', error?.message || error);
+      }
+    },
+    [
+      gameSettings,
+      playerSettings,
+      totalTurns,
+      totalTime,
+      countdownTime,
+      currentPlayerIndex,
+      winner,
+      isStarted,
+      isPaused,
+      isMatchPaused,
+      resolveAplusCountdownBaseTimeFromSettings,
+      resolveAplusTargetScoreFromSettings,
+    ],
+  );
+
+  // Push ngay khi điểm/lượt/timer thay đổi, giảm độ trễ so với debounce cũ.
+  useEffect(() => {
+    const timeout = setTimeout(() => {
+      void pushAplusLiveScoreSnapshot('state-change-fast', false);
+    }, 45);
+
+    return () => clearTimeout(timeout);
+  }, [pushAplusLiveScoreSnapshot]);
+
+  // Push nhịp 350ms để web nhận live score + countdown song song với app,
+  // kể cả lúc React không render đúng nhịp hoặc API/web polling bị lệch.
   useEffect(() => {
     if (!gameSettings?.aplusLiveScore?.enabled) {
       return;
     }
 
-    const timeout = setTimeout(() => {
-      void pushAplusLiveScoreUpdate({
-        gameSettings,
-        playerSettings,
-        totalTurns,
-        totalTime,
-        currentPlayerIndex,
-        winner,
-        isStarted,
-        isPaused,
-        isMatchPaused,
-      }).catch(error => {
-        console.log('[AplusLiveScore] push failed:', error?.message || error);
-      });
-    }, 300);
+    const timer = setInterval(() => {
+      void pushAplusLiveScoreSnapshot('parallel-fast-350ms-sync', true);
+    }, 350);
 
-    return () => clearTimeout(timeout);
+    return () => clearInterval(timer);
   }, [
-    gameSettings,
-    playerSettings,
-    totalTurns,
-    totalTime,
-    currentPlayerIndex,
-    winner,
-    isStarted,
-    isPaused,
-    isMatchPaused,
+    gameSettings?.aplusLiveScore?.enabled,
+    pushAplusLiveScoreSnapshot,
   ]);
 
   return useMemo(() => {

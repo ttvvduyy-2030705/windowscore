@@ -310,6 +310,7 @@ const getRouteTournamentName = (routeParams?: LivestreamRouteParams | any) => {
 };
 
 const SETTINGS_DRAFT_STORAGE_KEY = '@APLUS_GAME_SETTINGS_DRAFT_V1';
+const APLUS_TOURNAMENT_AUTO_REFRESH_MS = 30000;
 
 const cloneSettingsValue = <T,>(value: T): T => {
   if (value == null) {
@@ -557,6 +558,7 @@ const GameSettingsViewModel = (props: Props) => {
   const [aplusLiveStatus, setAplusLiveStatus] = useState('Chưa kết nối web Aplus.');
   const [aplusLoadingTournaments, setAplusLoadingTournaments] = useState(false);
   const [aplusLoadingMatch, setAplusLoadingMatch] = useState(false);
+  const aplusTournamentRefreshInFlightRef = useRef(false);
   const [youtubeLiveLoading, setYoutubeLiveLoading] = useState(false);
   const [youtubeLiveLoadingMessage, setYoutubeLiveLoadingMessage] = useState('Đang tải phiên live');
 
@@ -648,29 +650,103 @@ const GameSettingsViewModel = (props: Props) => {
   }, [category, gameSettingsMode, playerSettings]);
 
   const onLoadAplusTournaments = useCallback(async () => {
-    if (aplusLoadingTournaments) {
+    if (aplusLoadingTournaments || aplusTournamentRefreshInFlightRef.current) {
       return;
     }
 
+    aplusTournamentRefreshInFlightRef.current = true;
     setAplusLoadingTournaments(true);
-    setAplusLiveStatus('Đang tải danh sách giải...');
+    setAplusLiveStatus('Đang tải danh sách giải mới nhất từ web...');
 
     try {
       const tournaments = await fetchAplusTournaments();
+
+      // Bấm Tải giải = lấy danh sách mới và bỏ chọn giải/trận cũ.
+      // Không giữ previousSelectedId nữa, tránh app bám lại giải cũ đã xoá trên web.
       setAplusTournaments(tournaments);
       setSelectedAplusTournamentIndex(0);
       setSelectedAplusMatch(null);
+      setAplusMatchNumber('');
+
       setAplusLiveStatus(
         tournaments.length
-          ? `Đã tải ${tournaments.length} giải. Chọn giải rồi nhập số trận.`
+          ? `Đã tải ${tournaments.length} giải mới nhất. Đang chọn giải mới nhất trong danh sách.`
           : 'Web chưa trả về giải nào.',
       );
     } catch (error: any) {
       setAplusLiveStatus(error?.message || 'Không tải được danh sách giải.');
     } finally {
+      aplusTournamentRefreshInFlightRef.current = false;
       setAplusLoadingTournaments(false);
     }
   }, [aplusLoadingTournaments]);
+
+  useEffect(() => {
+    if (!aplusTournaments.length) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const refreshSilently = async () => {
+      if (cancelled || aplusLoadingTournaments || aplusTournamentRefreshInFlightRef.current) {
+        return;
+      }
+
+      const previousSelectedId =
+        selectedAplusTournament?.id ||
+        selectedAplusMatch?.tournamentId ||
+        '';
+
+      aplusTournamentRefreshInFlightRef.current = true;
+
+      try {
+        const tournaments = await fetchAplusTournaments();
+
+        if (cancelled) {
+          return;
+        }
+
+        setAplusTournaments(tournaments);
+        setSelectedAplusTournamentIndex(() => {
+          if (!tournaments.length) {
+            return 0;
+          }
+
+          const sameIndex = previousSelectedId
+            ? tournaments.findIndex(tournament => tournament.id === previousSelectedId)
+            : -1;
+
+          return sameIndex >= 0 ? sameIndex : 0;
+        });
+
+        if (
+          selectedAplusMatch?.tournamentId &&
+          !tournaments.some(tournament => tournament.id === selectedAplusMatch.tournamentId)
+        ) {
+          setSelectedAplusMatch(null);
+          setAplusMatchNumber('');
+          setAplusLiveStatus('Giải/trận đang chọn đã không còn trên web. App đã cập nhật danh sách mới.');
+        }
+      } catch (error) {
+        console.log('[AplusLiveScore] Silent tournament refresh failed:', error);
+      } finally {
+        aplusTournamentRefreshInFlightRef.current = false;
+      }
+    };
+
+    const timer = setInterval(refreshSilently, APLUS_TOURNAMENT_AUTO_REFRESH_MS);
+
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [
+    aplusTournaments.length,
+    aplusLoadingTournaments,
+    selectedAplusTournament?.id,
+    selectedAplusMatch?.tournamentId,
+  ]);
 
   const onPrevAplusTournament = useCallback(() => {
     setSelectedAplusTournamentIndex(prev => {
