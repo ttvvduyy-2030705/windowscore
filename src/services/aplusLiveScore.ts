@@ -13,6 +13,7 @@ type HttpMethod = 'GET' | 'POST' | 'PATCH';
 export type AplusTournament = {
   id: string;
   name: string;
+  gameType?: 'pool' | 'carom' | 'snooker' | 'libre' | string;
   raw?: any;
 };
 
@@ -23,6 +24,11 @@ export type AplusLiveMatch = {
   tournamentName?: string;
   sessionToken?: string;
   lockExpiresAt?: string;
+  status?: string;
+  isLive?: boolean;
+  isFinished?: boolean;
+  liveLocked?: boolean;
+  liveLockDeviceName?: string;
   player1: Partial<Player>;
   player2: Partial<Player>;
   raw?: any;
@@ -189,8 +195,47 @@ const getCachedAplusLiveScoreSessionToken = (
   return cachedToken || toText(config?.sessionToken);
 };
 
+const normalizeErrorMessage = (error: unknown) =>
+  String((error as Error)?.message || error || '').toLowerCase();
+
+const isAplusMatchFinishedError = (error: unknown) => {
+  const anyError = error as any;
+  const message = normalizeErrorMessage(error);
+
+  return (
+    anyError?.code === 'MATCH_FINISHED' ||
+    message.includes('trận đấu đã kết thúc') ||
+    message.includes('tran dau da ket thuc') ||
+    message.includes('đã kết thúc') ||
+    message.includes('da ket thuc')
+  );
+};
+
+const isAplusMatchLockedError = (error: unknown) => {
+  const anyError = error as any;
+  const message = normalizeErrorMessage(error);
+
+  return (
+    anyError?.code === 'MATCH_LOCKED' ||
+    anyError?.status === 423 ||
+    message.includes('trận đấu đang diễn ra') ||
+    message.includes('tran dau dang dien ra') ||
+    message.includes('đang diễn ra trên') ||
+    message.includes('dang dien ra tren') ||
+    message.includes('máy khác') ||
+    message.includes('may khac')
+  );
+};
+
+const isAplusLiveScoreClaimBlockError = (error: unknown) =>
+  isAplusMatchFinishedError(error) || isAplusMatchLockedError(error);
+
 const isLiveSessionTokenError = (error: unknown) => {
-  const message = String((error as Error)?.message || error || '').toLowerCase();
+  if (isAplusLiveScoreClaimBlockError(error)) {
+    return false;
+  }
+
+  const message = normalizeErrorMessage(error);
 
   return (
     message.includes('session') ||
@@ -285,11 +330,14 @@ const requestJson = async (
         data,
       });
 
-      throw new Error(
-        typeof data === 'string'
-          ? data
-          : data?.message || data?.error || `HTTP ${response.status}`,
-      );
+      const message = typeof data === 'string'
+        ? data
+        : data?.message || data?.error || `HTTP ${response.status}`;
+      const error = new Error(message);
+      (error as any).status = response.status;
+      (error as any).code = typeof data === 'string' ? undefined : data?.code;
+      (error as any).data = data;
+      throw error;
     }
 
     console.log('[AplusLiveScore][HTTP_OK]', {
@@ -377,10 +425,60 @@ const getArrayFromResponse = (data: any): any[] => {
 
 const getObjectFromResponse = (data: any) => data?.match || data?.data?.match || data?.data || data;
 
+
+const isFinishedAplusMatchStatus = (value?: unknown) => {
+  const status = toText(value).toLowerCase();
+  return [
+    'finished',
+    'completed',
+    'complete',
+    'ended',
+    'done',
+    'closed',
+    'cancelled',
+    'canceled',
+    'walkover',
+    'forfeit',
+  ].includes(status);
+};
+
+const isFinishedAplusMatchRaw = (match: any) =>
+  Boolean(
+    match?.isFinished ||
+      match?.finishedAt ||
+      match?.endedAt ||
+      match?.completedAt ||
+      isFinishedAplusMatchStatus(match?.status) ||
+      isFinishedAplusMatchStatus(match?.liveStatus) ||
+      isFinishedAplusMatchStatus(match?.matchStatus),
+  );
+
+
+const normalizeTournamentGameType = (value?: unknown) => {
+  const raw = toText(value).toLowerCase();
+
+  if (!raw) return '';
+  if (raw.includes('snooker')) return 'snooker';
+  if (raw.includes('libre') || raw.includes('free')) return 'libre';
+  if (raw.includes('carom') || raw.includes('carambole') || raw.includes('3c') || raw.includes('3-cushion') || raw.includes('3 cushion')) return 'carom';
+  if (raw.includes('pool') || raw.includes('9-ball') || raw.includes('10-ball') || raw.includes('8-ball')) return 'pool';
+
+  if (raw === 'snooker' || raw === 'libre' || raw === 'carom' || raw === 'pool') return raw;
+  return raw;
+};
+
 const normalizeTournament = (item: any, index: number): AplusTournament => {
   const id = toText(item?._id) || toText(item?.id) || toText(item?.slug) || String(index + 1);
   const name = toText(item?.name) || toText(item?.title) || `Giải ${index + 1}`;
-  return {id, name, raw: item};
+  const gameType = normalizeTournamentGameType(
+    item?.gameType ||
+      item?.type ||
+      item?.gameMode ||
+      item?.category ||
+      item?.discipline,
+  );
+
+  return {id, name, gameType, raw: item};
 };
 
 const normalizeCountryCode = (value?: unknown) => {
@@ -621,6 +719,11 @@ const normalizeMatch = (
       toText(match?.tournamentName) ||
       toText(match?.tournament?.name) ||
       tournament.name,
+    status: toText(match?.status),
+    isLive: Boolean(match?.isLive),
+    isFinished: isFinishedAplusMatchRaw(match),
+    liveLocked: Boolean(match?.liveLocked),
+    liveLockDeviceName: toText(match?.liveLockDeviceName || match?.liveDeviceName),
     player1,
     player2,
     raw: match,
@@ -801,21 +904,42 @@ export const fetchAplusMatchByNumber = async (
 export const lockAplusLiveScoreMatch = async (
   match: AplusLiveMatch,
 ): Promise<AplusLiveMatch> => {
+  if (match?.isFinished || isFinishedAplusMatchRaw(match?.raw)) {
+    forgetAplusLiveScoreSession(match.id);
+    throw new Error(`Trận ${match.matchNumber || ''} đã kết thúc rồi, không thể vào lại.`.trim());
+  }
+
   const deviceId = await getDeviceId();
   const appVersion = typeof DeviceInfo.getVersion === 'function'
     ? DeviceInfo.getVersion()
     : '';
 
-  const data = await requestJson(
-    'POST',
-    APLUS_LIVE_SCORE_ENDPOINTS.claimMatch,
-    {matchId: match.id},
-    {
-      deviceId,
-      deviceName: APLUS_LIVE_SCORE_DEVICE_NAME,
-      appVersion,
-    },
-  );
+  let data: any;
+
+  try {
+    data = await requestJson(
+      'POST',
+      APLUS_LIVE_SCORE_ENDPOINTS.claimMatch,
+      {matchId: match.id},
+      {
+        deviceId,
+        deviceName: APLUS_LIVE_SCORE_DEVICE_NAME,
+        appVersion,
+      },
+    );
+  } catch (error: any) {
+    if (isAplusMatchFinishedError(error)) {
+      forgetAplusLiveScoreSession(match.id);
+      throw new Error(`Trận ${match.matchNumber || ''} đã kết thúc rồi, không thể vào lại.`.trim());
+    }
+
+    if (isAplusMatchLockedError(error)) {
+      const message = error?.message || `Trận ${match.matchNumber || ''} đang diễn ra trên máy khác.`;
+      throw new Error(message);
+    }
+
+    throw error;
+  }
 
   const claimedMatch = data?.match || match.raw;
   const sessionToken = toText(data?.sessionToken);
@@ -975,7 +1099,21 @@ export const pushAplusLiveScoreUpdate = async ({
       sessionToken,
     );
 
-  let sessionToken = await getOrClaimAplusLiveScoreSessionToken(config);
+  let sessionToken = '';
+
+  try {
+    sessionToken = await getOrClaimAplusLiveScoreSessionToken(config);
+  } catch (error) {
+    if (isAplusLiveScoreClaimBlockError(error)) {
+      console.log('[AplusLiveScore][PUSH_SCORE_BLOCKED_BEFORE_SEND]', {
+        matchId: config.matchId,
+        reason: (error as Error)?.message || error,
+      });
+      forgetAplusLiveScoreSession(config.matchId);
+      return;
+    }
+    throw error;
+  }
 
   try {
     const result = await sendScore(sessionToken);
@@ -986,6 +1124,15 @@ export const pushAplusLiveScoreUpdate = async ({
       result,
     });
   } catch (error) {
+    if (isAplusLiveScoreClaimBlockError(error)) {
+      console.log('[AplusLiveScore][PUSH_SCORE_BLOCKED_BY_MATCH_STATE]', {
+        matchId: config.matchId,
+        reason: (error as Error)?.message || error,
+      });
+      forgetAplusLiveScoreSession(config.matchId);
+      return;
+    }
+
     if (!isLiveSessionTokenError(error)) {
       throw error;
     }
@@ -1023,12 +1170,35 @@ export const heartbeatAplusLiveScoreMatch = async (config?: AplusLiveScoreConfig
       sessionToken,
     );
 
-  let sessionToken = await getOrClaimAplusLiveScoreSessionToken(config);
+  let sessionToken = '';
+
+  try {
+    sessionToken = await getOrClaimAplusLiveScoreSessionToken(config);
+  } catch (error) {
+    if (isAplusLiveScoreClaimBlockError(error)) {
+      console.log('[AplusLiveScore][HEARTBEAT_BLOCKED_BEFORE_SEND]', {
+        matchId: config.matchId,
+        reason: (error as Error)?.message || error,
+      });
+      forgetAplusLiveScoreSession(config.matchId);
+      return;
+    }
+    throw error;
+  }
 
   try {
     await sendHeartbeat(sessionToken);
     rememberAplusLiveScoreSession(config.matchId, sessionToken, config.lockExpiresAt);
   } catch (error) {
+    if (isAplusLiveScoreClaimBlockError(error)) {
+      console.log('[AplusLiveScore][PUSH_SCORE_BLOCKED_BY_MATCH_STATE]', {
+        matchId: config.matchId,
+        reason: (error as Error)?.message || error,
+      });
+      forgetAplusLiveScoreSession(config.matchId);
+      return;
+    }
+
     if (!isLiveSessionTokenError(error)) {
       throw error;
     }
@@ -1055,7 +1225,17 @@ export const finishAplusLiveScoreMatch = async (
     return;
   }
 
-  const sessionToken = await getOrClaimAplusLiveScoreSessionToken(config);
+  let sessionToken = '';
+
+  try {
+    sessionToken = await getOrClaimAplusLiveScoreSessionToken(config);
+  } catch (error) {
+    if (isAplusLiveScoreClaimBlockError(error)) {
+      forgetAplusLiveScoreSession(config.matchId);
+      return;
+    }
+    throw error;
+  }
 
   await requestJson(
     'POST',
@@ -1076,13 +1256,19 @@ export const releaseAplusLiveScoreMatch = async (config?: AplusLiveScoreConfig) 
     return;
   }
 
-  await requestJson(
-    'POST',
-    APLUS_LIVE_SCORE_ENDPOINTS.releaseMatch,
-    {matchId: config.matchId},
-    {},
-    sessionToken,
-  );
+  try {
+    await requestJson(
+      'POST',
+      APLUS_LIVE_SCORE_ENDPOINTS.releaseMatch,
+      {matchId: config.matchId},
+      {},
+      sessionToken,
+    );
+  } catch (error) {
+    if (!isAplusLiveScoreClaimBlockError(error) && !isLiveSessionTokenError(error)) {
+      throw error;
+    }
+  }
 
   forgetAplusLiveScoreSession(config.matchId);
 };

@@ -183,6 +183,8 @@ type GameplayLiveRouteParams = {
   liveAccountName?: string;
   liveAccountId?: string;
   liveSetupToken?: string;
+  gameplaySessionKey?: string;
+  forceNewGameplaySession?: boolean;
 };
 
 const normalizeGameplayLivestreamPlatform = (value: any) => {
@@ -298,6 +300,7 @@ type ReplayResumeSnapshot = {
   proModeEnabled: boolean;
   restoreOnNextFocus?: boolean;
   savedAt?: number;
+  aplusLiveMatchIdentity?: string;
 };
 
 type ReplayReturnRequest = {
@@ -353,6 +356,22 @@ const LIVE_MATCH_SNAPSHOT_STORAGE_KEY = '@APLUS_LIVE_MATCH_SNAPSHOT_V1';
 
 type LiveMatchSnapshot = ReplayResumeSnapshot & {
   configSignature?: string;
+  aplusLiveMatchIdentity?: string;
+};
+
+const getAplusLiveMatchIdentityFromSettings = (settings: any) => {
+  const config = settings?.aplusLiveScore;
+  const matchId = String(config?.matchId || '').trim();
+
+  if (!matchId) {
+    return '';
+  }
+
+  return [
+    String(config?.tournamentId || '').trim(),
+    matchId,
+    String(config?.matchNumber || config?.matchCode || '').trim(),
+  ].join('|');
 };
 
 const buildGameSettingsSignature = (settings: any) => {
@@ -362,6 +381,13 @@ const buildGameSettingsSignature = (settings: any) => {
       mode: settings?.mode ?? null,
       playerNumber: settings?.players?.playerNumber ?? null,
       goal: settings?.players?.goal?.goal ?? null,
+      aplusLiveMatchIdentity: getAplusLiveMatchIdentityFromSettings(settings),
+      playerNames: (settings?.players?.playingPlayers || [])
+        .slice(0, 2)
+        .map((player: any) => ({
+          name: String(player?.name || ''),
+          countryCode: String(player?.countryCode || player?.flag || ''),
+        })),
     });
   } catch (_error) {
     return undefined;
@@ -404,12 +430,21 @@ const getLiveMatchSnapshot = async (): Promise<LiveMatchSnapshot | null> => {
 const isLiveMatchSnapshotUsable = (
   snapshot: LiveMatchSnapshot | null,
   expectedConfigSignature?: string,
+  expectedAplusLiveMatchIdentity = '',
 ) => {
   if (!snapshot?.playerSettings) {
     return false;
   }
 
   if (snapshot.savedAt && Date.now() - snapshot.savedAt > 6 * 60 * 60 * 1000) {
+    return false;
+  }
+
+  if (expectedAplusLiveMatchIdentity) {
+    if (snapshot.aplusLiveMatchIdentity !== expectedAplusLiveMatchIdentity) {
+      return false;
+    }
+  } else if (snapshot.aplusLiveMatchIdentity) {
     return false;
   }
 
@@ -548,6 +583,7 @@ type ActiveGameplaySession = {
   webcamFolderName?: string;
   savedAt?: number;
   source?: string;
+  aplusLiveMatchIdentity?: string;
 };
 
 const ACTIVE_GAMEPLAY_SESSION_MAX_AGE_MS = 6 * 60 * 60 * 1000;
@@ -570,12 +606,24 @@ const clearActiveGameplaySessionSync = () => {
   setActiveGameplaySessionSync(null);
 };
 
-const isActiveGameplaySessionReusable = (session: ActiveGameplaySession | null) => {
+const isActiveGameplaySessionReusable = (
+  session: ActiveGameplaySession | null,
+  expectedAplusLiveMatchIdentity = '',
+) => {
   if (!session?.matchSessionId || !session?.webcamFolderName) {
     return false;
   }
 
   if (session.savedAt && Date.now() - session.savedAt > ACTIVE_GAMEPLAY_SESSION_MAX_AGE_MS) {
+    return false;
+  }
+
+  if (expectedAplusLiveMatchIdentity) {
+    return session.aplusLiveMatchIdentity === expectedAplusLiveMatchIdentity;
+  }
+
+  // Không cho trận thường/local tái dùng session của một trận Aplus trước đó.
+  if (session.aplusLiveMatchIdentity) {
     return false;
   }
 
@@ -648,8 +696,17 @@ const isReplayResumeSnapshotMatch = (
   snapshot: ReplayResumeSnapshot | null,
   expectedFolderName?: string | null,
   expectedMatchSessionId?: string | null,
+  expectedAplusLiveMatchIdentity = '',
 ) => {
   if (!isReplayResumeSnapshotReusable(snapshot)) {
+    return false;
+  }
+
+  if (expectedAplusLiveMatchIdentity) {
+    if (snapshot?.aplusLiveMatchIdentity !== expectedAplusLiveMatchIdentity) {
+      return false;
+    }
+  } else if (snapshot?.aplusLiveMatchIdentity) {
     return false;
   }
 
@@ -693,6 +750,15 @@ const GamePlayViewModel = () => {
   );
   const shouldUseYouTubeLive = selectedLivestreamPlatform === 'youtube';
   const shouldUseLocalRecordingOnly = selectedLivestreamPlatform !== 'youtube';
+  const currentAplusLiveMatchIdentity = useMemo(
+    () => getAplusLiveMatchIdentityFromSettings(gameSettings),
+    [
+      (gameSettings as any)?.aplusLiveScore?.tournamentId,
+      (gameSettings as any)?.aplusLiveScore?.matchId,
+      (gameSettings as any)?.aplusLiveScore?.matchNumber,
+    ],
+  );
+
   const gameSettingsSignature = useMemo(() => {
     return buildGameSettingsSignature(gameSettings);
   }, [
@@ -700,6 +766,7 @@ const GamePlayViewModel = () => {
     gameSettings?.mode,
     gameSettings?.players?.playerNumber,
     gameSettings?.players?.goal?.goal,
+    currentAplusLiveMatchIdentity,
   ]);
   const cameraRef = useRef<Camera>(null);
   const matchCountdownRef = useRef(null);
@@ -759,24 +826,39 @@ const GamePlayViewModel = () => {
   const isEndingGameRef = useRef(false);
   const appliedReplayResumeSnapshotRef = useRef(false);
   const initializedGameStateRef = useRef(false);
+  const initializedGameplayStateKeyRef = useRef('');
   const replayResumeSnapshotOnMount = getReplayResumeSnapshotSync();
   const replayReturnRequestOnMount = getReplayReturnRequestSync();
   const activeGameplaySessionOnMount = getActiveGameplaySessionSync();
   const reusableReplayResumeSnapshotOnMount =
     replayResumeSnapshotOnMount?.restoreOnNextFocus &&
-    isReplayResumeSnapshotReusable(replayResumeSnapshotOnMount)
+    isReplayResumeSnapshotMatch(
+      replayResumeSnapshotOnMount,
+      undefined,
+      undefined,
+      currentAplusLiveMatchIdentity,
+    )
       ? replayResumeSnapshotOnMount
       : null;
   const reusableActiveGameplaySessionOnMount =
-    isActiveGameplaySessionReusable(activeGameplaySessionOnMount)
+    isActiveGameplaySessionReusable(
+      activeGameplaySessionOnMount,
+      currentAplusLiveMatchIdentity,
+    )
       ? activeGameplaySessionOnMount
       : null;
+  const routeGameplaySessionKey =
+    String(routeParams.gameplaySessionKey || (gameSettings as any)?.gameplaySessionKey || '').trim();
+
   const initialMatchSessionId =
     reusableReplayResumeSnapshotOnMount?.matchSessionId ||
     replayReturnRequestOnMount?.matchSessionId ||
     reusableActiveGameplaySessionOnMount?.matchSessionId ||
+    routeGameplaySessionKey ||
     `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
   const matchSessionIdRef = useRef(initialMatchSessionId);
+  const currentGameplayStateKey =
+    routeGameplaySessionKey || currentAplusLiveMatchIdentity || gameSettingsSignature || 'local-gameplay';
   const [isRecording, setIsRecording] = useState(false);
   const [poolBreakPlayerIndex, setPoolBreakPlayerIndex] = useState<number>(0);
   const [currentPlayerIndex, setCurrentPlayerIndex] = useState(0);
@@ -979,6 +1061,7 @@ const GamePlayViewModel = () => {
       webcamFolderName,
       savedAt: Date.now(),
       source: restoredExistingMatchSession ? 'restore-existing-session' : 'gameplay-active',
+      aplusLiveMatchIdentity: currentAplusLiveMatchIdentity || undefined,
     });
 
     if (!activeMatchFolderNameRef.current) {
@@ -1203,11 +1286,14 @@ const GamePlayViewModel = () => {
       webcamFolderName: snapshot.webcamFolderName || webcamFolderName,
       savedAt: Date.now(),
       source: 'replay-restore',
+      aplusLiveMatchIdentity: snapshot.aplusLiveMatchIdentity || currentAplusLiveMatchIdentity || undefined,
     });
 
     appliedReplayResumeSnapshotRef.current = true;
     initializedGameStateRef.current = true;
-  }, []);
+    initializedGameplayStateKeyRef.current =
+      snapshot.aplusLiveMatchIdentity || currentGameplayStateKey;
+  }, [currentAplusLiveMatchIdentity, currentGameplayStateKey, webcamFolderName]);
 
   const tryRestoreReplayResumeSnapshot = useCallback(async () => {
     const snapshot = await getReplayResumeSnapshot();
@@ -1240,8 +1326,20 @@ const GamePlayViewModel = () => {
         snapshot,
         expectedFolderName,
         expectedMatchSessionId,
+        currentAplusLiveMatchIdentity,
       )
     ) {
+      return false;
+    }
+
+    // Kể cả luồng replay return có yêu cầu restore, không bao giờ cho snapshot
+    // của trận Aplus khác ghi đè vào trận đang mở. Đây là chốt chống lỗi T6
+    // bị lấy lại điểm/timer của T3.
+    if (currentAplusLiveMatchIdentity) {
+      if (snapshot?.aplusLiveMatchIdentity !== currentAplusLiveMatchIdentity) {
+        return false;
+      }
+    } else if (snapshot?.aplusLiveMatchIdentity) {
       return false;
     }
 
@@ -1263,11 +1361,17 @@ const GamePlayViewModel = () => {
     // Giữ lại snapshot nhưng tắt auto-restore để tránh focus lại là ghi đè state lần nữa.
     await setReplayResumeSnapshot({
       ...snapshot!,
+      aplusLiveMatchIdentity: snapshot?.aplusLiveMatchIdentity || currentAplusLiveMatchIdentity || undefined,
       restoreOnNextFocus: false,
     });
 
     return true;
-  }, [applyReplayResumeSnapshot, gameSettings?.webcamFolderName, webcamFolderName]);
+  }, [
+    applyReplayResumeSnapshot,
+    gameSettings?.webcamFolderName,
+    webcamFolderName,
+    currentAplusLiveMatchIdentity,
+  ]);
 
   const buildLiveMatchSnapshot = useCallback((): LiveMatchSnapshot | null => {
     if (!playerSettings || !gameSettingsSignature) {
@@ -1295,12 +1399,14 @@ const GamePlayViewModel = () => {
       proModeEnabled,
       savedAt: Date.now(),
       configSignature: gameSettingsSignature,
+      aplusLiveMatchIdentity: currentAplusLiveMatchIdentity || undefined,
     };
   }, [
     countdownTime,
     currentPlayerIndex,
     gameBreakEnabled,
     gameSettingsSignature,
+    currentAplusLiveMatchIdentity,
     isMatchPaused,
     isPaused,
     isStarted,
@@ -1320,7 +1426,13 @@ const GamePlayViewModel = () => {
   const tryRestoreLiveMatchSnapshot = useCallback(async () => {
     const snapshot = await getLiveMatchSnapshot();
 
-    if (!isLiveMatchSnapshotUsable(snapshot, gameSettingsSignature)) {
+    if (
+      !isLiveMatchSnapshotUsable(
+        snapshot,
+        gameSettingsSignature,
+        currentAplusLiveMatchIdentity,
+      )
+    ) {
       return false;
     }
 
@@ -1342,7 +1454,12 @@ const GamePlayViewModel = () => {
     pendingStartRecordingRef.current = shouldResumeRecording;
 
     return true;
-  }, [applyReplayResumeSnapshot, gameSettingsSignature, youtubeLiveNativeMode]);
+  }, [
+    applyReplayResumeSnapshot,
+    gameSettingsSignature,
+    youtubeLiveNativeMode,
+    currentAplusLiveMatchIdentity,
+  ]);
 
   useEffect(() => {
     // Không cho build mới / mở app mới tự restore trận cũ từ storage.
@@ -1556,22 +1673,48 @@ const GamePlayViewModel = () => {
     let cancelled = false;
 
     const initializeGameState = async () => {
-      if (cancelled || initializedGameStateRef.current) {
+      const alreadyInitializedForCurrentGame =
+        initializedGameStateRef.current &&
+        initializedGameplayStateKeyRef.current === currentGameplayStateKey;
+
+      if (cancelled || alreadyInitializedForCurrentGame) {
         return;
       }
 
+      const isSwitchingToDifferentGame = Boolean(
+        initializedGameplayStateKeyRef.current &&
+          initializedGameplayStateKeyRef.current !== currentGameplayStateKey,
+      );
+
+      if (isSwitchingToDifferentGame) {
+        clearInterval(countdownInterval);
+        clearInterval(warmUpCountdownInterval);
+        setReplayResumeSnapshotSync(null);
+        setReplayReturnRequestSync(null);
+        setLiveMatchSnapshotSync(null);
+        clearActiveGameplaySessionSync();
+        aplusLiveScoreLastSignatureRef.current = '';
+        aplusLiveScoreLastPushAtRef.current = 0;
+        matchSessionIdRef.current =
+          routeGameplaySessionKey ||
+          `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+        activeMatchFolderNameRef.current = null;
+        setWebcamFolderName(Date.now().toString());
+      }
+
       const restoredFromReplay = await tryRestoreReplayResumeSnapshot();
-      if (cancelled || restoredFromReplay || initializedGameStateRef.current) {
+      if (cancelled || restoredFromReplay) {
         return;
       }
 
       const restoredFromLive = await tryRestoreLiveMatchSnapshot();
-      if (cancelled || restoredFromLive || initializedGameStateRef.current) {
+      if (cancelled || restoredFromLive) {
         return;
       }
 
       appliedReplayResumeSnapshotRef.current = false;
       initializedGameStateRef.current = true;
+      initializedGameplayStateKeyRef.current = currentGameplayStateKey;
 
       setIsStarted(false);
       setIsPaused(false);
@@ -1623,7 +1766,13 @@ const GamePlayViewModel = () => {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gameSettings, tryRestoreLiveMatchSnapshot, tryRestoreReplayResumeSnapshot]);
+  }, [
+    gameSettings,
+    tryRestoreLiveMatchSnapshot,
+    tryRestoreReplayResumeSnapshot,
+    currentGameplayStateKey,
+    routeGameplaySessionKey,
+  ]);
 
   useEffect(() => {
     if (!isStarted || isPaused || !isCameraReady) {
@@ -4421,6 +4570,15 @@ const GamePlayViewModel = () => {
   const aplusLiveScoreLastSignatureRef = useRef('');
   const aplusLiveScoreLastPushAtRef = useRef(0);
 
+  useEffect(() => {
+    aplusLiveScoreLastSignatureRef.current = '';
+    aplusLiveScoreLastPushAtRef.current = 0;
+  }, [
+    (gameSettings as any)?.aplusLiveScore?.tournamentId,
+    (gameSettings as any)?.aplusLiveScore?.matchId,
+    (gameSettings as any)?.aplusLiveScore?.matchNumber,
+  ]);
+
   const pushAplusLiveScoreSnapshot = useCallback(
     async (reason: string, force = false) => {
       if (!gameSettings?.aplusLiveScore?.enabled) {
@@ -4456,15 +4614,22 @@ const GamePlayViewModel = () => {
 
       const now = Date.now();
       const sameAsLast = signature === aplusLiveScoreLastSignatureRef.current;
-      const tooSoon = now - aplusLiveScoreLastPushAtRef.current < 250;
+      const elapsedSinceLastPush = now - aplusLiveScoreLastPushAtRef.current;
 
-      // Để countdown bám app: vẫn cho gửi tối đa nhanh hơn, có chặn request trùng quá sát khi force=true.
-      // Tránh spam nhiều request trùng trong cùng một nhịp render.
-      if (!force && sameAsLast) {
+      // Không gửi lại cùng một snapshot đã dừng/kết thúc. Bản cũ force 350ms
+      // vẫn bắn PATCH liên tục kể cả status=finished, nên khi đổi T3 -> T6
+      // trạng thái cũ bị đẩy lặp vào trận mới.
+      if (sameAsLast && !running) {
         return;
       }
 
-      if (tooSoon && sameAsLast) {
+      // Khi đang chạy countdown, chỉ cần gửi khi state đổi hoặc tối đa khoảng 1 giây/lần.
+      // Tránh spam 2-3 request giống hệt nhau trong cùng một giây.
+      if (sameAsLast && elapsedSinceLastPush < 900) {
+        return;
+      }
+
+      if (!force && sameAsLast) {
         return;
       }
 

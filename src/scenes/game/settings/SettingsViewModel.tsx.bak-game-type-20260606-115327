@@ -101,125 +101,6 @@ const normalizeLivestreamPlatform = (
 
 
 
-
-const normalizeAplusTournamentGameType = (value?: unknown) => {
-  const raw = String(value ?? '').trim().toLowerCase();
-
-  if (!raw) return '';
-  if (raw.includes('snooker')) return 'snooker';
-  if (raw.includes('libre') || raw.includes('free')) return 'libre';
-  if (raw.includes('carom') || raw.includes('carambole') || raw.includes('3c') || raw.includes('3-cushion') || raw.includes('3 cushion')) return 'carom';
-  if (raw.includes('pool') || raw.includes('9-ball') || raw.includes('10-ball') || raw.includes('8-ball')) return 'pool';
-
-  if (raw === 'snooker' || raw === 'libre' || raw === 'carom' || raw === 'pool') return raw;
-  return raw;
-};
-
-const getCurrentAplusGameType = (category: BilliardCategory) => {
-  const raw = String(category || '').trim().toLowerCase();
-
-  if (raw.includes('libre') || raw.includes('free')) return 'libre';
-  if (isPoolGame(category)) return 'pool';
-  if (isCaromLikeGame(category)) return 'carom';
-
-  return raw || 'unknown';
-};
-
-const APLUS_GAME_TYPE_LABELS: Record<string, string> = {
-  pool: 'Pool',
-  carom: 'Carom',
-  libre: 'Libre',
-  snooker: 'Snooker',
-};
-
-const getAplusGameTypeLabel = (value?: unknown) => {
-  const normalized = normalizeAplusTournamentGameType(value);
-  return APLUS_GAME_TYPE_LABELS[normalized] || String(value || '').trim() || 'Không rõ';
-};
-
-
-const normalizeAplusMatchNumberInput = (value?: unknown) => {
-  const cleaned = String(value ?? '')
-    .trim()
-    .replace(/\s+/g, '')
-    .replace(/[^0-9A-Za-z_-]/g, '')
-    .toUpperCase();
-
-  if (!cleaned) {
-    return '';
-  }
-
-  return `T${cleaned.replace(/^T+/i, '')}`;
-};
-
-const getAplusMatchBlockAlert = (error: any) => {
-  const code = String(error?.code || error?.data?.code || '').toUpperCase();
-  const message = String(error?.message || error?.data?.message || error || 'Không thể vào trận này.');
-  const lower = message.toLowerCase();
-
-  if (
-    code === 'MATCH_FINISHED' ||
-    lower.includes('đã kết thúc') ||
-    lower.includes('da ket thuc') ||
-    lower.includes('kết thúc rồi') ||
-    lower.includes('ket thuc roi') ||
-    lower.includes('finished') ||
-    lower.includes('completed')
-  ) {
-    return {
-      title: 'Trận đã kết thúc',
-      message,
-    };
-  }
-
-  if (
-    code === 'MATCH_LOCKED' ||
-    lower.includes('đang diễn ra') ||
-    lower.includes('dang dien ra') ||
-    lower.includes('máy khác') ||
-    lower.includes('may khac') ||
-    lower.includes('locked')
-  ) {
-    return {
-      title: 'Trận đang diễn ra',
-      message,
-    };
-  }
-
-  return null;
-};
-
-const getAplusTournamentModeError = (
-  tournament: AplusTournament | undefined,
-  category: BilliardCategory,
-) => {
-  const tournamentGameType = normalizeAplusTournamentGameType(
-    tournament?.gameType ||
-      tournament?.raw?.gameType ||
-      tournament?.raw?.type ||
-      tournament?.raw?.gameMode ||
-      tournament?.raw?.category ||
-      tournament?.raw?.discipline,
-  );
-
-  // Old tournaments may not have gameType yet. Do not block them.
-  if (!tournamentGameType) {
-    return '';
-  }
-
-  const currentGameType = getCurrentAplusGameType(category);
-
-  if (tournamentGameType === 'snooker') {
-    return 'Giải này là Snooker nhưng app hiện chưa có chế độ Snooker. Hãy chọn giải khác hoặc cập nhật app.';
-  }
-
-  if (currentGameType !== tournamentGameType) {
-    return `Sai chế độ, hãy chọn lại. App đang chọn ${getAplusGameTypeLabel(currentGameType)}, còn giải này là ${getAplusGameTypeLabel(tournamentGameType)}.`;
-  }
-
-  return '';
-};
-
 const normalizeYouTubeIngestUrlForFfmpeg = (value?: string) =>
   String(value || DEFAULT_YOUTUBE_RTMP_URL).trim().replace(/\/+$/g, '');
 
@@ -926,24 +807,8 @@ const GameSettingsViewModel = (props: Props) => {
       return;
     }
 
-    const normalizedMatchNumber = normalizeAplusMatchNumberInput(aplusMatchNumber);
-
-    if (!normalizedMatchNumber) {
+    if (!String(aplusMatchNumber || '').trim()) {
       setAplusLiveStatus('Bạn chưa nhập số trận.');
-      return;
-    }
-
-    // Nhập 7, 07, t7... thì khi bấm Lấy trận luôn chuẩn hóa thành T7 ngay trên ô nhập,
-    // kể cả sau đó trận báo lỗi/khoá/kết thúc.
-    if (normalizedMatchNumber !== aplusMatchNumber) {
-      setAplusMatchNumber(normalizedMatchNumber);
-    }
-
-    const modeError = getAplusTournamentModeError(selectedAplusTournament, category);
-    if (modeError) {
-      setSelectedAplusMatch(null);
-      setAplusLiveStatus(modeError);
-      Alert.alert('Sai chế độ', modeError);
       return;
     }
 
@@ -953,7 +818,7 @@ const GameSettingsViewModel = (props: Props) => {
     try {
       const match = await fetchAplusMatchByNumber(
         selectedAplusTournament,
-        normalizedMatchNumber,
+        aplusMatchNumber,
       );
       const lockedMatch = await lockAplusLiveScoreMatch(match);
       setSelectedAplusMatch(lockedMatch);
@@ -970,14 +835,8 @@ const GameSettingsViewModel = (props: Props) => {
         `Đã lấy trận ${lockedMatch.matchNumber}: ${lockedMatch.player1?.name || 'Người chơi 1'} vs ${lockedMatch.player2?.name || 'Người chơi 2'}. Đã cập nhật tên/quốc gia trong mục Người chơi.`,
       );
     } catch (error: any) {
-      const message = error?.message || 'Không lấy được thông tin trận.';
-      const blockAlert = getAplusMatchBlockAlert(error);
       setSelectedAplusMatch(null);
-      setAplusLiveStatus(message);
-
-      if (blockAlert) {
-        Alert.alert(blockAlert.title, blockAlert.message);
-      }
+      setAplusLiveStatus(error?.message || 'Không lấy được thông tin trận.');
     } finally {
       setAplusLoadingMatch(false);
     }
@@ -999,14 +858,6 @@ const GameSettingsViewModel = (props: Props) => {
       return;
     }
 
-    const modeError = getAplusTournamentModeError(selectedAplusTournament, category);
-    if (modeError) {
-      setSelectedAplusMatch(null);
-      setAplusLiveStatus(modeError);
-      Alert.alert('Sai chế độ', modeError);
-      return;
-    }
-
     let activeAplusMatch = selectedAplusMatch;
 
     if (activeAplusMatch?.id) {
@@ -1016,10 +867,9 @@ const GameSettingsViewModel = (props: Props) => {
         setSelectedAplusMatch(activeAplusMatch);
       } catch (error: any) {
         const message = error?.message || 'Không thể vào trận live score này.';
-        const blockAlert = getAplusMatchBlockAlert(error);
         setSelectedAplusMatch(null);
         setAplusLiveStatus(message);
-        Alert.alert(blockAlert?.title || 'Không thể vào trận', blockAlert?.message || message);
+        Alert.alert('Không thể vào trận', message);
         return;
       }
     }
