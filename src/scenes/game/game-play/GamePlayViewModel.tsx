@@ -75,7 +75,10 @@ import {
   updateWindowsFfmpegOverlay,
   type WindowsFfmpegLiveConfig,
 } from 'services/livestream/WindowsFfmpegLiveEngine';
-import {pushAplusLiveScoreUpdate} from 'services/aplusLiveScore';
+import {
+  pushAplusLiveScoreUpdate,
+  finishAplusLiveScoreMatch,
+} from 'services/aplusLiveScore';
 
 let countdownInterval: NodeJS.Timeout, warmUpCountdownInterval: NodeJS.Timeout;
 const {CameraService} = NativeModules;
@@ -216,6 +219,37 @@ const getCurrentCameraSource = (): 'back' | 'front' | 'external' => {
 
 const setYouTubeSourceLock = (source: 'back' | 'front' | 'external' | null) => {
   (globalThis as any).__APLUS_YOUTUBE_SOURCE_LOCK__ = source;
+};
+
+const withEndMatchTimeout = async <T,>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  label: string,
+): Promise<T | undefined> => {
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timeoutHandle = setTimeout(
+          () => reject(new Error(`${label}_TIMEOUT_${timeoutMs}ms`)),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } catch (error) {
+    console.log('[END] background/timeout skipped:', {
+      label,
+      timeoutMs,
+      message: (error as Error)?.message || String(error),
+    });
+    return undefined;
+  } finally {
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+    }
+  }
 };
 
 const hasDetectedUvcSource = () => {
@@ -824,6 +858,7 @@ const GamePlayViewModel = () => {
   } | null>(null);
   const activeYouTubeBroadcastIdRef = useRef<string>('');
   const isEndingGameRef = useRef(false);
+  const [isEndingGame, setIsEndingGame] = useState(false);
   const appliedReplayResumeSnapshotRef = useRef(false);
   const initializedGameStateRef = useRef(false);
   const initializedGameplayStateKeyRef = useRef('');
@@ -1599,6 +1634,7 @@ const GamePlayViewModel = () => {
   }, [
     gameSettings?.category,
     isStarted,
+    isEndingGame,
     isPaused,
     isMatchPaused,
     warmUpCountdownTime,
@@ -3902,6 +3938,59 @@ const GamePlayViewModel = () => {
     }
 
     isEndingGameRef.current = true;
+    setIsEndingGame(true);
+
+    const endClickAt = Date.now();
+    console.log('[END] click', endClickAt);
+
+    const latestSettingsAtClick = playerSettingsRef.current || playerSettings;
+    const optimisticFinalSettings = commitCurrentRunStatsForPlayers(
+      cloneReplayValue(latestSettingsAtClick),
+      totalTurnsRef.current || totalTurns,
+    );
+    const optimisticScore = getFinalScoreSnapshot(
+      optimisticFinalSettings || latestSettingsAtClick,
+    );
+    const optimisticWinnerPlayer =
+      winnerRef.current ||
+      deriveWinnerPlayerFromScore(
+        optimisticFinalSettings || latestSettingsAtClick,
+        optimisticScore,
+      );
+
+    // Optimistic UI: phản hồi ngay, khoá điều khiển/nút trước khi làm các tác vụ nặng.
+    if (optimisticFinalSettings) {
+      setPlayerSettings(optimisticFinalSettings);
+    }
+    if (optimisticWinnerPlayer?.name) {
+      const optimisticWinnerForUi = cloneReplayValue(optimisticWinnerPlayer);
+      winnerRef.current = optimisticWinnerForUi;
+      setWinner(optimisticWinnerForUi);
+    }
+    setIsStarted(false);
+    setIsPaused(false);
+    setIsMatchPaused(true);
+    console.log('[END] local ended', Date.now());
+
+    const aplusLiveScoreConfig = (gameSettings as any)?.aplusLiveScore;
+    if (aplusLiveScoreConfig?.enabled && aplusLiveScoreConfig?.matchId) {
+      console.log('[END] api start', Date.now());
+      void finishAplusLiveScoreMatch(
+        aplusLiveScoreConfig,
+        Number(optimisticScore?.[0] || 0),
+        Number(optimisticScore?.[1] || 0),
+        {timeoutMs: 3000, fast: true},
+      )
+        .then(() => {
+          console.log('[END] api done', Date.now());
+        })
+        .catch(error => {
+          console.log('[END] api failed/queued', {
+            at: Date.now(),
+            message: (error as Error)?.message || String(error),
+          });
+        });
+    }
 
     try {
       void setReplayResumeSnapshot(null);
@@ -3911,30 +4000,53 @@ const GamePlayViewModel = () => {
       pendingStartRecordingRef.current = false;
       pendingYouTubeNativeStartRef.current = null;
       setYoutubeLivePreparing(false);
-      await stopYouTubeNativeLive();
-      if (Platform.OS === 'windows') {
-        await stopWindowsFfmpegYouTubeLive('end-match');
-      }
 
       const activeYouTubeBroadcastId = activeYouTubeBroadcastIdRef.current;
       activeYouTubeBroadcastIdRef.current = '';
-      if (activeYouTubeBroadcastId) {
-        try {
-          await stopYouTubeLiveSession(activeYouTubeBroadcastId);
-          console.log('[YouTube Live] stopped broadcast:', activeYouTubeBroadcastId);
-        } catch (youtubeStopError) {
-          console.log('[YouTube Live] stop broadcast failed:', youtubeStopError);
-        }
-      }
-
       setYoutubeLivePreviewActive(false);
       setIsCameraReady(false);
 
-      const stoppedRecordingPath = await stopVideoRecording(false);
+      // Không chờ stop YouTube/FFmpeg/camera trên nút Kết thúc.
+      // Các cleanup này chạy nền để UI và LiveScore ended phản hồi ngay.
+      void (async () => {
+        console.log('[END] cleanup start', Date.now());
+        try {
+          await withEndMatchTimeout(stopYouTubeNativeLive(), 1500, 'stopYouTubeNativeLive');
+          if (Platform.OS === 'windows') {
+            await withEndMatchTimeout(
+              stopWindowsFfmpegYouTubeLive('end-match'),
+              2500,
+              'stopWindowsFfmpegYouTubeLive',
+            );
+          }
+          if (activeYouTubeBroadcastId) {
+            await withEndMatchTimeout(
+              stopYouTubeLiveSession(activeYouTubeBroadcastId),
+              2500,
+              'stopYouTubeLiveSession',
+            );
+            console.log('[YouTube Live] stopped broadcast:', activeYouTubeBroadcastId);
+          }
+        } catch (youtubeStopError) {
+          console.log('[YouTube Live] background stop failed:', youtubeStopError);
+        } finally {
+          console.log('[END] cleanup done', Date.now());
+        }
+      })();
+
+      const stoppedRecordingPath = await withEndMatchTimeout(
+        stopVideoRecording(false),
+        1500,
+        'stopVideoRecording',
+      );
       const recordedPath =
         stoppedRecordingPath ??
         lastRecordedVideoPathRef.current ??
-        (await getLatestReplaySegmentPath());
+        (await withEndMatchTimeout(
+          getLatestReplaySegmentPath(),
+          800,
+          'getLatestReplaySegmentPath',
+        ));
 
       let finalVideoExists = false;
       let finalVideoSize = 0;
@@ -4120,6 +4232,7 @@ const GamePlayViewModel = () => {
         });
 
         isEndingGameRef.current = false;
+        setIsEndingGame(false);
 
         if (shouldUseCaromWinnerSummary) {
           return;
@@ -4146,6 +4259,7 @@ const GamePlayViewModel = () => {
       // Nếu hòa hoặc thiếu tên người chơi, vẫn không thoát âm thầm ngay.
       // Người dùng phải xác nhận Kết thúc trong thông báo này.
       isEndingGameRef.current = false;
+      setIsEndingGame(false);
       Alert.alert(
         i18n.t('stop'),
         i18n.t('msgStopGame'),
@@ -4161,12 +4275,14 @@ const GamePlayViewModel = () => {
       );
     } catch (error) {
       isEndingGameRef.current = false;
+      setIsEndingGame(false);
       console.error(JSON.stringify(error));
     }
   }, [
     dispatch,
     realm,
     totalTime,
+    totalTurns,
     gameSettings,
     playerSettings,
     saveToDeviceWhileStreaming,
@@ -4675,6 +4791,7 @@ const GamePlayViewModel = () => {
       currentPlayerIndex,
       winner,
       isStarted,
+      isEndingGame,
       isPaused,
       isMatchPaused,
       resolveAplusCountdownBaseTimeFromSettings,
@@ -4723,6 +4840,7 @@ const GamePlayViewModel = () => {
       warmUpCountdownTime,
       updateGameSettings,
       isStarted,
+      isEndingGame,
       isPaused,
       isMatchPaused,
       soundEnabled,
@@ -4800,6 +4918,7 @@ const GamePlayViewModel = () => {
     warmUpCountdownTime,
     updateGameSettings,
     isStarted,
+    isEndingGame,
     isPaused,
     isMatchPaused,
     soundEnabled,
