@@ -4685,10 +4685,14 @@ const GamePlayViewModel = () => {
 
   const aplusLiveScoreLastSignatureRef = useRef('');
   const aplusLiveScoreLastPushAtRef = useRef(0);
+  const aplusLiveScorePushInFlightRef = useRef(false);
+  const aplusLiveScoreBackoffUntilRef = useRef(0);
 
   useEffect(() => {
     aplusLiveScoreLastSignatureRef.current = '';
     aplusLiveScoreLastPushAtRef.current = 0;
+    aplusLiveScorePushInFlightRef.current = false;
+    aplusLiveScoreBackoffUntilRef.current = 0;
   }, [
     (gameSettings as any)?.aplusLiveScore?.tournamentId,
     (gameSettings as any)?.aplusLiveScore?.matchId,
@@ -4731,6 +4735,19 @@ const GamePlayViewModel = () => {
       const now = Date.now();
       const sameAsLast = signature === aplusLiveScoreLastSignatureRef.current;
       const elapsedSinceLastPush = now - aplusLiveScoreLastPushAtRef.current;
+      const isStateChangeReason = reason.includes('state-change');
+      const minPushIntervalMs = running ? 2800 : 8000;
+
+      // Chặn chồng request khi mạng chậm/API đang bận. Nếu không chặn, 1 app có thể
+      // tự xếp hàng nhiều PATCH; 16+ máy sẽ nhân thành request storm.
+      if (aplusLiveScorePushInFlightRef.current) {
+        return;
+      }
+
+      // Sau lỗi mạng/API, lùi nhịp một chút để không retry dồn dập làm backend sập thêm.
+      if (!winner && now < aplusLiveScoreBackoffUntilRef.current) {
+        return;
+      }
 
       // Không gửi lại cùng một snapshot đã dừng/kết thúc. Bản cũ force 350ms
       // vẫn bắn PATCH liên tục kể cả status=finished, nên khi đổi T3 -> T6
@@ -4739,18 +4756,19 @@ const GamePlayViewModel = () => {
         return;
       }
 
-      // Khi đang chạy countdown, chỉ cần gửi khi state đổi hoặc tối đa khoảng 1 giây/lần.
-      // Tránh spam 2-3 request giống hệt nhau trong cùng một giây.
-      if (sameAsLast && elapsedSinceLastPush < 900) {
+      // Điểm/lượt/pause/start gửi ngay qua state-change. Countdown chỉ cần correction
+      // mỗi ~3 giây vì backend/web có timestamp để tự chạy timer, không cần spam 350ms/1s.
+      if (sameAsLast && elapsedSinceLastPush < minPushIntervalMs) {
         return;
       }
 
-      if (!force && sameAsLast) {
+      if (!force && !isStateChangeReason && sameAsLast) {
         return;
       }
 
       aplusLiveScoreLastSignatureRef.current = signature;
       aplusLiveScoreLastPushAtRef.current = now;
+      aplusLiveScorePushInFlightRef.current = true;
 
       try {
         await pushAplusLiveScoreUpdate({
@@ -4768,18 +4786,11 @@ const GamePlayViewModel = () => {
           isMatchPaused,
         });
 
-        console.log('[AplusLiveScore] push ok:', {
-          reason,
-          score1,
-          score2,
-          turnCount: safeTurns,
-          countdownTime: safeCountdownTime,
-          countdownBaseTime: safeCountdownBaseTime,
-          targetScore: safeTargetScore,
-          running,
-        });
       } catch (error: any) {
+        aplusLiveScoreBackoffUntilRef.current = Date.now() + 3000;
         console.log('[AplusLiveScore] push failed:', error?.message || error);
+      } finally {
+        aplusLiveScorePushInFlightRef.current = false;
       }
     },
     [
@@ -4808,16 +4819,17 @@ const GamePlayViewModel = () => {
     return () => clearTimeout(timeout);
   }, [pushAplusLiveScoreSnapshot]);
 
-  // Push nhịp 350ms để web nhận live score + countdown song song với app,
-  // kể cả lúc React không render đúng nhịp hoặc API/web polling bị lệch.
+  // Nhịp correction chậm để chống sập backend khi nhiều máy cùng live.
+  // Điểm/lượt vẫn push ngay bằng effect state-change phía trên; interval này chỉ giữ
+  // countdown/heartbeat mềm, không còn spam 350ms.
   useEffect(() => {
     if (!gameSettings?.aplusLiveScore?.enabled) {
       return;
     }
 
     const timer = setInterval(() => {
-      void pushAplusLiveScoreSnapshot('parallel-fast-350ms-sync', true);
-    }, 350);
+      void pushAplusLiveScoreSnapshot('live-score-3s-correction', true);
+    }, 3000);
 
     return () => clearInterval(timer);
   }, [

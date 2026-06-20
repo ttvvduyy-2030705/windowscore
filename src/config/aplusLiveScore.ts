@@ -20,6 +20,9 @@ export const APLUS_LIVE_SCORE_ENDPOINTS = {
   // POST /matches/:matchId/claim
   claimMatch: '/matches/:matchId/claim',
 
+  // POST /matches/:matchId/start
+  startMatch: '/matches/:matchId/start',
+
   // PATCH /matches/:matchId/score
   updateScore: '/matches/:matchId/score',
 
