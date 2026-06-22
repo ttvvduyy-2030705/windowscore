@@ -174,8 +174,28 @@ const getPlayerCountryForPayload = (player: any) =>
   );
 
 const APLUS_DEVICE_ID_STORAGE_KEY = '@aplus_live_score_device_id_v2';
+const APLUS_OUTBOX_STORAGE_KEY = '@aplus_live_score_persistent_outbox_v1';
 let cachedAplusDeviceId = '';
 let aplusLiveScoreClientSeq = 0;
+let aplusLiveScoreOutboxFlushTimer: ReturnType<typeof setTimeout> | undefined;
+let aplusLiveScoreOutboxFlushInFlight = false;
+
+type AplusLiveScoreOutboxAction = 'score' | 'finish';
+type AplusLiveScoreOutboxEntry = {
+  id: string;
+  action: AplusLiveScoreOutboxAction;
+  matchId: string;
+  tournamentId?: string;
+  config: AplusLiveScoreConfig;
+  payload?: any;
+  score1?: number;
+  score2?: number;
+  sessionToken?: string;
+  clientSeq?: number;
+  clientTimestamp: string;
+  retryCount: number;
+  updatedAt: number;
+};
 
 const isBadDeviceId = (value?: unknown) => {
   const text = toText(value).toLowerCase();
@@ -223,6 +243,52 @@ const getDeviceId = async () => {
 const nextAplusLiveScoreClientSeq = () => {
   aplusLiveScoreClientSeq = (aplusLiveScoreClientSeq + 1) % Number.MAX_SAFE_INTEGER;
   return aplusLiveScoreClientSeq;
+};
+
+const readAplusLiveScoreOutbox = async (): Promise<AplusLiveScoreOutboxEntry[]> => {
+  try {
+    const raw = await AsyncStorage.getItem(APLUS_OUTBOX_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed.filter(item => item?.matchId && item?.action) : [];
+  } catch (_error) {
+    return [];
+  }
+};
+
+const writeAplusLiveScoreOutbox = async (items: AplusLiveScoreOutboxEntry[]) => {
+  try {
+    await AsyncStorage.setItem(APLUS_OUTBOX_STORAGE_KEY, JSON.stringify(items.slice(-100)));
+  } catch (_error) {}
+};
+
+const makeAplusOutboxId = (action: AplusLiveScoreOutboxAction, matchId: string) => `${action}:${matchId}`;
+
+const removeAplusLiveScoreOutboxEntry = async (id: string) => {
+  const items = await readAplusLiveScoreOutbox();
+  await writeAplusLiveScoreOutbox(items.filter(item => item.id !== id));
+};
+
+const upsertAplusLiveScoreOutboxEntry = async (entry: Omit<AplusLiveScoreOutboxEntry, 'id' | 'retryCount' | 'updatedAt'>) => {
+  const id = makeAplusOutboxId(entry.action, entry.matchId);
+  const items = await readAplusLiveScoreOutbox();
+  const previous = items.find(item => item.id === id);
+  const nextEntry: AplusLiveScoreOutboxEntry = {
+    ...previous,
+    ...entry,
+    id,
+    retryCount: previous?.retryCount || 0,
+    updatedAt: Date.now(),
+  };
+  await writeAplusLiveScoreOutbox([...items.filter(item => item.id !== id), nextEntry]);
+  scheduleAplusLiveScoreOutboxFlush(1500);
+};
+
+const scheduleAplusLiveScoreOutboxFlush = (delayMs = 5000) => {
+  if (aplusLiveScoreOutboxFlushTimer) clearTimeout(aplusLiveScoreOutboxFlushTimer);
+  aplusLiveScoreOutboxFlushTimer = setTimeout(() => {
+    aplusLiveScoreOutboxFlushTimer = undefined;
+    void flushAplusLiveScoreOutbox('timer');
+  }, Math.max(1000, delayMs));
 };
 
 type AplusLiveScoreSessionCacheEntry = {
@@ -505,6 +571,85 @@ const getOrClaimAplusLiveScoreSessionToken = async (
 
   const claimed = await claimAplusLiveScoreSession(config);
   return claimed.sessionToken;
+};
+
+export const flushAplusLiveScoreOutbox = async (reason = 'manual') => {
+  if (aplusLiveScoreOutboxFlushInFlight) return;
+  aplusLiveScoreOutboxFlushInFlight = true;
+
+  try {
+    const items = await readAplusLiveScoreOutbox();
+    if (!items.length) return;
+
+    const remaining: AplusLiveScoreOutboxEntry[] = [];
+
+    for (const item of items) {
+      try {
+        const config = item.config || ({ matchId: item.matchId, tournamentId: item.tournamentId } as AplusLiveScoreConfig);
+        let sessionToken = toText(item.sessionToken) || getCachedAplusLiveScoreSessionToken(config);
+        if (!sessionToken) {
+          sessionToken = await getOrClaimAplusLiveScoreSessionToken(config);
+        }
+
+        if (item.action === 'finish') {
+          await requestJson(
+            'POST',
+            APLUS_LIVE_SCORE_ENDPOINTS.finishMatch,
+            {matchId: item.matchId},
+            {
+              score1: item.score1,
+              score2: item.score2,
+              tournamentId: item.tournamentId || config.tournamentId,
+              clientSeq: item.clientSeq,
+              clientTimestamp: item.clientTimestamp,
+            },
+            sessionToken,
+          );
+          forgetAplusLiveScoreSession(item.matchId);
+          startedAplusLiveScoreMatchIds.delete(item.matchId);
+          startingAplusLiveScoreMatchPromises.delete(item.matchId);
+        } else {
+          await requestJson(
+            'PATCH',
+            APLUS_LIVE_SCORE_ENDPOINTS.updateScore,
+            {matchId: item.matchId},
+            {
+              ...(item.payload || {}),
+              tournamentId: item.tournamentId || config.tournamentId,
+              clientSeq: item.clientSeq,
+              clientTimestamp: item.clientTimestamp,
+            },
+            sessionToken,
+          );
+        }
+      } catch (error) {
+        if (isAplusMatchFinishedError(error) || isAplusMatchLockedError(error)) {
+          console.log('[AplusLiveScore][OUTBOX_DROP_LOCKED_OR_FINISHED]', {
+            reason,
+            action: item.action,
+            matchId: item.matchId,
+            message: (error as Error)?.message || error,
+          });
+          continue;
+        }
+
+        remaining.push({
+          ...item,
+          sessionToken: isLiveSessionTokenError(error) ? '' : item.sessionToken,
+          retryCount: (item.retryCount || 0) + 1,
+          updatedAt: Date.now(),
+        });
+      }
+    }
+
+    await writeAplusLiveScoreOutbox(remaining);
+    if (remaining.length) {
+      const maxRetry = Math.max(...remaining.map(item => item.retryCount || 0));
+      scheduleAplusLiveScoreOutboxFlush(Math.min(60000, 3000 * (2 ** Math.min(maxRetry, 4))));
+    }
+  } finally {
+    aplusLiveScoreOutboxFlushInFlight = false;
+  }
 };
 
 
@@ -1342,6 +1487,8 @@ export const pushAplusLiveScoreUpdate = async ({
     try {
       const result = await sendScore(sessionToken);
       rememberAplusLiveScoreSession(config.matchId, sessionToken, config.lockExpiresAt);
+      await removeAplusLiveScoreOutboxEntry(makeAplusOutboxId('score', config.matchId));
+      void flushAplusLiveScoreOutbox('score-ok');
 
       console.log('[AplusLiveScore][PUSH_SCORE_OK]', {
         matchId: config.matchId,
@@ -1375,6 +1522,8 @@ export const pushAplusLiveScoreUpdate = async ({
 
       const result = await sendScore(sessionToken);
       rememberAplusLiveScoreSession(config.matchId, sessionToken, claimed.lockExpiresAt);
+      await removeAplusLiveScoreOutboxEntry(makeAplusOutboxId('score', config.matchId));
+      void flushAplusLiveScoreOutbox('score-ok-after-reclaim');
 
       console.log('[AplusLiveScore][PUSH_SCORE_OK_AFTER_RECLAIM]', {
         matchId: config.matchId,
@@ -1384,7 +1533,25 @@ export const pushAplusLiveScoreUpdate = async ({
     }
   };
 
-  return enqueueLatestAplusLiveScoreWrite(config.matchId, sendNow);
+  return enqueueLatestAplusLiveScoreWrite(config.matchId, async () => {
+    try {
+      return await sendNow();
+    } catch (error) {
+      if (!isAplusLiveScoreClaimBlockError(error)) {
+        await upsertAplusLiveScoreOutboxEntry({
+          action: 'score',
+          matchId: config.matchId,
+          tournamentId: config.tournamentId,
+          config,
+          payload,
+          sessionToken: getCachedAplusLiveScoreSessionToken(config),
+          clientSeq: nextAplusLiveScoreClientSeq(),
+          clientTimestamp: new Date().toISOString(),
+        });
+      }
+      throw error;
+    }
+  });
 };
 
 export const heartbeatAplusLiveScoreMatch = async (config?: AplusLiveScoreConfig) => {
@@ -1420,6 +1587,7 @@ export const heartbeatAplusLiveScoreMatch = async (config?: AplusLiveScoreConfig
   try {
     await sendHeartbeat(sessionToken);
     rememberAplusLiveScoreSession(config.matchId, sessionToken, config.lockExpiresAt);
+    void flushAplusLiveScoreOutbox('heartbeat-ok');
   } catch (error) {
     if (isAplusLiveScoreClaimBlockError(error)) {
       console.log('[AplusLiveScore][PUSH_SCORE_BLOCKED_BY_MATCH_STATE]', {
@@ -1459,44 +1627,66 @@ export const finishAplusLiveScoreMatch = async (
 
   const timeoutMs = Math.max(500, Number(options.timeoutMs || 3000));
   let sessionToken = getCachedAplusLiveScoreSessionToken(config);
+  const finishClientSeq = nextAplusLiveScoreClientSeq();
+  const finishClientTimestamp = new Date().toISOString();
 
-  // Khi bấm Kết thúc trong gameplay, không claim lại nếu mất token vì claim có thể làm UI chờ lâu.
-  // Trận đã được Lấy trận ở Setting nên token phải có trong config/cache.
-  if (!sessionToken && !options.fast) {
-    try {
-      sessionToken = await getOrClaimAplusLiveScoreSessionToken(config);
-    } catch (error) {
-      if (isAplusLiveScoreClaimBlockError(error)) {
-        forgetAplusLiveScoreSession(config.matchId);
-        return;
-      }
+  try {
+    if (!sessionToken) {
+      sessionToken = await withAplusLiveScoreTimeout(
+        getOrClaimAplusLiveScoreSessionToken(config),
+        Math.min(timeoutMs, 1500),
+        'APLUS_FINISH_RECLAIM',
+      );
+    }
+
+    await withAplusLiveScoreTimeout(
+      requestJson(
+        'POST',
+        APLUS_LIVE_SCORE_ENDPOINTS.finishMatch,
+        {matchId: config.matchId},
+        {
+          score1,
+          score2,
+          tournamentId: config.tournamentId,
+          clientSeq: finishClientSeq,
+          clientTimestamp: finishClientTimestamp,
+        },
+        sessionToken,
+      ),
+      timeoutMs,
+      'APLUS_FINISH_MATCH',
+    );
+
+    await removeAplusLiveScoreOutboxEntry(makeAplusOutboxId('finish', config.matchId));
+    startedAplusLiveScoreMatchIds.delete(config.matchId);
+    startingAplusLiveScoreMatchPromises.delete(config.matchId);
+    forgetAplusLiveScoreSession(config.matchId);
+  } catch (error) {
+    if (isAplusLiveScoreClaimBlockError(error)) {
+      forgetAplusLiveScoreSession(config.matchId);
       throw error;
     }
-  }
 
-  if (!sessionToken) {
-    console.log('[AplusLiveScore][FINISH_SKIP_NO_SESSION]', {
+    await upsertAplusLiveScoreOutboxEntry({
+      action: 'finish',
       matchId: config.matchId,
-      fast: Boolean(options.fast),
+      tournamentId: config.tournamentId,
+      config,
+      score1,
+      score2,
+      sessionToken: isLiveSessionTokenError(error) ? '' : sessionToken,
+      clientSeq: finishClientSeq,
+      clientTimestamp: finishClientTimestamp,
     });
-    return;
+
+    console.log('[AplusLiveScore][FINISH_QUEUED_OUTBOX]', {
+      matchId: config.matchId,
+      score1,
+      score2,
+      reason: (error as Error)?.message || error,
+    });
+    throw error;
   }
-
-  await withAplusLiveScoreTimeout(
-    requestJson(
-      'POST',
-      APLUS_LIVE_SCORE_ENDPOINTS.finishMatch,
-      {matchId: config.matchId},
-      {score1, score2},
-      sessionToken,
-    ),
-    timeoutMs,
-    'APLUS_FINISH_MATCH',
-  );
-
-  startedAplusLiveScoreMatchIds.delete(config.matchId);
-  startingAplusLiveScoreMatchPromises.delete(config.matchId);
-  forgetAplusLiveScoreSession(config.matchId);
 };
 
 export const releaseAplusLiveScoreMatch = async (config?: AplusLiveScoreConfig) => {
