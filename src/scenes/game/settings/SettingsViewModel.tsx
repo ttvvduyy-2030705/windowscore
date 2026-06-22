@@ -27,6 +27,7 @@ import {
   fetchAplusMatchByNumber,
   fetchAplusTournaments,
   lockAplusLiveScoreMatch,
+  bootstrapAplusLiveScoreOutbox,
 } from 'services/aplusLiveScore';
 import {
   clearStoredYouTubeConnection,
@@ -660,6 +661,9 @@ const applyAplusMatchToPlayerSettings = (
 
 
 const GameSettingsViewModel = (props: Props) => {
+  useEffect(() => {
+    void bootstrapAplusLiveScoreOutbox();
+  }, []);
   const dispatch = useDispatch();
   // withWrapper spreads route.params directly into props, so reading only
   // props.route?.params silently drops livestreamPlatform in release builds.
