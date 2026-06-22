@@ -1,3 +1,4 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import DeviceInfo from 'react-native-device-info';
 import {
   APLUS_LIVE_SCORE_API_KEY,
@@ -172,15 +173,56 @@ const getPlayerCountryForPayload = (player: any) =>
     'VN',
   );
 
-const getDeviceId = async () => {
+const APLUS_DEVICE_ID_STORAGE_KEY = '@aplus_live_score_device_id_v2';
+let cachedAplusDeviceId = '';
+let aplusLiveScoreClientSeq = 0;
+
+const isBadDeviceId = (value?: unknown) => {
+  const text = toText(value).toLowerCase();
+  return !text || ['unknown', 'undefined', 'null', 'windows-scoreboard-device', 'windows-device'].includes(text);
+};
+
+const makeFallbackDeviceId = () => {
+  const random = Math.random().toString(36).slice(2, 12);
+  return `windows-scoreboard-${Date.now().toString(36)}-${random}`;
+};
+
+const persistAplusDeviceId = async (deviceId: string) => {
+  const safeDeviceId = toText(deviceId);
+  if (!safeDeviceId) return '';
+  cachedAplusDeviceId = safeDeviceId;
   try {
-    const uniqueId = await DeviceInfo.getUniqueId();
-    if (uniqueId) {
-      return String(uniqueId);
+    await AsyncStorage.setItem(APLUS_DEVICE_ID_STORAGE_KEY, safeDeviceId);
+  } catch (_error) {}
+  return safeDeviceId;
+};
+
+const getDeviceId = async () => {
+  if (!isBadDeviceId(cachedAplusDeviceId)) {
+    return cachedAplusDeviceId;
+  }
+
+  try {
+    const stored = await AsyncStorage.getItem(APLUS_DEVICE_ID_STORAGE_KEY);
+    if (!isBadDeviceId(stored)) {
+      cachedAplusDeviceId = String(stored);
+      return cachedAplusDeviceId;
     }
   } catch (_error) {}
 
-  return 'windows-scoreboard-device';
+  try {
+    const uniqueId = await DeviceInfo.getUniqueId();
+    if (!isBadDeviceId(uniqueId)) {
+      return persistAplusDeviceId(String(uniqueId));
+    }
+  } catch (_error) {}
+
+  return persistAplusDeviceId(makeFallbackDeviceId());
+};
+
+const nextAplusLiveScoreClientSeq = () => {
+  aplusLiveScoreClientSeq = (aplusLiveScoreClientSeq + 1) % Number.MAX_SAFE_INTEGER;
+  return aplusLiveScoreClientSeq;
 };
 
 type AplusLiveScoreSessionCacheEntry = {
@@ -303,11 +345,22 @@ const requestJson = async (
   body?: any,
   sessionToken?: string,
 ) => {
-  const urls = method === 'GET'
-    ? APLUS_LIVE_SCORE_FALLBACK_BASE_URLS.map(baseUrl =>
-        appendNoCacheQuery(buildUrlWithBase(baseUrl, path, params)),
-      )
-    : [buildUrl(path, params)];
+  const deviceId = await getDeviceId();
+  const requestSeq = method === 'GET' ? undefined : nextAplusLiveScoreClientSeq();
+  const requestBody = method === 'GET'
+    ? undefined
+    : {
+        ...(body && typeof body === 'object' ? body : {}),
+        deviceId: toText(body?.deviceId) || deviceId,
+        deviceName: toText(body?.deviceName) || APLUS_LIVE_SCORE_DEVICE_NAME,
+        clientTimestamp: toText(body?.clientTimestamp) || new Date().toISOString(),
+        clientSeq: body?.clientSeq ?? requestSeq,
+      };
+
+  const urls = APLUS_LIVE_SCORE_FALLBACK_BASE_URLS.map(baseUrl => {
+    const built = buildUrlWithBase(baseUrl, path, params);
+    return method === 'GET' ? appendNoCacheQuery(built) : built;
+  });
 
   let lastNetworkError: unknown = null;
 
@@ -317,6 +370,8 @@ const requestJson = async (
       'Content-Type': 'application/json',
       'x-live-api-key': APLUS_LIVE_SCORE_API_KEY,
       'x-aplus-device': APLUS_LIVE_SCORE_DEVICE_NAME,
+      'x-aplus-device-name': APLUS_LIVE_SCORE_DEVICE_NAME,
+      'x-aplus-device-id': deviceId,
     };
 
     if (sessionToken) {
@@ -329,7 +384,7 @@ const requestJson = async (
         method,
         url,
         hasSessionToken: Boolean(sessionToken),
-        body: method === 'GET' ? undefined : body,
+        body: method === 'GET' ? undefined : requestBody,
       });
     }
 
@@ -339,7 +394,7 @@ const requestJson = async (
       response = await fetch(url, {
         method,
         headers,
-        body: method === 'GET' ? undefined : JSON.stringify(body ?? {}),
+        body: method === 'GET' ? undefined : JSON.stringify(requestBody ?? {}),
       });
     } catch (error) {
       lastNetworkError = error;
@@ -349,7 +404,7 @@ const requestJson = async (
         message: String((error as Error)?.message || error),
       });
 
-      if (method === 'GET' && url !== urls[urls.length - 1]) {
+      if (url !== urls[urls.length - 1]) {
         continue;
       }
 
@@ -1025,6 +1080,78 @@ export const startAplusLiveScoreMatch = async (config?: AplusLiveScoreConfig) =>
 const startedAplusLiveScoreMatchIds = new Set<string>();
 const startingAplusLiveScoreMatchPromises = new Map<string, Promise<void>>();
 
+const APLUS_SCORE_MIN_PUSH_INTERVAL_MS = 350;
+type AplusQueuedScoreTask = {
+  run: () => Promise<any>;
+  resolve: (value: any) => void;
+  reject: (error: unknown) => void;
+};
+type AplusScoreQueueEntry = {
+  inFlight: boolean;
+  pending?: AplusQueuedScoreTask;
+  lastSentAt: number;
+  drainTimer?: ReturnType<typeof setTimeout>;
+};
+const aplusLiveScoreQueues = new Map<string, AplusScoreQueueEntry>();
+
+const waitAplusScoreQueue = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+const drainAplusLiveScoreQueue = async (matchId: string) => {
+  const entry = aplusLiveScoreQueues.get(matchId);
+  if (!entry || entry.inFlight) return;
+
+  const next = entry.pending;
+  if (!next) {
+    if (!entry.drainTimer) aplusLiveScoreQueues.delete(matchId);
+    return;
+  }
+
+  entry.pending = undefined;
+  entry.inFlight = true;
+  try {
+    const delay = Math.max(0, APLUS_SCORE_MIN_PUSH_INTERVAL_MS - (Date.now() - entry.lastSentAt));
+    if (delay > 0) await waitAplusScoreQueue(delay);
+    const result = await next.run();
+    entry.lastSentAt = Date.now();
+    next.resolve(result);
+  } catch (error) {
+    next.reject(error);
+  } finally {
+    entry.inFlight = false;
+    if (entry.pending) {
+      if (entry.drainTimer) clearTimeout(entry.drainTimer);
+      entry.drainTimer = setTimeout(() => {
+        entry.drainTimer = undefined;
+        void drainAplusLiveScoreQueue(matchId);
+      }, APLUS_SCORE_MIN_PUSH_INTERVAL_MS);
+    } else {
+      aplusLiveScoreQueues.delete(matchId);
+    }
+  }
+};
+
+const enqueueLatestAplusLiveScoreWrite = (matchId: string, run: () => Promise<any>) => {
+  const key = toText(matchId);
+  if (!key) return run();
+
+  let entry = aplusLiveScoreQueues.get(key);
+  if (!entry) {
+    entry = { inFlight: false, lastSentAt: 0 };
+    aplusLiveScoreQueues.set(key, entry);
+  }
+
+  if (entry.pending) {
+    entry.pending.resolve({ success: true, skipped: true, replacedByNewerSnapshot: true });
+  }
+
+  const promise = new Promise((resolve, reject) => {
+    entry!.pending = { run, resolve, reject };
+  });
+
+  void drainAplusLiveScoreQueue(key);
+  return promise;
+};
+
 const ensureAplusLiveScoreStartedFromGameplay = async (config?: AplusLiveScoreConfig) => {
   if (!config?.matchId) {
     return;
@@ -1088,6 +1215,20 @@ export const pushAplusLiveScoreUpdate = async ({
     return;
   }
 
+  if (!isStarted) {
+    return;
+  }
+
+  if (winner) {
+    // Kết thúc trận chỉ được gửi qua /finish. Không gửi snapshot finished qua /score,
+    // vì request score cũ có thể kéo admin/web về trạng thái sai sau khi đã khóa kết quả.
+    console.log('[AplusLiveScore][PUSH_SCORE_SKIP_WINNER_USE_FINISH]', {
+      matchId: config.matchId,
+      matchNumber: config.matchNumber,
+    });
+    return;
+  }
+
   const shouldStartLiveFromGameplay = Boolean(isStarted && !winner);
   if (shouldStartLiveFromGameplay) {
     try {
@@ -1104,11 +1245,6 @@ export const pushAplusLiveScoreUpdate = async ({
   const players = playerSettings.playingPlayers.slice(0, 2);
   const score1 = Number(players[0]?.totalPoint || 0);
   const score2 = Number(players[1]?.totalPoint || 0);
-  const player1Name = getPlayerNameForPayload(players[0], 'Người chơi 1');
-  const player2Name = getPlayerNameForPayload(players[1], 'Người chơi 2');
-  const player1Country = getPlayerCountryForPayload(players[0]);
-  const player2Country = getPlayerCountryForPayload(players[1]);
-
   const resolvedCountdownTime = Math.max(0, Math.round(Number(countdownTime ?? 0)));
   const resolvedCountdownBaseTime = Math.max(
     resolvedCountdownTime,
@@ -1138,27 +1274,10 @@ export const pushAplusLiveScoreUpdate = async ({
   const payload = {
     score1,
     score2,
-    player1Name,
-    player2Name,
-    player1Country,
-    player2Country,
-    player1CountryCode: player1Country,
-    player2CountryCode: player2Country,
-    player1: {
-      name: player1Name,
-      countryCode: player1Country,
-      countryName: player1Country,
-      flag: player1Country,
-    },
-    player2: {
-      name: player2Name,
-      countryCode: player2Country,
-      countryName: player2Country,
-      flag: player2Country,
-    },
-    status: winner ? 'finished' : isStarted ? 'playing' : 'upcoming',
-    liveStatus: winner ? 'ended' : isStarted ? 'running' : 'claimed',
-    isLive: Boolean(isStarted && !winner),
+    // Score updates are action/snapshot-only. Player names, bracket slots and finished status
+    // stay DB/admin-owned; /finish is the only API that may end a match.
+    liveStatus: 'running',
+    isLive: true,
 
     turnCount: resolvedTurnCount,
     liveTurnCount: resolvedTurnCount,
@@ -1176,12 +1295,12 @@ export const pushAplusLiveScoreUpdate = async ({
     countdownTime: resolvedCountdownTime,
     countdownBaseTime: resolvedCountdownBaseTime,
     countdownIsRunning: liveCountdownIsRunning,
-    countdownStatus: winner ? 'finished' : liveCountdownIsRunning ? 'running' : 'paused',
+    countdownStatus: liveCountdownIsRunning ? 'running' : 'paused',
     countdownUpdatedAt: new Date().toISOString(),
     liveCountdownTime: resolvedCountdownTime,
     liveCountdownBaseTime: resolvedCountdownBaseTime,
     liveCountdownIsRunning,
-    liveCountdownStatus: winner ? 'finished' : liveCountdownIsRunning ? 'running' : 'paused',
+    liveCountdownStatus: liveCountdownIsRunning ? 'running' : 'paused',
     liveCountdownUpdatedAt: new Date().toISOString(),
   };
 
@@ -1191,76 +1310,81 @@ export const pushAplusLiveScoreUpdate = async ({
     tournamentId: config.tournamentId,
     score1,
     score2,
-    status: payload.status,
     liveStatus: payload.liveStatus,
   });
 
-  const sendScore = (sessionToken: string) =>
-    requestJson(
-      'PATCH',
-      APLUS_LIVE_SCORE_ENDPOINTS.updateScore,
-      {matchId: config.matchId},
-      payload,
-      sessionToken,
-    );
+  const sendNow = async () => {
+    const sendScore = (sessionToken: string) =>
+      requestJson(
+        'PATCH',
+        APLUS_LIVE_SCORE_ENDPOINTS.updateScore,
+        {matchId: config.matchId},
+        payload,
+        sessionToken,
+      );
 
-  let sessionToken = '';
+    let sessionToken = '';
 
-  try {
-    sessionToken = await getOrClaimAplusLiveScoreSessionToken(config);
-  } catch (error) {
-    if (isAplusLiveScoreClaimBlockError(error)) {
-      console.log('[AplusLiveScore][PUSH_SCORE_BLOCKED_BEFORE_SEND]', {
-        matchId: config.matchId,
-        reason: (error as Error)?.message || error,
-      });
-      forgetAplusLiveScoreSession(config.matchId);
-      return;
-    }
-    throw error;
-  }
-
-  try {
-    const result = await sendScore(sessionToken);
-    rememberAplusLiveScoreSession(config.matchId, sessionToken, config.lockExpiresAt);
-
-    console.log('[AplusLiveScore][PUSH_SCORE_OK]', {
-      matchId: config.matchId,
-      score1,
-      score2,
-      source: result?.source,
-    });
-  } catch (error) {
-    if (isAplusLiveScoreClaimBlockError(error)) {
-      console.log('[AplusLiveScore][PUSH_SCORE_BLOCKED_BY_MATCH_STATE]', {
-        matchId: config.matchId,
-        reason: (error as Error)?.message || error,
-      });
-      forgetAplusLiveScoreSession(config.matchId);
-      return;
-    }
-
-    if (!isLiveSessionTokenError(error)) {
+    try {
+      sessionToken = await getOrClaimAplusLiveScoreSessionToken(config);
+    } catch (error) {
+      if (isAplusLiveScoreClaimBlockError(error)) {
+        console.log('[AplusLiveScore][PUSH_SCORE_BLOCKED_BEFORE_SEND]', {
+          matchId: config.matchId,
+          reason: (error as Error)?.message || error,
+        });
+        forgetAplusLiveScoreSession(config.matchId);
+        return;
+      }
       throw error;
     }
 
-    console.log('[AplusLiveScore][PUSH_SCORE_RECLAIM]', {
-      matchId: config.matchId,
-      reason: (error as Error)?.message || error,
-    });
+    try {
+      const result = await sendScore(sessionToken);
+      rememberAplusLiveScoreSession(config.matchId, sessionToken, config.lockExpiresAt);
 
-    forgetAplusLiveScoreSession(config.matchId);
-    const claimed = await claimAplusLiveScoreSession(config);
-    sessionToken = claimed.sessionToken;
+      console.log('[AplusLiveScore][PUSH_SCORE_OK]', {
+        matchId: config.matchId,
+        score1,
+        score2,
+        source: result?.source,
+      });
+      return result;
+    } catch (error) {
+      if (isAplusLiveScoreClaimBlockError(error)) {
+        console.log('[AplusLiveScore][PUSH_SCORE_BLOCKED_BY_MATCH_STATE]', {
+          matchId: config.matchId,
+          reason: (error as Error)?.message || error,
+        });
+        forgetAplusLiveScoreSession(config.matchId);
+        return;
+      }
 
-    const result = await sendScore(sessionToken);
-    rememberAplusLiveScoreSession(config.matchId, sessionToken, claimed.lockExpiresAt);
+      if (!isLiveSessionTokenError(error)) {
+        throw error;
+      }
 
-    console.log('[AplusLiveScore][PUSH_SCORE_OK_AFTER_RECLAIM]', {
-      matchId: config.matchId,
-      result,
-    });
-  }
+      console.log('[AplusLiveScore][PUSH_SCORE_RECLAIM]', {
+        matchId: config.matchId,
+        reason: (error as Error)?.message || error,
+      });
+
+      forgetAplusLiveScoreSession(config.matchId);
+      const claimed = await claimAplusLiveScoreSession(config);
+      sessionToken = claimed.sessionToken;
+
+      const result = await sendScore(sessionToken);
+      rememberAplusLiveScoreSession(config.matchId, sessionToken, claimed.lockExpiresAt);
+
+      console.log('[AplusLiveScore][PUSH_SCORE_OK_AFTER_RECLAIM]', {
+        matchId: config.matchId,
+        result,
+      });
+      return result;
+    }
+  };
+
+  return enqueueLatestAplusLiveScoreWrite(config.matchId, sendNow);
 };
 
 export const heartbeatAplusLiveScoreMatch = async (config?: AplusLiveScoreConfig) => {

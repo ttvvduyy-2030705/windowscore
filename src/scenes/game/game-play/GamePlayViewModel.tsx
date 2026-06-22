@@ -77,6 +77,7 @@ import {
 } from 'services/livestream/WindowsFfmpegLiveEngine';
 import {
   pushAplusLiveScoreUpdate,
+  heartbeatAplusLiveScoreMatch,
   finishAplusLiveScoreMatch,
 } from 'services/aplusLiveScore';
 
@@ -4750,21 +4751,14 @@ const GamePlayViewModel = () => {
         return;
       }
 
-      if (aplusLiveScorePushInFlightRef.current) {
-        // Mạng/API chậm: không xếp hàng nhiều PATCH cũ.
-        // Snapshot kế tiếp sẽ lấy state mới nhất và gửi lại.
-        if (!sameAsLast) {
-          aplusLiveScoreLastSignatureRef.current = '';
-        }
-        return;
-      }
-
+      // Không chặn ở ViewModel nữa. Service layer có latest-only queue theo matchId,
+      // nên nếu API đang chậm thì snapshot mới nhất sẽ thay snapshot cũ và được gửi tiếp.
       aplusLiveScoreLastSignatureRef.current = signature;
       aplusLiveScoreLastPushAtRef.current = now;
       aplusLiveScorePushInFlightRef.current = true;
 
       try {
-        await pushAplusLiveScoreUpdate({
+        const result = await pushAplusLiveScoreUpdate({
           gameSettings,
           playerSettings,
           totalTurns: safeTurns,
@@ -4779,16 +4773,18 @@ const GamePlayViewModel = () => {
           isMatchPaused,
         });
 
-        console.log('[AplusLiveScore] push ok:', {
-          reason,
-          score1,
-          score2,
-          turnCount: safeTurns,
-          countdownTime: safeCountdownTime,
-          countdownBaseTime: safeCountdownBaseTime,
-          targetScore: safeTargetScore,
-          running,
-        });
+        if (!(result as any)?.replacedByNewerSnapshot) {
+          console.log('[AplusLiveScore] push ok:', {
+            reason,
+            score1,
+            score2,
+            turnCount: safeTurns,
+            countdownTime: safeCountdownTime,
+            countdownBaseTime: safeCountdownBaseTime,
+            targetScore: safeTargetScore,
+            running,
+          });
+        }
       } catch (error: any) {
         console.log('[AplusLiveScore] push failed:', error?.message || error);
       } finally {
@@ -4816,7 +4812,7 @@ const GamePlayViewModel = () => {
   useEffect(() => {
     const timeout = setTimeout(() => {
       void pushAplusLiveScoreSnapshot('state-change-fast', false);
-    }, 45);
+    }, 250);
 
     return () => clearTimeout(timeout);
   }, [pushAplusLiveScoreSnapshot]);
@@ -4836,6 +4832,30 @@ const GamePlayViewModel = () => {
   }, [
     gameSettings?.aplusLiveScore?.enabled,
     pushAplusLiveScoreSnapshot,
+  ]);
+
+  // Heartbeat riêng để giữ live session/lock sống trong lúc điểm không đổi hoặc API score đang throttle.
+  // Heartbeat không thay đổi điểm và không được dùng để finish trận.
+  useEffect(() => {
+    const liveConfig = (gameSettings as any)?.aplusLiveScore;
+    if (!liveConfig?.enabled || !liveConfig?.matchId || winner) {
+      return;
+    }
+
+    const sendHeartbeat = () => {
+      void heartbeatAplusLiveScoreMatch(liveConfig).catch((error: any) => {
+        console.log('[AplusLiveScore] heartbeat failed:', error?.message || error);
+      });
+    };
+
+    sendHeartbeat();
+    const timer = setInterval(sendHeartbeat, 15000);
+    return () => clearInterval(timer);
+  }, [
+    (gameSettings as any)?.aplusLiveScore?.enabled,
+    (gameSettings as any)?.aplusLiveScore?.matchId,
+    (gameSettings as any)?.aplusLiveScore?.sessionToken,
+    winner,
   ]);
 
   return useMemo(() => {
