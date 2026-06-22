@@ -955,6 +955,10 @@ const GameSettingsViewModel = (props: Props) => {
         selectedAplusTournament,
         normalizedMatchNumber,
       );
+      if (!match) {
+        throw new Error(`Không tìm thấy trận ${normalizedMatchNumber} trong giải đã chọn.`);
+      }
+
       const lockedMatch = await lockAplusLiveScoreMatch(match);
       setSelectedAplusMatch(lockedMatch);
       setPlayerSettings(prev =>

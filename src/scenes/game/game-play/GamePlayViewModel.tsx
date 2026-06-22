@@ -4686,13 +4686,10 @@ const GamePlayViewModel = () => {
   const aplusLiveScoreLastSignatureRef = useRef('');
   const aplusLiveScoreLastPushAtRef = useRef(0);
   const aplusLiveScorePushInFlightRef = useRef(false);
-  const aplusLiveScoreBackoffUntilRef = useRef(0);
 
   useEffect(() => {
     aplusLiveScoreLastSignatureRef.current = '';
     aplusLiveScoreLastPushAtRef.current = 0;
-    aplusLiveScorePushInFlightRef.current = false;
-    aplusLiveScoreBackoffUntilRef.current = 0;
   }, [
     (gameSettings as any)?.aplusLiveScore?.tournamentId,
     (gameSettings as any)?.aplusLiveScore?.matchId,
@@ -4735,19 +4732,6 @@ const GamePlayViewModel = () => {
       const now = Date.now();
       const sameAsLast = signature === aplusLiveScoreLastSignatureRef.current;
       const elapsedSinceLastPush = now - aplusLiveScoreLastPushAtRef.current;
-      const isStateChangeReason = reason.includes('state-change');
-      const minPushIntervalMs = running ? 2800 : 8000;
-
-      // Chặn chồng request khi mạng chậm/API đang bận. Nếu không chặn, 1 app có thể
-      // tự xếp hàng nhiều PATCH; 16+ máy sẽ nhân thành request storm.
-      if (aplusLiveScorePushInFlightRef.current) {
-        return;
-      }
-
-      // Sau lỗi mạng/API, lùi nhịp một chút để không retry dồn dập làm backend sập thêm.
-      if (!winner && now < aplusLiveScoreBackoffUntilRef.current) {
-        return;
-      }
 
       // Không gửi lại cùng một snapshot đã dừng/kết thúc. Bản cũ force 350ms
       // vẫn bắn PATCH liên tục kể cả status=finished, nên khi đổi T3 -> T6
@@ -4756,13 +4740,22 @@ const GamePlayViewModel = () => {
         return;
       }
 
-      // Điểm/lượt/pause/start gửi ngay qua state-change. Countdown chỉ cần correction
-      // mỗi ~3 giây vì backend/web có timestamp để tự chạy timer, không cần spam 350ms/1s.
-      if (sameAsLast && elapsedSinceLastPush < minPushIntervalMs) {
+      // Khi đang chạy countdown, chỉ gửi correction định kỳ.
+      // Điểm/lượt/state vẫn đẩy ngay qua state-change-fast; còn snapshot giống hệt thì không được spam API.
+      if (sameAsLast && elapsedSinceLastPush < 4500) {
         return;
       }
 
-      if (!force && !isStateChangeReason && sameAsLast) {
+      if (!force && sameAsLast) {
+        return;
+      }
+
+      if (aplusLiveScorePushInFlightRef.current) {
+        // Mạng/API chậm: không xếp hàng nhiều PATCH cũ.
+        // Snapshot kế tiếp sẽ lấy state mới nhất và gửi lại.
+        if (!sameAsLast) {
+          aplusLiveScoreLastSignatureRef.current = '';
+        }
         return;
       }
 
@@ -4786,8 +4779,17 @@ const GamePlayViewModel = () => {
           isMatchPaused,
         });
 
+        console.log('[AplusLiveScore] push ok:', {
+          reason,
+          score1,
+          score2,
+          turnCount: safeTurns,
+          countdownTime: safeCountdownTime,
+          countdownBaseTime: safeCountdownBaseTime,
+          targetScore: safeTargetScore,
+          running,
+        });
       } catch (error: any) {
-        aplusLiveScoreBackoffUntilRef.current = Date.now() + 3000;
         console.log('[AplusLiveScore] push failed:', error?.message || error);
       } finally {
         aplusLiveScorePushInFlightRef.current = false;
@@ -4819,17 +4821,16 @@ const GamePlayViewModel = () => {
     return () => clearTimeout(timeout);
   }, [pushAplusLiveScoreSnapshot]);
 
-  // Nhịp correction chậm để chống sập backend khi nhiều máy cùng live.
-  // Điểm/lượt vẫn push ngay bằng effect state-change phía trên; interval này chỉ giữ
-  // countdown/heartbeat mềm, không còn spam 350ms.
+  // Push correction định kỳ để web giữ countdown/lock đồng bộ nhưng không spam API.
+  // Điểm số vẫn được đẩy gần như ngay lập tức bằng effect state-change-fast phía trên.
   useEffect(() => {
     if (!gameSettings?.aplusLiveScore?.enabled) {
       return;
     }
 
     const timer = setInterval(() => {
-      void pushAplusLiveScoreSnapshot('live-score-3s-correction', true);
-    }, 3000);
+      void pushAplusLiveScoreSnapshot('periodic-safe-sync', true);
+    }, 5000);
 
     return () => clearInterval(timer);
   }, [
