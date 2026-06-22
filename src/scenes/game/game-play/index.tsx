@@ -536,7 +536,7 @@ const GamePlay = () => {
   const [isCameraFullscreen, setIsCameraFullscreen] = useState(
     getCameraFullscreen(),
   );
-  const [remoteEnabled, setRemoteEnabled] = useState(false);
+  const [remoteEnabled, setRemoteEnabled] = useState(true);
 
   const onToggleRemote = (value: boolean) => {
     setRemoteEnabled(value);
@@ -544,6 +544,7 @@ const GamePlay = () => {
   };
 
   useEffect(() => {
+    RemoteControl.instance.setEnabled?.(true);
     return () => {
       RemoteControl.instance.setEnabled?.(false);
     };

@@ -182,6 +182,62 @@ let aplusLiveScoreClientSeq = 0;
 let aplusLiveScoreOutboxFlushTimer: ReturnType<typeof setTimeout> | undefined;
 let aplusLiveScoreOutboxFlushInFlight = false;
 
+
+type AplusLiveScoreBackoffEntry = {
+  retryCount: number;
+  until: number;
+};
+
+const APLUS_LIVE_SCORE_MAX_BACKOFF_MS = 60000;
+const aplusLiveScoreBackoffByKey = new Map<string, AplusLiveScoreBackoffEntry>();
+
+const getAplusLiveScoreRetryDelayMs = (retryCount: number, retryAfterSeconds = 0) => {
+  const retryAfterMs = Number(retryAfterSeconds || 0) > 0 ? Number(retryAfterSeconds) * 1000 : 0;
+  const normalizedRetry = Math.max(1, Number(retryCount || 1));
+  const fallbackMs = normalizedRetry === 1
+    ? 5000
+    : normalizedRetry === 2
+    ? 10000
+    : normalizedRetry === 3
+    ? 30000
+    : Math.min(60000, 30000 + ((normalizedRetry - 3) * 5000));
+  return Math.min(Math.max(retryAfterMs || fallbackMs, 1000), APLUS_LIVE_SCORE_MAX_BACKOFF_MS);
+};
+
+const getAplusLiveScoreBackoffKey = (
+  method: HttpMethod,
+  path: string,
+  params: Record<string, string | number> = {},
+) => {
+  const matchId = toText(params.matchId || (path.match(/matches\/([^/]+)/)?.[1] || ''));
+  const tournamentId = toText(params.tournamentId || (path.match(/tournaments\/([^/]+)/)?.[1] || ''));
+  if (matchId) return `${method}:match:${matchId}`;
+  if (tournamentId) return `${method}:tournament:${tournamentId}`;
+  return `${method}:${path.split('?')[0]}`;
+};
+
+const waitForAplusLiveScoreBackoff = async (key: string) => {
+  const entry = aplusLiveScoreBackoffByKey.get(key);
+  const delayMs = Number(entry?.until || 0) - Date.now();
+  if (delayMs > 0) {
+    await new Promise(resolve => setTimeout(resolve, Math.min(delayMs, APLUS_LIVE_SCORE_MAX_BACKOFF_MS)));
+  }
+};
+
+const rememberAplusLiveScoreBackoff = (key: string, retryAfterSeconds = 0) => {
+  const previous = aplusLiveScoreBackoffByKey.get(key) || { retryCount: 0, until: 0 };
+  const retryCount = previous.retryCount + 1;
+  const delayMs = getAplusLiveScoreRetryDelayMs(retryCount, retryAfterSeconds);
+  aplusLiveScoreBackoffByKey.set(key, { retryCount, until: Date.now() + delayMs });
+  return delayMs;
+};
+
+const clearAplusLiveScoreBackoff = (key: string) => {
+  aplusLiveScoreBackoffByKey.delete(key);
+};
+
+const isAplusLiveScoreRateLimitedError = (error: unknown) => Number((error as any)?.status || 0) === 429;
+
 type AplusLiveScoreOutboxAction = 'score' | 'finish';
 type AplusLiveScoreOutboxEntry = {
   id: string;
@@ -270,7 +326,10 @@ const removeAplusLiveScoreOutboxEntry = async (id: string) => {
   await writeAplusLiveScoreOutbox(items.filter(item => item.id !== id));
 };
 
-const upsertAplusLiveScoreOutboxEntry = async (entry: Omit<AplusLiveScoreOutboxEntry, 'id' | 'retryCount' | 'updatedAt'>) => {
+const upsertAplusLiveScoreOutboxEntry = async (
+  entry: Omit<AplusLiveScoreOutboxEntry, 'id' | 'retryCount' | 'updatedAt'>,
+  flushDelayMs = 1500,
+) => {
   const id = makeAplusOutboxId(entry.action, entry.matchId);
   const items = await readAplusLiveScoreOutbox();
   const previous = items.find(item => item.id === id);
@@ -282,7 +341,7 @@ const upsertAplusLiveScoreOutboxEntry = async (entry: Omit<AplusLiveScoreOutboxE
     updatedAt: Date.now(),
   };
   await writeAplusLiveScoreOutbox([...items.filter(item => item.id !== id), nextEntry]);
-  scheduleAplusLiveScoreOutboxFlush(1500);
+  scheduleAplusLiveScoreOutboxFlush(flushDelayMs);
 };
 
 const scheduleAplusLiveScoreOutboxFlush = (delayMs = 5000) => {
@@ -426,6 +485,9 @@ const requestJson = async (
         clientEventId: toText(body?.clientEventId) || `evt-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
       };
 
+  const backoffKey = getAplusLiveScoreBackoffKey(method, path, params);
+  await waitForAplusLiveScoreBackoff(backoffKey);
+
   const urls = APLUS_LIVE_SCORE_FALLBACK_BASE_URLS.map(baseUrl => {
     const built = buildUrlWithBase(baseUrl, path, params);
     return method === 'GET' ? appendNoCacheQuery(built) : built;
@@ -490,6 +552,10 @@ const requestJson = async (
         data,
       });
 
+      const retryAfter = Number(response.headers?.get?.('retry-after') || (typeof data === 'string' ? 0 : data?.retryAfter) || 0) || 0;
+      const backoffMs = response.status === 429
+        ? rememberAplusLiveScoreBackoff(backoffKey, retryAfter)
+        : 0;
       const message = typeof data === 'string'
         ? data
         : data?.message || data?.error || `HTTP ${response.status}`;
@@ -497,6 +563,8 @@ const requestJson = async (
       (error as any).status = response.status;
       (error as any).code = typeof data === 'string' ? undefined : data?.code;
       (error as any).data = data;
+      (error as any).retryAfter = retryAfter || Math.ceil(backoffMs / 1000) || 0;
+      (error as any).backoffMs = backoffMs;
       throw error;
     }
 
@@ -509,6 +577,7 @@ const requestJson = async (
       });
     }
 
+    clearAplusLiveScoreBackoff(backoffKey);
     return data;
   }
 
@@ -652,8 +721,8 @@ export const flushAplusLiveScoreOutbox = async (reason = 'manual') => {
 
     await writeAplusLiveScoreOutbox(remaining);
     if (remaining.length) {
-      const maxRetry = Math.max(...remaining.map(item => item.retryCount || 0));
-      scheduleAplusLiveScoreOutboxFlush(Math.min(60000, 3000 * (2 ** Math.min(maxRetry, 4))));
+      const maxRetry = Math.max(...remaining.map(item => item.retryCount || 1));
+      scheduleAplusLiveScoreOutboxFlush(getAplusLiveScoreRetryDelayMs(maxRetry));
     }
   } finally {
     aplusLiveScoreOutboxFlushInFlight = false;
@@ -1565,7 +1634,9 @@ export const pushAplusLiveScoreUpdate = async ({
           sessionToken: getCachedAplusLiveScoreSessionToken(config),
           clientSeq: nextAplusLiveScoreClientSeq(),
           clientTimestamp: new Date().toISOString(),
-        });
+        }, isAplusLiveScoreRateLimitedError(error)
+          ? getAplusLiveScoreRetryDelayMs(1, (error as any)?.retryAfter)
+          : 1500);
       }
       throw error;
     }
@@ -1696,7 +1767,9 @@ export const finishAplusLiveScoreMatch = async (
       sessionToken: isLiveSessionTokenError(error) ? '' : sessionToken,
       clientSeq: finishClientSeq,
       clientTimestamp: finishClientTimestamp,
-    });
+    }, isAplusLiveScoreRateLimitedError(error)
+      ? getAplusLiveScoreRetryDelayMs(1, (error as any)?.retryAfter)
+      : 1500);
 
     debugAplusLiveScore('[AplusLiveScore][FINISH_QUEUED_OUTBOX]', {
       matchId: config.matchId,

@@ -79,6 +79,7 @@ import {
   pushAplusLiveScoreUpdate,
   heartbeatAplusLiveScoreMatch,
   finishAplusLiveScoreMatch,
+  releaseAplusLiveScoreMatch,
   bootstrapAplusLiveScoreOutbox,
 } from 'services/aplusLiveScore';
 
@@ -4688,6 +4689,11 @@ const GamePlayViewModel = () => {
   const aplusLiveScoreLastSignatureRef = useRef('');
   const aplusLiveScoreLastPushAtRef = useRef(0);
   const aplusLiveScorePushInFlightRef = useRef(false);
+  const aplusLiveScoreWinnerRef = useRef(winner);
+
+  useEffect(() => {
+    aplusLiveScoreWinnerRef.current = winner;
+  }, [winner]);
 
   useEffect(() => {
     aplusLiveScoreLastSignatureRef.current = '';
@@ -4827,7 +4833,7 @@ const GamePlayViewModel = () => {
 
     const timer = setInterval(() => {
       void pushAplusLiveScoreSnapshot('periodic-safe-sync', true);
-    }, 5000);
+    }, 8000);
 
     return () => clearInterval(timer);
   }, [
@@ -4869,7 +4875,27 @@ const GamePlayViewModel = () => {
     (gameSettings as any)?.aplusLiveScore?.matchId,
   ]);
 
+  useEffect(() => {
+    const liveConfig = (gameSettings as any)?.aplusLiveScore;
+    if (!liveConfig?.enabled || !liveConfig?.matchId) return undefined;
+
+    return () => {
+      // Rời gameplay / đổi trận: release live lock để máy khác không bị kẹt phiên.
+      // Nếu đã có winner thì /finish là nguồn sự thật, không gọi release kéo trận về released.
+      if (!aplusLiveScoreWinnerRef.current) {
+        void releaseAplusLiveScoreMatch(liveConfig).catch((error: any) => {
+          console.log('[AplusLiveScore] release failed:', error?.message || error);
+        });
+      }
+    };
+  }, [
+    (gameSettings as any)?.aplusLiveScore?.enabled,
+    (gameSettings as any)?.aplusLiveScore?.matchId,
+    (gameSettings as any)?.aplusLiveScore?.sessionToken,
+  ]);
+
   return useMemo(() => {
+
     return {
       matchCountdownRef,
       winner,
