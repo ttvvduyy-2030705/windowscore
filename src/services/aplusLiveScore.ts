@@ -1,5 +1,5 @@
-import DeviceInfo from 'react-native-device-info';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import DeviceInfo from 'react-native-device-info';
 import {
   APLUS_LIVE_SCORE_API_KEY,
   APLUS_LIVE_SCORE_BASE_URL,
@@ -69,6 +69,9 @@ type LiveScorePayload = {
   isPaused?: boolean;
   isMatchPaused?: boolean;
 };
+
+const APLUS_LIVE_SCORE_DEBUG = String((globalThis as any)?.__APLUS_LIVE_SCORE_DEBUG__ || '').toLowerCase() === 'true';
+const debugAplusLiveScore = (...args: any[]) => { if (APLUS_LIVE_SCORE_DEBUG) console.log(...args); };
 
 const toText = (value?: unknown) => String(value ?? '').trim();
 const trimSlash = (value: string) => String(value || '').replace(/\/+$/, '');
@@ -172,57 +175,122 @@ const getPlayerCountryForPayload = (player: any) =>
     'VN',
   );
 
-const APLUS_DEVICE_ID_STORAGE_KEY = '@APLUS_LIVE_SCORE_DEVICE_ID_V2';
-const APLUS_CLIENT_SEQ_STORAGE_KEY = '@APLUS_LIVE_SCORE_CLIENT_SEQ_V1';
-const APLUS_OUTBOX_STORAGE_KEY = '@APLUS_LIVE_SCORE_OUTBOX_V1';
-const APLUS_SCORE_THROTTLE_MS = 700;
-const APLUS_HEARTBEAT_MIN_MS = 20000;
-const APLUS_OUTBOX_MAX_RETRY_DELAY_MS = 30000;
-const APLUS_DEBUG_HTTP = /^(1|true|yes)$/i.test(String((globalThis as any).__APLUS_LIVE_DEBUG__ || ''));
+const APLUS_DEVICE_ID_STORAGE_KEY = '@aplus_live_score_device_id_v2';
+const APLUS_OUTBOX_STORAGE_KEY = '@aplus_live_score_persistent_outbox_v1';
+let cachedAplusDeviceId = '';
+let aplusLiveScoreClientSeq = 0;
+let aplusLiveScoreOutboxFlushTimer: ReturnType<typeof setTimeout> | undefined;
+let aplusLiveScoreOutboxFlushInFlight = false;
 
-const makeLocalUuid = () => `aplus-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
+type AplusLiveScoreOutboxAction = 'score' | 'finish';
+type AplusLiveScoreOutboxEntry = {
+  id: string;
+  action: AplusLiveScoreOutboxAction;
+  matchId: string;
+  tournamentId?: string;
+  config: AplusLiveScoreConfig;
+  payload?: any;
+  score1?: number;
+  score2?: number;
+  sessionToken?: string;
+  clientSeq?: number;
+  clientTimestamp: string;
+  retryCount: number;
+  updatedAt: number;
+};
+
+const isBadDeviceId = (value?: unknown) => {
+  const text = toText(value).toLowerCase();
+  return !text || ['unknown', 'undefined', 'null', 'windows-scoreboard-device', 'windows-device'].includes(text);
+};
+
+const makeFallbackDeviceId = () => {
+  const random = Math.random().toString(36).slice(2, 12);
+  return `windows-scoreboard-${Date.now().toString(36)}-${random}`;
+};
+
+const persistAplusDeviceId = async (deviceId: string) => {
+  const safeDeviceId = toText(deviceId);
+  if (!safeDeviceId) return '';
+  cachedAplusDeviceId = safeDeviceId;
+  try {
+    await AsyncStorage.setItem(APLUS_DEVICE_ID_STORAGE_KEY, safeDeviceId);
+  } catch (_error) {}
+  return safeDeviceId;
+};
 
 const getDeviceId = async () => {
-  try {
-    const uniqueId = await DeviceInfo.getUniqueId();
-    if (uniqueId) return String(uniqueId);
-  } catch (_error) {}
+  if (!isBadDeviceId(cachedAplusDeviceId)) {
+    return cachedAplusDeviceId;
+  }
 
   try {
     const stored = await AsyncStorage.getItem(APLUS_DEVICE_ID_STORAGE_KEY);
-    if (stored) return stored;
-    const generated = makeLocalUuid();
-    await AsyncStorage.setItem(APLUS_DEVICE_ID_STORAGE_KEY, generated);
-    return generated;
-  } catch (_error) {
-    // Last resort is still per-process unique, never a shared fixed string.
-    return makeLocalUuid();
-  }
-};
-
-let clientSeqMemory = 0;
-let clientSeqInitPromise: Promise<void> | null = null;
-const ensureClientSeqLoaded = async () => {
-  if (!clientSeqInitPromise) {
-    clientSeqInitPromise = (async () => {
-      try {
-        const stored = Number(await AsyncStorage.getItem(APLUS_CLIENT_SEQ_STORAGE_KEY));
-        clientSeqMemory = Number.isFinite(stored) && stored > 0 ? stored : 0;
-      } catch (_error) {
-        clientSeqMemory = 0;
-      }
-    })();
-  }
-  await clientSeqInitPromise;
-};
-
-const nextClientSeq = async () => {
-  await ensureClientSeqLoaded();
-  clientSeqMemory += 1;
-  try {
-    await AsyncStorage.setItem(APLUS_CLIENT_SEQ_STORAGE_KEY, String(clientSeqMemory));
+    if (!isBadDeviceId(stored)) {
+      cachedAplusDeviceId = String(stored);
+      return cachedAplusDeviceId;
+    }
   } catch (_error) {}
-  return clientSeqMemory;
+
+  try {
+    const uniqueId = await DeviceInfo.getUniqueId();
+    if (!isBadDeviceId(uniqueId)) {
+      return persistAplusDeviceId(String(uniqueId));
+    }
+  } catch (_error) {}
+
+  return persistAplusDeviceId(makeFallbackDeviceId());
+};
+
+const nextAplusLiveScoreClientSeq = () => {
+  aplusLiveScoreClientSeq = (aplusLiveScoreClientSeq + 1) % Number.MAX_SAFE_INTEGER;
+  return aplusLiveScoreClientSeq;
+};
+
+const readAplusLiveScoreOutbox = async (): Promise<AplusLiveScoreOutboxEntry[]> => {
+  try {
+    const raw = await AsyncStorage.getItem(APLUS_OUTBOX_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed.filter(item => item?.matchId && item?.action) : [];
+  } catch (_error) {
+    return [];
+  }
+};
+
+const writeAplusLiveScoreOutbox = async (items: AplusLiveScoreOutboxEntry[]) => {
+  try {
+    await AsyncStorage.setItem(APLUS_OUTBOX_STORAGE_KEY, JSON.stringify(items.slice(-100)));
+  } catch (_error) {}
+};
+
+const makeAplusOutboxId = (action: AplusLiveScoreOutboxAction, matchId: string) => `${action}:${matchId}`;
+
+const removeAplusLiveScoreOutboxEntry = async (id: string) => {
+  const items = await readAplusLiveScoreOutbox();
+  await writeAplusLiveScoreOutbox(items.filter(item => item.id !== id));
+};
+
+const upsertAplusLiveScoreOutboxEntry = async (entry: Omit<AplusLiveScoreOutboxEntry, 'id' | 'retryCount' | 'updatedAt'>) => {
+  const id = makeAplusOutboxId(entry.action, entry.matchId);
+  const items = await readAplusLiveScoreOutbox();
+  const previous = items.find(item => item.id === id);
+  const nextEntry: AplusLiveScoreOutboxEntry = {
+    ...previous,
+    ...entry,
+    id,
+    retryCount: previous?.retryCount || 0,
+    updatedAt: Date.now(),
+  };
+  await writeAplusLiveScoreOutbox([...items.filter(item => item.id !== id), nextEntry]);
+  scheduleAplusLiveScoreOutboxFlush(1500);
+};
+
+const scheduleAplusLiveScoreOutboxFlush = (delayMs = 5000) => {
+  if (aplusLiveScoreOutboxFlushTimer) clearTimeout(aplusLiveScoreOutboxFlushTimer);
+  aplusLiveScoreOutboxFlushTimer = setTimeout(() => {
+    aplusLiveScoreOutboxFlushTimer = undefined;
+    void flushAplusLiveScoreOutbox('timer');
+  }, Math.max(1000, delayMs));
 };
 
 type AplusLiveScoreSessionCacheEntry = {
@@ -268,130 +336,6 @@ const getCachedAplusLiveScoreSessionToken = (
     : '';
 
   return cachedToken || toText(config?.sessionToken);
-};
-
-
-type AplusOutboxItem = {
-  key: string;
-  action: 'score' | 'finish';
-  config: AplusLiveScoreConfig;
-  payload?: any;
-  score1?: number;
-  score2?: number;
-  attempts?: number;
-  nextRetryAt?: number;
-  createdAt: number;
-  updatedAt: number;
-};
-
-const readOutbox = async (): Promise<AplusOutboxItem[]> => {
-  try {
-    const raw = await AsyncStorage.getItem(APLUS_OUTBOX_STORAGE_KEY);
-    const parsed = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed) ? parsed : [];
-  } catch (_error) {
-    return [];
-  }
-};
-
-const writeOutbox = async (items: AplusOutboxItem[]) => {
-  try {
-    await AsyncStorage.setItem(APLUS_OUTBOX_STORAGE_KEY, JSON.stringify(items.slice(-100)));
-  } catch (_error) {}
-};
-
-const upsertOutboxItem = async (item: AplusOutboxItem) => {
-  const items = await readOutbox();
-  const without = items.filter(existing => existing.key !== item.key);
-  await writeOutbox([...without, item]);
-};
-
-const removeOutboxItem = async (key: string) => {
-  const items = await readOutbox();
-  await writeOutbox(items.filter(item => item.key !== key));
-};
-
-const buildOutboxBackoff = (attempts = 0) => Math.min(APLUS_OUTBOX_MAX_RETRY_DELAY_MS, 1000 * Math.max(1, 2 ** Math.min(attempts, 5)));
-
-let flushingOutbox = false;
-const saveScoreToOutbox = async (config: AplusLiveScoreConfig, payload: any) => {
-  const now = Date.now();
-  await upsertOutboxItem({
-    key: `score:${config.matchId}`,
-    action: 'score',
-    config,
-    payload,
-    attempts: 0,
-    nextRetryAt: now + 1500,
-    createdAt: now,
-    updatedAt: now,
-  });
-};
-
-const saveFinishToOutbox = async (config: AplusLiveScoreConfig, score1?: number, score2?: number) => {
-  const now = Date.now();
-  await upsertOutboxItem({
-    key: `finish:${config.matchId}`,
-    action: 'finish',
-    config,
-    score1,
-    score2,
-    attempts: 0,
-    nextRetryAt: now + 1000,
-    createdAt: now,
-    updatedAt: now,
-  });
-};
-
-const flushOutboxItem = async (item: AplusOutboxItem) => {
-  if (!item?.config?.matchId) return;
-  if (item.action === 'finish') {
-    await finishAplusLiveScoreMatch(item.config, item.score1, item.score2, { fast: false, timeoutMs: 4000, skipOutbox: true } as any);
-    await removeOutboxItem(item.key);
-    return;
-  }
-
-  if (item.action === 'score' && item.payload) {
-    const sessionToken = await getOrClaimAplusLiveScoreSessionToken(item.config);
-    await requestJson('PATCH', APLUS_LIVE_SCORE_ENDPOINTS.updateScore, { matchId: item.config.matchId }, item.payload, sessionToken);
-    rememberAplusLiveScoreSession(item.config.matchId, sessionToken, item.config.lockExpiresAt);
-    await removeOutboxItem(item.key);
-  }
-};
-
-export const flushAplusLiveScoreOutbox = async () => {
-  if (flushingOutbox) return;
-  flushingOutbox = true;
-  try {
-    const now = Date.now();
-    const items = (await readOutbox())
-      .filter(item => !item.nextRetryAt || item.nextRetryAt <= now)
-      .sort((a, b) => (a.action === 'finish' ? -1 : 0) - (b.action === 'finish' ? -1 : 0));
-
-    for (const item of items) {
-      try {
-        await flushOutboxItem(item);
-      } catch (error) {
-        if (isAplusMatchFinishedError(error) || isAplusMatchLockedError(error)) {
-          await removeOutboxItem(item.key);
-          continue;
-        }
-        const attempts = Number(item.attempts || 0) + 1;
-        await upsertOutboxItem({
-          ...item,
-          attempts,
-          nextRetryAt: Date.now() + buildOutboxBackoff(attempts),
-          updatedAt: Date.now(),
-        });
-      }
-    }
-  } finally {
-    flushingOutbox = false;
-  }
-};
-
-export const bootstrapAplusLiveScoreOutbox = async () => {
-  void flushAplusLiveScoreOutbox();
 };
 
 const normalizeErrorMessage = (error: unknown) =>
@@ -469,26 +413,25 @@ const requestJson = async (
   body?: any,
   sessionToken?: string,
 ) => {
-  const urls = method === 'GET'
-    ? APLUS_LIVE_SCORE_FALLBACK_BASE_URLS.map(baseUrl =>
-        appendNoCacheQuery(buildUrlWithBase(baseUrl, path, params)),
-      )
-    : [buildUrl(path, params)];
+  const deviceId = await getDeviceId();
+  const requestSeq = method === 'GET' ? undefined : nextAplusLiveScoreClientSeq();
+  const requestBody = method === 'GET'
+    ? undefined
+    : {
+        ...(body && typeof body === 'object' ? body : {}),
+        deviceId: toText(body?.deviceId) || deviceId,
+        deviceName: toText(body?.deviceName) || APLUS_LIVE_SCORE_DEVICE_NAME,
+        clientTimestamp: toText(body?.clientTimestamp) || new Date().toISOString(),
+        clientSeq: body?.clientSeq ?? requestSeq,
+        clientEventId: toText(body?.clientEventId) || `evt-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+      };
+
+  const urls = APLUS_LIVE_SCORE_FALLBACK_BASE_URLS.map(baseUrl => {
+    const built = buildUrlWithBase(baseUrl, path, params);
+    return method === 'GET' ? appendNoCacheQuery(built) : built;
+  });
 
   let lastNetworkError: unknown = null;
-
-  const deviceId = await getDeviceId();
-  const clientSeq = method === 'GET' ? 0 : await nextClientSeq();
-  const clientTimestamp = new Date().toISOString();
-  const clientEventId = method === 'GET' ? '' : `${deviceId}:${clientSeq}:${Date.now()}`;
-  const requestBody = method === 'GET' ? body : {
-    ...(body ?? {}),
-    deviceId,
-    deviceName: APLUS_LIVE_SCORE_DEVICE_NAME,
-    clientSeq,
-    clientTimestamp,
-    clientEventId: (body?.clientEventId || body?.finishEventId || clientEventId),
-  };
 
   for (const url of urls) {
     const headers: Record<string, string> = {
@@ -498,16 +441,15 @@ const requestJson = async (
       'x-aplus-device': APLUS_LIVE_SCORE_DEVICE_NAME,
       'x-aplus-device-name': APLUS_LIVE_SCORE_DEVICE_NAME,
       'x-aplus-device-id': deviceId,
-      ...(clientSeq ? { 'x-aplus-client-seq': String(clientSeq), 'x-aplus-client-timestamp': clientTimestamp, 'x-aplus-client-event-id': clientEventId } : {}),
     };
 
     if (sessionToken) {
       headers['x-live-session-token'] = sessionToken;
     }
 
-    const shouldLogHttp = APLUS_DEBUG_HTTP || (method !== 'PATCH' || !url.includes('/score'));
+    const shouldLogHttp = method !== 'PATCH' || !url.includes('/score');
     if (shouldLogHttp) {
-      console.log('[AplusLiveScore][HTTP_START]', {
+      debugAplusLiveScore('[AplusLiveScore][HTTP_START]', {
         method,
         url,
         hasSessionToken: Boolean(sessionToken),
@@ -525,13 +467,13 @@ const requestJson = async (
       });
     } catch (error) {
       lastNetworkError = error;
-      console.log('[AplusLiveScore][NETWORK_ERROR]', {
+      debugAplusLiveScore('[AplusLiveScore][NETWORK_ERROR]', {
         method,
         url,
         message: String((error as Error)?.message || error),
       });
 
-      if (method === 'GET' && url !== urls[urls.length - 1]) {
+      if (url !== urls[urls.length - 1]) {
         continue;
       }
 
@@ -541,7 +483,7 @@ const requestJson = async (
     const data = await readJsonSafe(response);
 
     if (!response.ok) {
-      console.log('[AplusLiveScore][HTTP_ERROR]', {
+      debugAplusLiveScore('[AplusLiveScore][HTTP_ERROR]', {
         method,
         url,
         status: response.status,
@@ -559,7 +501,7 @@ const requestJson = async (
     }
 
     if (shouldLogHttp) {
-      console.log('[AplusLiveScore][HTTP_OK]', {
+      debugAplusLiveScore('[AplusLiveScore][HTTP_OK]', {
         method,
         url,
         status: response.status,
@@ -587,7 +529,7 @@ const claimAplusLiveScoreSession = async (
     ? DeviceInfo.getVersion()
     : '';
 
-  console.log('[AplusLiveScore][CLAIM_SESSION_START]', {matchId, deviceId});
+  debugAplusLiveScore('[AplusLiveScore][CLAIM_SESSION_START]', {matchId, deviceId});
 
   const data = await requestJson(
     'POST',
@@ -609,7 +551,7 @@ const claimAplusLiveScoreSession = async (
 
   rememberAplusLiveScoreSession(matchId, sessionToken, lockExpiresAt);
 
-  console.log('[AplusLiveScore][CLAIM_SESSION_OK]', {
+  debugAplusLiveScore('[AplusLiveScore][CLAIM_SESSION_OK]', {
     matchId,
     hasSessionToken: true,
     lockExpiresAt,
@@ -632,6 +574,90 @@ const getOrClaimAplusLiveScoreSessionToken = async (
 
   const claimed = await claimAplusLiveScoreSession(config);
   return claimed.sessionToken;
+};
+
+export const flushAplusLiveScoreOutbox = async (reason = 'manual') => {
+  if (aplusLiveScoreOutboxFlushInFlight) return;
+  aplusLiveScoreOutboxFlushInFlight = true;
+
+  try {
+    const items = (await readAplusLiveScoreOutbox()).sort((a, b) => {
+      if (a.action === b.action) return a.updatedAt - b.updatedAt;
+      return a.action === 'finish' ? -1 : 1;
+    });
+    if (!items.length) return;
+
+    const remaining: AplusLiveScoreOutboxEntry[] = [];
+
+    for (const item of items) {
+      try {
+        const config = item.config || ({ matchId: item.matchId, tournamentId: item.tournamentId } as AplusLiveScoreConfig);
+        let sessionToken = toText(item.sessionToken) || getCachedAplusLiveScoreSessionToken(config);
+        if (!sessionToken) {
+          sessionToken = await getOrClaimAplusLiveScoreSessionToken(config);
+        }
+
+        if (item.action === 'finish') {
+          await requestJson(
+            'POST',
+            APLUS_LIVE_SCORE_ENDPOINTS.finishMatch,
+            {matchId: item.matchId},
+            {
+              score1: item.score1,
+              score2: item.score2,
+              tournamentId: item.tournamentId || config.tournamentId,
+              clientSeq: item.clientSeq,
+              clientTimestamp: item.clientTimestamp,
+              clientEventId: `outbox-${item.action}-${item.matchId}-${item.clientSeq || item.updatedAt}`,
+            },
+            sessionToken,
+          );
+          forgetAplusLiveScoreSession(item.matchId);
+          startedAplusLiveScoreMatchIds.delete(item.matchId);
+          startingAplusLiveScoreMatchPromises.delete(item.matchId);
+        } else {
+          await requestJson(
+            'PATCH',
+            APLUS_LIVE_SCORE_ENDPOINTS.updateScore,
+            {matchId: item.matchId},
+            {
+              ...(item.payload || {}),
+              tournamentId: item.tournamentId || config.tournamentId,
+              clientSeq: item.clientSeq,
+              clientTimestamp: item.clientTimestamp,
+              clientEventId: `outbox-${item.action}-${item.matchId}-${item.clientSeq || item.updatedAt}`,
+            },
+            sessionToken,
+          );
+        }
+      } catch (error) {
+        if (isAplusMatchFinishedError(error) || isAplusMatchLockedError(error)) {
+          debugAplusLiveScore('[AplusLiveScore][OUTBOX_DROP_LOCKED_OR_FINISHED]', {
+            reason,
+            action: item.action,
+            matchId: item.matchId,
+            message: (error as Error)?.message || error,
+          });
+          continue;
+        }
+
+        remaining.push({
+          ...item,
+          sessionToken: isLiveSessionTokenError(error) ? '' : item.sessionToken,
+          retryCount: (item.retryCount || 0) + 1,
+          updatedAt: Date.now(),
+        });
+      }
+    }
+
+    await writeAplusLiveScoreOutbox(remaining);
+    if (remaining.length) {
+      const maxRetry = Math.max(...remaining.map(item => item.retryCount || 0));
+      scheduleAplusLiveScoreOutboxFlush(Math.min(60000, 3000 * (2 ** Math.min(maxRetry, 4))));
+    }
+  } finally {
+    aplusLiveScoreOutboxFlushInFlight = false;
+  }
 };
 
 
@@ -956,7 +982,7 @@ const refreshTournamentBeforeMatchLookup = async (tournament: AplusTournament) =
     const freshTournament = findSameTournamentFromFreshList(tournament, freshTournaments);
 
     if (freshTournament?.id && freshTournament.id !== tournament.id) {
-      console.log('[AplusLiveScore][MATCH_LOOKUP_TOURNAMENT_ID_REFRESHED]', {
+      debugAplusLiveScore('[AplusLiveScore][MATCH_LOOKUP_TOURNAMENT_ID_REFRESHED]', {
         oldTournamentId: tournament.id,
         newTournamentId: freshTournament.id,
         tournamentName: freshTournament.name,
@@ -964,7 +990,7 @@ const refreshTournamentBeforeMatchLookup = async (tournament: AplusTournament) =
       return freshTournament;
     }
   } catch (error: any) {
-    console.log('[AplusLiveScore][MATCH_LOOKUP_TOURNAMENT_REFRESH_FAILED]', {
+    debugAplusLiveScore('[AplusLiveScore][MATCH_LOOKUP_TOURNAMENT_REFRESH_FAILED]', {
       tournamentId: tournament.id,
       message: error?.message || String(error),
     });
@@ -1035,6 +1061,16 @@ const normalizeLiveMatch = (match: any, tournament: AplusTournament): AplusLiveM
     toText(match?.order);
 
   return normalizeMatch(match, tournament, normalizeAplusMatchCode(code) || code || '');
+};
+
+export const bootstrapAplusLiveScoreOutbox = async (reason = 'bootstrap') => {
+  try {
+    await getDeviceId();
+  } catch (_error) {}
+  scheduleAplusLiveScoreOutboxFlush(250);
+  void flushAplusLiveScoreOutbox(reason).catch(error => {
+    debugAplusLiveScore('[AplusLiveScore][OUTBOX_BOOTSTRAP_FLUSH_FAILED]', (error as Error)?.message || error);
+  });
 };
 
 export const fetchAplusTournaments = async (): Promise<AplusTournament[]> => {
@@ -1207,6 +1243,78 @@ export const startAplusLiveScoreMatch = async (config?: AplusLiveScoreConfig) =>
 const startedAplusLiveScoreMatchIds = new Set<string>();
 const startingAplusLiveScoreMatchPromises = new Map<string, Promise<void>>();
 
+const APLUS_SCORE_MIN_PUSH_INTERVAL_MS = 700;
+type AplusQueuedScoreTask = {
+  run: () => Promise<any>;
+  resolve: (value: any) => void;
+  reject: (error: unknown) => void;
+};
+type AplusScoreQueueEntry = {
+  inFlight: boolean;
+  pending?: AplusQueuedScoreTask;
+  lastSentAt: number;
+  drainTimer?: ReturnType<typeof setTimeout>;
+};
+const aplusLiveScoreQueues = new Map<string, AplusScoreQueueEntry>();
+
+const waitAplusScoreQueue = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+const drainAplusLiveScoreQueue = async (matchId: string) => {
+  const entry = aplusLiveScoreQueues.get(matchId);
+  if (!entry || entry.inFlight) return;
+
+  const next = entry.pending;
+  if (!next) {
+    if (!entry.drainTimer) aplusLiveScoreQueues.delete(matchId);
+    return;
+  }
+
+  entry.pending = undefined;
+  entry.inFlight = true;
+  try {
+    const delay = Math.max(0, APLUS_SCORE_MIN_PUSH_INTERVAL_MS - (Date.now() - entry.lastSentAt));
+    if (delay > 0) await waitAplusScoreQueue(delay);
+    const result = await next.run();
+    entry.lastSentAt = Date.now();
+    next.resolve(result);
+  } catch (error) {
+    next.reject(error);
+  } finally {
+    entry.inFlight = false;
+    if (entry.pending) {
+      if (entry.drainTimer) clearTimeout(entry.drainTimer);
+      entry.drainTimer = setTimeout(() => {
+        entry.drainTimer = undefined;
+        void drainAplusLiveScoreQueue(matchId);
+      }, APLUS_SCORE_MIN_PUSH_INTERVAL_MS);
+    } else {
+      aplusLiveScoreQueues.delete(matchId);
+    }
+  }
+};
+
+const enqueueLatestAplusLiveScoreWrite = (matchId: string, run: () => Promise<any>) => {
+  const key = toText(matchId);
+  if (!key) return run();
+
+  let entry = aplusLiveScoreQueues.get(key);
+  if (!entry) {
+    entry = { inFlight: false, lastSentAt: 0 };
+    aplusLiveScoreQueues.set(key, entry);
+  }
+
+  if (entry.pending) {
+    entry.pending.resolve({ success: true, skipped: true, replacedByNewerSnapshot: true });
+  }
+
+  const promise = new Promise((resolve, reject) => {
+    entry!.pending = { run, resolve, reject };
+  });
+
+  void drainAplusLiveScoreQueue(key);
+  return promise;
+};
+
 const ensureAplusLiveScoreStartedFromGameplay = async (config?: AplusLiveScoreConfig) => {
   if (!config?.matchId) {
     return;
@@ -1238,7 +1346,7 @@ const ensureAplusLiveScoreStartedFromGameplay = async (config?: AplusLiveScoreCo
   await promise;
 };
 
-const pushAplusLiveScoreUpdateNow = async ({
+export const pushAplusLiveScoreUpdate = async ({
   gameSettings,
   playerSettings,
   totalTurns,
@@ -1255,7 +1363,7 @@ const pushAplusLiveScoreUpdateNow = async ({
   const config = getAplusLiveScoreConfig(gameSettings);
 
   if (!config) {
-    console.log('[AplusLiveScore][PUSH_BLOCKED_NO_CONFIG]', {
+    debugAplusLiveScore('[AplusLiveScore][PUSH_BLOCKED_NO_CONFIG]', {
       hasAplusLiveScore: Boolean((gameSettings as any)?.aplusLiveScore),
       aplusLiveScore: (gameSettings as any)?.aplusLiveScore,
     });
@@ -1263,16 +1371,24 @@ const pushAplusLiveScoreUpdateNow = async ({
   }
 
   if (!playerSettings?.playingPlayers?.length) {
-    console.log('[AplusLiveScore][PUSH_BLOCKED_NO_PLAYERS]', {
+    debugAplusLiveScore('[AplusLiveScore][PUSH_BLOCKED_NO_PLAYERS]', {
       matchId: config.matchId,
       playingPlayersLength: playerSettings?.playingPlayers?.length,
     });
     return;
   }
 
+  if (!isStarted) {
+    return;
+  }
+
   if (winner) {
-    // Score endpoint must never finish a match. Finish is sent only via /finish.
-    if (APLUS_DEBUG_HTTP) console.log('[AplusLiveScore][PUSH_SCORE_SKIP_WINNER_USE_FINISH]', { matchId: config.matchId });
+    // Kết thúc trận chỉ được gửi qua /finish. Không gửi snapshot finished qua /score,
+    // vì request score cũ có thể kéo admin/web về trạng thái sai sau khi đã khóa kết quả.
+    debugAplusLiveScore('[AplusLiveScore][PUSH_SCORE_SKIP_WINNER_USE_FINISH]', {
+      matchId: config.matchId,
+      matchNumber: config.matchNumber,
+    });
     return;
   }
 
@@ -1281,7 +1397,7 @@ const pushAplusLiveScoreUpdateNow = async ({
     try {
       await ensureAplusLiveScoreStartedFromGameplay(config);
     } catch (error) {
-      console.log('[AplusLiveScore][START_FROM_GAMEPLAY_FAILED]', {
+      debugAplusLiveScore('[AplusLiveScore][START_FROM_GAMEPLAY_FAILED]', {
         matchId: config.matchId,
         reason: (error as Error)?.message || error,
       });
@@ -1292,11 +1408,6 @@ const pushAplusLiveScoreUpdateNow = async ({
   const players = playerSettings.playingPlayers.slice(0, 2);
   const score1 = Number(players[0]?.totalPoint || 0);
   const score2 = Number(players[1]?.totalPoint || 0);
-  const player1Name = getPlayerNameForPayload(players[0], 'Người chơi 1');
-  const player2Name = getPlayerNameForPayload(players[1], 'Người chơi 2');
-  const player1Country = getPlayerCountryForPayload(players[0]);
-  const player2Country = getPlayerCountryForPayload(players[1]);
-
   const resolvedCountdownTime = Math.max(0, Math.round(Number(countdownTime ?? 0)));
   const resolvedCountdownBaseTime = Math.max(
     resolvedCountdownTime,
@@ -1326,27 +1437,10 @@ const pushAplusLiveScoreUpdateNow = async ({
   const payload = {
     score1,
     score2,
-    player1Name,
-    player2Name,
-    player1Country,
-    player2Country,
-    player1CountryCode: player1Country,
-    player2CountryCode: player2Country,
-    player1: {
-      name: player1Name,
-      countryCode: player1Country,
-      countryName: player1Country,
-      flag: player1Country,
-    },
-    player2: {
-      name: player2Name,
-      countryCode: player2Country,
-      countryName: player2Country,
-      flag: player2Country,
-    },
-    status: isStarted ? 'playing' : 'upcoming',
-    liveStatus: isStarted ? 'running' : 'claimed',
-    isLive: Boolean(isStarted),
+    // Score updates are action/snapshot-only. Player names, bracket slots and finished status
+    // stay DB/admin-owned; /finish is the only API that may end a match.
+    liveStatus: 'running',
+    isLive: true,
 
     turnCount: resolvedTurnCount,
     liveTurnCount: resolvedTurnCount,
@@ -1373,176 +1467,115 @@ const pushAplusLiveScoreUpdateNow = async ({
     liveCountdownUpdatedAt: new Date().toISOString(),
   };
 
-  console.log('[AplusLiveScore][PUSH_SCORE_START]', {
+  debugAplusLiveScore('[AplusLiveScore][PUSH_SCORE_START]', {
     matchId: config.matchId,
     matchNumber: config.matchNumber,
     tournamentId: config.tournamentId,
     score1,
     score2,
-    status: payload.status,
     liveStatus: payload.liveStatus,
   });
 
-  const sendScore = (sessionToken: string) =>
-    requestJson(
-      'PATCH',
-      APLUS_LIVE_SCORE_ENDPOINTS.updateScore,
-      {matchId: config.matchId},
-      payload,
-      sessionToken,
-    );
+  const sendNow = async () => {
+    const sendScore = (sessionToken: string) =>
+      requestJson(
+        'PATCH',
+        APLUS_LIVE_SCORE_ENDPOINTS.updateScore,
+        {matchId: config.matchId},
+        payload,
+        sessionToken,
+      );
 
-  let sessionToken = '';
+    let sessionToken = '';
 
-  try {
-    sessionToken = await getOrClaimAplusLiveScoreSessionToken(config);
-  } catch (error) {
-    if (isAplusLiveScoreClaimBlockError(error)) {
-      console.log('[AplusLiveScore][PUSH_SCORE_BLOCKED_BEFORE_SEND]', {
-        matchId: config.matchId,
-        reason: (error as Error)?.message || error,
-      });
-      forgetAplusLiveScoreSession(config.matchId);
-      return;
-    }
-    throw error;
-  }
-
-  try {
-    const result = await sendScore(sessionToken);
-    rememberAplusLiveScoreSession(config.matchId, sessionToken, config.lockExpiresAt);
-
-    console.log('[AplusLiveScore][PUSH_SCORE_OK]', {
-      matchId: config.matchId,
-      score1,
-      score2,
-      source: result?.source,
-    });
-  } catch (error) {
-    if (isAplusLiveScoreClaimBlockError(error)) {
-      console.log('[AplusLiveScore][PUSH_SCORE_BLOCKED_BY_MATCH_STATE]', {
-        matchId: config.matchId,
-        reason: (error as Error)?.message || error,
-      });
-      forgetAplusLiveScoreSession(config.matchId);
-      return;
-    }
-
-    if (!isLiveSessionTokenError(error)) {
+    try {
+      sessionToken = await getOrClaimAplusLiveScoreSessionToken(config);
+    } catch (error) {
+      if (isAplusLiveScoreClaimBlockError(error)) {
+        debugAplusLiveScore('[AplusLiveScore][PUSH_SCORE_BLOCKED_BEFORE_SEND]', {
+          matchId: config.matchId,
+          reason: (error as Error)?.message || error,
+        });
+        forgetAplusLiveScoreSession(config.matchId);
+        return;
+      }
       throw error;
     }
 
-    console.log('[AplusLiveScore][PUSH_SCORE_RECLAIM]', {
-      matchId: config.matchId,
-      reason: (error as Error)?.message || error,
-    });
+    try {
+      const result = await sendScore(sessionToken);
+      rememberAplusLiveScoreSession(config.matchId, sessionToken, config.lockExpiresAt);
+      await removeAplusLiveScoreOutboxEntry(makeAplusOutboxId('score', config.matchId));
+      void flushAplusLiveScoreOutbox('score-ok');
 
-    forgetAplusLiveScoreSession(config.matchId);
-    const claimed = await claimAplusLiveScoreSession(config);
-    sessionToken = claimed.sessionToken;
+      debugAplusLiveScore('[AplusLiveScore][PUSH_SCORE_OK]', {
+        matchId: config.matchId,
+        score1,
+        score2,
+        source: result?.source,
+      });
+      return result;
+    } catch (error) {
+      if (isAplusLiveScoreClaimBlockError(error)) {
+        debugAplusLiveScore('[AplusLiveScore][PUSH_SCORE_BLOCKED_BY_MATCH_STATE]', {
+          matchId: config.matchId,
+          reason: (error as Error)?.message || error,
+        });
+        forgetAplusLiveScoreSession(config.matchId);
+        return;
+      }
 
-    const result = await sendScore(sessionToken);
-    rememberAplusLiveScoreSession(config.matchId, sessionToken, claimed.lockExpiresAt);
+      if (!isLiveSessionTokenError(error)) {
+        throw error;
+      }
 
-    console.log('[AplusLiveScore][PUSH_SCORE_OK_AFTER_RECLAIM]', {
-      matchId: config.matchId,
-      result,
-    });
-  }
-};
+      debugAplusLiveScore('[AplusLiveScore][PUSH_SCORE_RECLAIM]', {
+        matchId: config.matchId,
+        reason: (error as Error)?.message || error,
+      });
 
-type AplusScoreQueueState = {
-  inFlight: boolean;
-  timer?: ReturnType<typeof setTimeout>;
-  pending?: { payload: LiveScorePayload; signature: string };
-  lastSentSignature?: string;
-  lastSentAt: number;
-};
+      forgetAplusLiveScoreSession(config.matchId);
+      const claimed = await claimAplusLiveScoreSession(config);
+      sessionToken = claimed.sessionToken;
 
-const scoreQueues = new Map<string, AplusScoreQueueState>();
+      const result = await sendScore(sessionToken);
+      rememberAplusLiveScoreSession(config.matchId, sessionToken, claimed.lockExpiresAt);
+      await removeAplusLiveScoreOutboxEntry(makeAplusOutboxId('score', config.matchId));
+      void flushAplusLiveScoreOutbox('score-ok-after-reclaim');
 
-const buildLiveScorePayloadSignature = (payload: LiveScorePayload) => {
-  const config = getAplusLiveScoreConfig(payload.gameSettings);
-  const players = payload.playerSettings?.playingPlayers?.slice(0, 2) || [];
-  return [
-    config?.matchId || '',
-    Number(players[0]?.totalPoint || 0),
-    Number(players[1]?.totalPoint || 0),
-    Number(payload.totalTurns || 0),
-    Number(payload.totalTime || 0),
-    Number(payload.countdownTime || 0),
-    Number(payload.currentPlayerIndex || 0),
-    payload.isStarted ? 'started' : 'not-started',
-    payload.isPaused ? 'paused' : 'not-paused',
-    payload.isMatchPaused ? 'match-paused' : 'match-not-paused',
-  ].join('|');
-};
-
-const flushScoreQueue = (matchId: string) => {
-  const queue = scoreQueues.get(matchId);
-  if (!queue || queue.inFlight || !queue.pending) return;
-
-  const waitMs = Math.max(0, APLUS_SCORE_THROTTLE_MS - (Date.now() - queue.lastSentAt));
-  if (waitMs > 0) {
-    if (!queue.timer) {
-      queue.timer = setTimeout(() => {
-        queue.timer = undefined;
-        flushScoreQueue(matchId);
-      }, waitMs);
+      debugAplusLiveScore('[AplusLiveScore][PUSH_SCORE_OK_AFTER_RECLAIM]', {
+        matchId: config.matchId,
+        result,
+      });
+      return result;
     }
-    return;
-  }
+  };
 
-  const item = queue.pending;
-  queue.pending = undefined;
-  queue.inFlight = true;
-
-  void pushAplusLiveScoreUpdateNow(item.payload)
-    .then(() => {
-      queue.lastSentSignature = item.signature;
-      queue.lastSentAt = Date.now();
-      const config = getAplusLiveScoreConfig(item.payload.gameSettings);
-      if (config) void removeOutboxItem(`score:${config.matchId}`);
-    })
-    .catch(error => {
-      const config = getAplusLiveScoreConfig(item.payload.gameSettings);
-      if (config && !isAplusLiveScoreClaimBlockError(error)) {
-        const players = item.payload.playerSettings?.playingPlayers?.slice(0, 2) || [];
-        void saveScoreToOutbox(config, {
-          score1: Number(players[0]?.totalPoint || 0),
-          score2: Number(players[1]?.totalPoint || 0),
+  return enqueueLatestAplusLiveScoreWrite(config.matchId, async () => {
+    try {
+      return await sendNow();
+    } catch (error) {
+      if (!isAplusLiveScoreClaimBlockError(error)) {
+        await upsertAplusLiveScoreOutboxEntry({
+          action: 'score',
+          matchId: config.matchId,
+          tournamentId: config.tournamentId,
+          config,
+          payload,
+          sessionToken: getCachedAplusLiveScoreSessionToken(config),
+          clientSeq: nextAplusLiveScoreClientSeq(),
+          clientTimestamp: new Date().toISOString(),
         });
       }
-    })
-    .finally(() => {
-      queue.inFlight = false;
-      if (queue.pending) flushScoreQueue(matchId);
-    });
+      throw error;
+    }
+  });
 };
-
-export const pushAplusLiveScoreUpdate = async (payload: LiveScorePayload) => {
-  const config = getAplusLiveScoreConfig(payload.gameSettings);
-  if (!config?.matchId) return pushAplusLiveScoreUpdateNow(payload);
-  if (payload.winner) return;
-
-  const signature = buildLiveScorePayloadSignature(payload);
-  const queue = scoreQueues.get(config.matchId) || { inFlight: false, lastSentAt: 0 };
-  if (signature === queue.lastSentSignature && Date.now() - queue.lastSentAt < 5000) return;
-
-  queue.pending = { payload, signature };
-  scoreQueues.set(config.matchId, queue);
-  flushScoreQueue(config.matchId);
-};
-
-const heartbeatLastSentAt = new Map<string, number>();
 
 export const heartbeatAplusLiveScoreMatch = async (config?: AplusLiveScoreConfig) => {
   if (!config?.matchId) {
     return;
   }
-  const lastHeartbeat = heartbeatLastSentAt.get(config.matchId) || 0;
-  if (Date.now() - lastHeartbeat < APLUS_HEARTBEAT_MIN_MS) return;
-  heartbeatLastSentAt.set(config.matchId, Date.now());
 
   const sendHeartbeat = (sessionToken: string) =>
     requestJson(
@@ -1559,7 +1592,7 @@ export const heartbeatAplusLiveScoreMatch = async (config?: AplusLiveScoreConfig
     sessionToken = await getOrClaimAplusLiveScoreSessionToken(config);
   } catch (error) {
     if (isAplusLiveScoreClaimBlockError(error)) {
-      console.log('[AplusLiveScore][HEARTBEAT_BLOCKED_BEFORE_SEND]', {
+      debugAplusLiveScore('[AplusLiveScore][HEARTBEAT_BLOCKED_BEFORE_SEND]', {
         matchId: config.matchId,
         reason: (error as Error)?.message || error,
       });
@@ -1572,9 +1605,10 @@ export const heartbeatAplusLiveScoreMatch = async (config?: AplusLiveScoreConfig
   try {
     await sendHeartbeat(sessionToken);
     rememberAplusLiveScoreSession(config.matchId, sessionToken, config.lockExpiresAt);
+    void flushAplusLiveScoreOutbox('heartbeat-ok');
   } catch (error) {
     if (isAplusLiveScoreClaimBlockError(error)) {
-      console.log('[AplusLiveScore][PUSH_SCORE_BLOCKED_BY_MATCH_STATE]', {
+      debugAplusLiveScore('[AplusLiveScore][PUSH_SCORE_BLOCKED_BY_MATCH_STATE]', {
         matchId: config.matchId,
         reason: (error as Error)?.message || error,
       });
@@ -1586,7 +1620,7 @@ export const heartbeatAplusLiveScoreMatch = async (config?: AplusLiveScoreConfig
       throw error;
     }
 
-    console.log('[AplusLiveScore][HEARTBEAT_RECLAIM]', {
+    debugAplusLiveScore('[AplusLiveScore][HEARTBEAT_RECLAIM]', {
       matchId: config.matchId,
       reason: (error as Error)?.message || error,
     });
@@ -1603,7 +1637,7 @@ export const finishAplusLiveScoreMatch = async (
   config?: AplusLiveScoreConfig,
   score1?: number,
   score2?: number,
-  options: {timeoutMs?: number; fast?: boolean; skipOutbox?: boolean} = {},
+  options: {timeoutMs?: number; fast?: boolean} = {},
 ) => {
   if (!config?.matchId) {
     return;
@@ -1611,46 +1645,67 @@ export const finishAplusLiveScoreMatch = async (
 
   const timeoutMs = Math.max(500, Number(options.timeoutMs || 3000));
   let sessionToken = getCachedAplusLiveScoreSessionToken(config);
-
-  if (!sessionToken) {
-    try {
-      sessionToken = await getOrClaimAplusLiveScoreSessionToken(config);
-    } catch (error) {
-      if (isAplusLiveScoreClaimBlockError(error)) {
-        forgetAplusLiveScoreSession(config.matchId);
-        return;
-      }
-      if (!options.skipOutbox) await saveFinishToOutbox(config, score1, score2);
-      throw error;
-    }
-  }
+  const finishClientSeq = nextAplusLiveScoreClientSeq();
+  const finishClientTimestamp = new Date().toISOString();
 
   try {
+    if (!sessionToken) {
+      sessionToken = await withAplusLiveScoreTimeout(
+        getOrClaimAplusLiveScoreSessionToken(config),
+        Math.min(timeoutMs, 1500),
+        'APLUS_FINISH_RECLAIM',
+      );
+    }
+
     await withAplusLiveScoreTimeout(
       requestJson(
         'POST',
         APLUS_LIVE_SCORE_ENDPOINTS.finishMatch,
         {matchId: config.matchId},
-        {score1, score2, finishEventId: `${config.matchId}:finish:${Date.now()}`},
+        {
+          score1,
+          score2,
+          tournamentId: config.tournamentId,
+          clientSeq: finishClientSeq,
+          clientTimestamp: finishClientTimestamp,
+          clientEventId: `finish-${config.matchId}-${finishClientSeq}`,
+        },
         sessionToken,
       ),
       timeoutMs,
       'APLUS_FINISH_MATCH',
     );
+
+    await removeAplusLiveScoreOutboxEntry(makeAplusOutboxId('finish', config.matchId));
+    startedAplusLiveScoreMatchIds.delete(config.matchId);
+    startingAplusLiveScoreMatchPromises.delete(config.matchId);
+    forgetAplusLiveScoreSession(config.matchId);
   } catch (error) {
-    if (isAplusMatchFinishedError(error) || isAplusMatchLockedError(error)) {
-      await removeOutboxItem(`finish:${config.matchId}`);
+    if (isAplusLiveScoreClaimBlockError(error)) {
       forgetAplusLiveScoreSession(config.matchId);
-      return;
+      throw error;
     }
-    if (!options.skipOutbox) await saveFinishToOutbox(config, score1, score2);
+
+    await upsertAplusLiveScoreOutboxEntry({
+      action: 'finish',
+      matchId: config.matchId,
+      tournamentId: config.tournamentId,
+      config,
+      score1,
+      score2,
+      sessionToken: isLiveSessionTokenError(error) ? '' : sessionToken,
+      clientSeq: finishClientSeq,
+      clientTimestamp: finishClientTimestamp,
+    });
+
+    debugAplusLiveScore('[AplusLiveScore][FINISH_QUEUED_OUTBOX]', {
+      matchId: config.matchId,
+      score1,
+      score2,
+      reason: (error as Error)?.message || error,
+    });
     throw error;
   }
-
-  startedAplusLiveScoreMatchIds.delete(config.matchId);
-  startingAplusLiveScoreMatchPromises.delete(config.matchId);
-  forgetAplusLiveScoreSession(config.matchId);
-  await removeOutboxItem(`finish:${config.matchId}`);
 };
 
 export const releaseAplusLiveScoreMatch = async (config?: AplusLiveScoreConfig) => {

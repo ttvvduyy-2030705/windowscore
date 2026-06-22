@@ -661,9 +661,6 @@ const applyAplusMatchToPlayerSettings = (
 
 
 const GameSettingsViewModel = (props: Props) => {
-  useEffect(() => {
-    void bootstrapAplusLiveScoreOutbox();
-  }, []);
   const dispatch = useDispatch();
   // withWrapper spreads route.params directly into props, so reading only
   // props.route?.params silently drops livestreamPlatform in release builds.
@@ -707,6 +704,11 @@ const GameSettingsViewModel = (props: Props) => {
   const [youtubeLiveLoadingMessage, setYoutubeLiveLoadingMessage] = useState('Đang tải phiên live');
 
   const selectedAplusTournament = aplusTournaments[selectedAplusTournamentIndex];
+
+  useEffect(() => {
+    void bootstrapAplusLiveScoreOutbox('settings-open');
+  }, []);
+
 
   const _resetData = useCallback(() => {
     clearSettingsDraft();
