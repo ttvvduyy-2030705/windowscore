@@ -27,8 +27,4 @@ export type RemoteControlKeysNative = {
   key?: string;
   resolvedKey?: string;
   code?: string;
-  source?: string;
-  deviceName?: string;
-  hex?: string;
-  text?: string;
 };

@@ -4,7 +4,7 @@ import {RemoteControlKeys, RemoteControlKeysNative} from 'types/bluetooth';
 const DEBUG_REMOTE = true;
 const NEW_GAME_HOLD_DURATION_MS = 3000;
 const NEW_GAME_RELEASE_GRACE_MS = 900;
-const REMOTE_WINDOWS_BUILD = 'v12-remote-on-block-pc-keyboard';
+const REMOTE_WINDOWS_BUILD = 'v11-carom-pool-separate-buttons';
 
 const nativeRemote =
   NativeModules.RemoteControl ??
@@ -92,8 +92,7 @@ class RemoteControlWindows {
       .replace(/[\s-]+/g, '_');
 
     const aliasMap: {[key: string]: string} = {
-      // Canonical remote codes. These are produced by BLE/remote modules,
-      // not by the PC keyboard CoreWindow letter/space/enter handlers.
+      // Android-compatible codes from billiardsgrade.
       '19': 'UP',
       '20': 'DOWN',
       '21': 'LEFT',
@@ -119,8 +118,29 @@ class RemoteControlWindows {
       '127': 'START',
       '160': 'NEW_GAME',
 
-      // Media / consumer HID keys are still allowed because the physical
-      // remote may expose TIMER / EXTENSION / START as media buttons.
+      // Windows virtual-key/media key values for paired Bluetooth remotes.
+      '8': 'NEW_GAME',
+      '13': 'NEW_GAME',
+      '27': 'NEW_GAME',
+      '35': 'NEW_GAME',
+      '36': 'NEW_GAME',
+      '41': 'NEW_GAME',
+      '45': 'NEW_GAME',
+      '46': 'NEW_GAME',
+      '78': 'NEW_GAME',
+      '93': 'NEW_GAME',
+      '37': 'LEFT',
+      '38': 'UP',
+      '39': 'RIGHT',
+      '40': 'DOWN',
+      '65': 'START',
+      '69': 'EXTENSION',
+      '78': 'NEW_GAME',
+      '80': 'START',
+      '83': 'STOP',
+      '84': 'TIMER',
+      '107': 'EXTENSION',
+      '109': 'TIMER',
       '174': 'TIMER',
       '175': 'EXTENSION',
       '176': 'BREAK',
@@ -134,12 +154,23 @@ class RemoteControlWindows {
 
       LEFT: 'LEFT',
       DPAD_LEFT: 'LEFT',
+      ARROW_LEFT: 'LEFT',
+      VK_LEFT: 'LEFT',
+
       RIGHT: 'RIGHT',
       DPAD_RIGHT: 'RIGHT',
+      ARROW_RIGHT: 'RIGHT',
+      VK_RIGHT: 'RIGHT',
+
       UP: 'UP',
       DPAD_UP: 'UP',
+      ARROW_UP: 'UP',
+      VK_UP: 'UP',
+
       DOWN: 'DOWN',
       DPAD_DOWN: 'DOWN',
+      ARROW_DOWN: 'DOWN',
+      VK_DOWN: 'DOWN',
 
       START: 'START',
       PLAY: 'START',
@@ -148,14 +179,27 @@ class RemoteControlWindows {
       MEDIA_PLAY: 'START',
       MEDIA_PLAY_PAUSE: 'START',
       MEDIA_PAUSE: 'START',
+      SPACE: 'START',
+      KEY_A: 'START',
+      KEY_P: 'START',
+      A: 'START',
+      P: 'START',
 
       STOP: 'STOP',
       MEDIA_STOP: 'STOP',
+      KEY_S: 'STOP',
+      S: 'STOP',
+      // Real APLUS remote STOP sends keyboard C on Windows.
+      KEY_C: 'STOP',
+      C: 'STOP',
 
       BREAK: 'BREAK',
       MEDIA_NEXT: 'BREAK',
       MEDIA_NEXT_TRACK: 'BREAK',
       MEDIA_FAST_FORWARD: 'BREAK',
+      // Real APLUS remote BREAK sends keyboard D on Windows.
+      KEY_D: 'BREAK',
+      D: 'BREAK',
 
       WARM: 'WARM_UP',
       WARMUP: 'WARM_UP',
@@ -163,47 +207,42 @@ class RemoteControlWindows {
       MEDIA_PREVIOUS: 'WARM_UP',
       MEDIA_PREVIOUS_TRACK: 'WARM_UP',
       MEDIA_REWIND: 'WARM_UP',
+      KEY_W: 'WARM_UP',
+      W: 'WARM_UP',
+      // Real APLUS remote WARM UP sends keyboard B on Windows.
+      KEY_B: 'WARM_UP',
+      B: 'WARM_UP',
 
       TIMER: 'TIMER',
       TIME: 'TIMER',
       CLOCK: 'TIMER',
       VOLUME_DOWN: 'TIMER',
+      KEY_T: 'TIMER',
+      T: 'TIMER',
 
       EXTENSION: 'EXTENSION',
       EXTRA_TIME: 'EXTENSION',
       ADD_TIME: 'EXTENSION',
       VOLUME_UP: 'EXTENSION',
+      KEY_E: 'EXTENSION',
+      E: 'EXTENSION',
 
       NEWGAME: 'NEW_GAME',
       NEW_GAME: 'NEW_GAME',
       RESET: 'NEW_GAME',
       RESTART: 'NEW_GAME',
+      ENTER: 'NEW_GAME',
+      RETURN: 'NEW_GAME',
+      OK: 'NEW_GAME',
+      ACCEPT: 'NEW_GAME',
+      SELECT: 'NEW_GAME',
       DPAD_CENTER: 'NEW_GAME',
       CENTER: 'NEW_GAME',
+      KEY_N: 'NEW_GAME',
+      N: 'NEW_GAME',
     };
 
     return aliasMap[raw] ?? raw;
-  };
-
-  private isTrustedRemoteSource = (data: RemoteControlKeysNative) => {
-    const source = String((data as any)?.source ?? '').trim().toLowerCase();
-
-    // Simulated events are used only by the app's remote test helpers.
-    if (source === 'windows-remote-simulator') {
-      return true;
-    }
-
-    // BLE notifications are emitted only after connecting the known remote.
-    if (source.includes('windows-ble')) {
-      return true;
-    }
-
-    // Native Windows module now emits only media/consumer HID keys from these paths.
-    if (source === 'windows-hid-media' || source === 'windows-hid-accelerator') {
-      return true;
-    }
-
-    return false;
   };
 
   private getNormalizedEventKey = (data: RemoteControlKeysNative) => {
@@ -388,20 +427,6 @@ class RemoteControlWindows {
       return;
     }
 
-    if (!this.isTrustedRemoteSource(data)) {
-      debugRemoteLog('[Remote][Windows] ignored non-remote keyboard event:', {
-        source: (data as any)?.source,
-        keyCode: (data as any)?.keyCode,
-        keyCodeInt: (data as any)?.keyCodeInt,
-        key: (data as any)?.key,
-        resolvedKey: (data as any)?.resolvedKey,
-        code: (data as any)?.code,
-        scanCode: (data as any)?.scanCode,
-        build: REMOTE_WINDOWS_BUILD,
-      });
-      return;
-    }
-
     const repeatCount = Number((data as any)?.repeatCount ?? 0);
     const eventKey = this.getNormalizedEventKey(data);
 
@@ -519,8 +544,8 @@ class RemoteControlWindows {
       debugRemoteLog('[Remote][Windows] enable', REMOTE_WINDOWS_BUILD);
       nativeRemote?.startListening?.();
       nativeRemote?.setEnabled?.(true);
-      // Keep Windows remote handling limited to media/consumer HID and BLE events.
-      // Plain PC keyboard letters/space/enter are blocked in the native module.
+      // V6: do not start BLE/GATT. The physical APLUS remote is HID on Windows.
+      // BLE connect produced Access is denied and allowed volume keys to escape to Windows.
     } catch (error) {
       debugRemoteLog('[Remote][Windows] scan/connect failed:', error);
     }

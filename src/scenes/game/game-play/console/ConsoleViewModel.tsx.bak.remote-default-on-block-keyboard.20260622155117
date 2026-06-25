@@ -81,7 +81,7 @@ const ConsoleViewModel = (props: ConsoleViewModelProps) => {
   const {gameSettings: reduxGameSettings} = useSelector((state: RootState) => state.game);
   const gameSettings = reduxGameSettings ?? props.gameSettings;
 
-  const [remoteEnabled, setRemoteEnabled] = useState(true);
+  const [remoteEnabled, setRemoteEnabled] = useState(false);
   const [tableNumber, setTableNumber] = useState('');
 
   const onToggleRemote = useCallback((value: boolean) => {
@@ -90,8 +90,6 @@ const ConsoleViewModel = (props: ConsoleViewModelProps) => {
   }, []);
 
   useEffect(() => {
-    RemoteControl.instance.setEnabled?.(true);
-
     return () => {
       RemoteControl.instance.setEnabled?.(false);
     };

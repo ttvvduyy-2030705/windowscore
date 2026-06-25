@@ -383,29 +383,46 @@ namespace
 
     std::string LogicalKeyFromVirtualKey(VirtualKey key)
     {
-        // Do NOT map normal PC keyboard keys here.
-        // CoreWindow KeyDown cannot reliably tell a physical PC keyboard from a
-        // Bluetooth HID keyboard-style remote, so mapping A/B/C/D/Space/Enter here
-        // lets the PC keyboard control gameplay. Only media / consumer HID keys
-        // are allowed from the Windows HID path. BLE notifications are handled
-        // separately by LogicalKeyFromBleBytes.
         switch (static_cast<int>(key))
         {
-        case 179: // MediaPlayPause
-        case 205: // Play/Pause on some SDKs/remotes
+        case 38:
+            return "UP";
+        case 40:
+            return "DOWN";
+        case 37:
+            return "LEFT";
+        case 39:
+            return "RIGHT";
+        case 32:
+        case 65:
+        case 80:
+        case 179:
             return "START";
-        case 178: // MediaStop
+        case 67: // APLUS remote STOP sends keyboard C on Windows
+        case 83:
+        case 169:
+        case 178:
             return "STOP";
-        case 176: // MediaNextTrack
-        case 181: // Browser/consumer next on some remotes
+        case 68: // APLUS remote BREAK sends keyboard D on Windows
+        case 176:
             return "BREAK";
-        case 177: // MediaPreviousTrack
-        case 182: // Browser/consumer previous on some remotes
+        case 66: // APLUS remote WARM UP sends keyboard B on Windows
+        case 87:
+        case 177:
             return "WARM_UP";
-        case 175: // VolumeUp - APLUS remote EXTENSION / Thêm giờ
+        case 69:
+        case 107:
+        case 175: // VirtualKey::VolumeUp - APLUS remote EXTENSION / Thêm giờ
             return "EXTENSION";
-        case 174: // VolumeDown - APLUS remote TIMER / Bấm giờ
+        case 84:
+        case 109:
+        case 174: // VirtualKey::VolumeDown - APLUS remote TIMER / Bấm giờ
             return "TIMER";
+        case 13:
+        case 30:
+        case 41:
+        case 78:
+            return "NEW_GAME";
         default:
             return "";
         }
@@ -482,24 +499,25 @@ namespace
             if (IsAplusRemoteNoiseKey(key))
             {
                 args.Handled(true);
-                EmitRemoteStatus("hid-noise-swallowed-v12", "Ignored apostrophe noise from remote");
+                EmitRemoteStatus("hid-noise-swallowed-v8", "Ignored apostrophe noise from APLUS remote");
             }
             else
             {
                 auto keyName = VirtualKeyName(key);
-                EmitRemoteStatus("pc-keyboard-ignored-v12", std::string("PC keyboard key ignored: vkCode=") + std::to_string(static_cast<int>(key)) + ", keyName=" + keyName);
+                EmitRemoteStatus("raw-hid-unmapped-v8", std::string("vkCode=") + std::to_string(static_cast<int>(key)) + ", keyName=" + keyName);
             }
             return;
         }
 
-        // Only media / consumer HID keys reach this point. Mark handled so Windows
-        // volume/media shortcuts do not leak to the OS while remote mode is enabled.
+        // Important for this real APLUS Bluetooth remote: Windows exposes it as a HID
+        // keyboard/media device. Mark handled so START/WARM UP do not type "aaaa"/"bb"
+        // and arrow/media keys do not get consumed by the focused input/system volume.
         args.Handled(true);
 
         auto status = args.KeyStatus();
         auto keyName = VirtualKeyName(key);
         auto repeatCount = static_cast<int>(status.RepeatCount > 0 ? status.RepeatCount - 1 : 0);
-        EmitRemoteKey(logicalKey, action, static_cast<int>(key), static_cast<int>(status.ScanCode), "windows-hid-media", keyName, repeatCount);
+        EmitRemoteKey(logicalKey, action, static_cast<int>(key), static_cast<int>(status.ScanCode), "windows-hid", keyName, repeatCount);
     }
 
     bool IsAcceleratorRemoteKey(VirtualKey key)
@@ -570,12 +588,19 @@ namespace
         }
 
         auto ch = static_cast<uint32_t>(args.KeyCode());
-        if (ch == static_cast<uint32_t>('\''))
+        if (ch == static_cast<uint32_t>('a') ||
+            ch == static_cast<uint32_t>('A') ||
+            ch == static_cast<uint32_t>('b') ||
+            ch == static_cast<uint32_t>('B') ||
+            ch == static_cast<uint32_t>('c') ||
+            ch == static_cast<uint32_t>('C') ||
+            ch == static_cast<uint32_t>('d') ||
+            ch == static_cast<uint32_t>('D') ||
+            ch == static_cast<uint32_t>('\''))
         {
             args.Handled(true);
         }
     }
-
 
     void EnsureKeyboardHook() noexcept
     {
@@ -921,7 +946,7 @@ namespace winrt::billiardsgrade::implementation
         // V7: this APLUS remote is paired by Windows as HID keyboard/media keys.
         // Attach the CoreWindow + Accelerator handlers only after gameplay asks for remote.
         EnsureKeyboardHook();
-        EmitRemoteStatus("hid-listening-v12", "Windows remote listener active; PC keyboard text keys ignored; media HID keys allowed");
+        EmitRemoteStatus("hid-listening-v8", "Windows HID remote listener active; BLE scan disabled in v8");
     }
 
     void RemoteControlModule::SetEnabled(bool enabled) noexcept
@@ -935,7 +960,7 @@ namespace winrt::billiardsgrade::implementation
             CloseBleDevice();
         }
 
-        EmitRemoteStatus(enabled ? "enabled-v12-media-hid-only" : "disabled-v12", enabled ? "Remote enabled: media HID/BLE only; PC keyboard text keys ignored" : "Remote control disabled");
+        EmitRemoteStatus(enabled ? "enabled-v8-hid-only" : "disabled-v8", enabled ? "Remote control enabled: HID only, break/stop/newgame-crash v8" : "Remote control disabled");
 
         if (!enabled)
         {
@@ -955,12 +980,12 @@ namespace winrt::billiardsgrade::implementation
             EnsureKeyboardHook();
             StopBleWatcher();
             CloseBleDevice();
-            EmitRemoteStatus("hid-only-v12", "Using Windows media HID listener; PC keyboard text keys ignored");
+            EmitRemoteStatus("hid-only-v7", "BLE scan skipped; using Windows HID keyboard/media events v7");
 
             JSValueObject result;
             result["ok"] = JSValue(true);
             result["status"] = JSValue("hid-only");
-            result["message"] = JSValue("Using Windows media HID remote listener; PC keyboard text keys ignored");
+            result["message"] = JSValue("Using Windows HID remote listener; BLE scan skipped");
             promise.Resolve(std::move(result));
         }
         catch (winrt::hresult_error const &error)
