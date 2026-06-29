@@ -1,4 +1,10 @@
 export const MATCH_OVERLAY_COMPETITION_MODE = 'pro';
+export const MATCH_OVERLAY_QUICK_COMPETITION_MODE = 'quick_match';
+
+const MATCH_OVERLAY_MODES = new Set([
+  MATCH_OVERLAY_COMPETITION_MODE,
+  MATCH_OVERLAY_QUICK_COMPETITION_MODE,
+]);
 
 const toPositiveFiniteNumber = (value: any): number | undefined => {
   const numeric = Number(value);
@@ -47,7 +53,7 @@ export const shouldShowMatchOverlay = (
   playerSettings?: any,
 ): boolean => {
   return (
-    resolveMatchOverlayMode(gameSettings) === MATCH_OVERLAY_COMPETITION_MODE &&
+    MATCH_OVERLAY_MODES.has(resolveMatchOverlayMode(gameSettings)) &&
     resolveMatchOverlayPlayerCount(gameSettings, playerSettings) === 2
   );
 };

@@ -828,6 +828,7 @@ const GamePlay = () => {
         onPoolBreak={viewModel.onPoolBreak}
         onPressGiveMoreTime={viewModel.onPressGiveMoreTime}
         onWarmUp={viewModel.onWarmUp}
+        onQuickMatchWarmUpNext={viewModel.onQuickMatchWarmUpNext}
         onSwitchTurn={viewModel.onSwitchTurn}
         onSwapPlayers={viewModel.onSwapPlayers}
         onIncreaseTotalTurns={viewModel.onIncreaseTotalTurns}

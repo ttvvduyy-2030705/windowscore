@@ -1,5 +1,12 @@
 import {BilliardCategory} from 'types/category';
 
+
+const isQuickMatchMode = (mode?: string) => mode === 'quick_match';
+
+const isFastLikeMode = (mode?: string) => mode === 'fast' || mode === 'quick_match';
+
+const isTimedMode = (mode?: string) => mode === 'time' || mode === 'pro';
+
 const isPoolGame = (category?: BilliardCategory) => {
   if (
     category === '9-ball' ||
@@ -77,6 +84,9 @@ const isCaromLikeGame = (category?: BilliardCategory) => {
 };
 
 export {
+  isQuickMatchMode,
+  isFastLikeMode,
+  isTimedMode,
   isPoolGame,
   isPool9Game,
   isPool10Game,

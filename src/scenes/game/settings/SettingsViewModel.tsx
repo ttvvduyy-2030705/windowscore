@@ -1350,6 +1350,13 @@ const onSelectGameMode = useCallback(
         setGameSettingsMode({mode: selectedGameMode});
         break;
 
+      case 'quick_match':
+        setGameSettingsMode({
+          mode: selectedGameMode,
+          warmUpTime: 300,
+        });
+        break;
+
       case 'time':
         setGameSettingsMode({
           mode: selectedGameMode,
@@ -1529,8 +1536,8 @@ const onSelectGameMode = useCallback(
       gameSettingsMode,
       playerSettings,
       extraTimeTurnsEnabled: gameMode === 'time' || gameMode === 'pro',
-      countdownEnabled: gameMode !== 'fast',
-      warmUpEnabled: gameMode === 'pro',
+      countdownEnabled: gameMode !== 'fast' && gameMode !== 'quick_match',
+      warmUpEnabled: gameMode === 'pro' || gameMode === 'quick_match',
       extraTimeBonusEnabled: gameMode === 'pro' && isPoolGame(category),
       onSelectExtraTimeBonus,
       onSelectCategory,

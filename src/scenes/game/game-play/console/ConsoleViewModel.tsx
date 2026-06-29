@@ -39,6 +39,7 @@ export interface ConsoleViewModelProps {
   onPoolBreak: () => void;
   onPressGiveMoreTime: () => void;
   onWarmUp: () => void;
+  onQuickMatchWarmUpNext?: () => void;
   onSwitchTurn: () => void;
   onSwapPlayers: () => void;
   onIncreaseTotalTurns: () => void;

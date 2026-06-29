@@ -71,7 +71,14 @@ type LiveScorePayload = {
 };
 
 const APLUS_LIVE_SCORE_DEBUG = String((globalThis as any)?.__APLUS_LIVE_SCORE_DEBUG__ || '').toLowerCase() === 'true';
+const APLUS_LIVE_SCORE_LOG_ENABLED = String((globalThis as any)?.__APLUS_LIVE_SCORE_LOG__ ?? 'true').toLowerCase() !== 'false';
 const debugAplusLiveScore = (...args: any[]) => { if (APLUS_LIVE_SCORE_DEBUG) console.log(...args); };
+const logAplusLiveScore = (event: string, payload: Record<string, any> = {}) => {
+  if (!APLUS_LIVE_SCORE_LOG_ENABLED) return;
+  try {
+    console.log(`[WindowsLiveScore] ${event}`, payload);
+  } catch (_error) {}
+};
 
 const toText = (value?: unknown) => String(value ?? '').trim();
 const trimSlash = (value: string) => String(value || '').replace(/\/+$/, '');
@@ -432,6 +439,53 @@ const isAplusMatchLockedError = (error: unknown) => {
 const isAplusLiveScoreClaimBlockError = (error: unknown) =>
   isAplusMatchFinishedError(error) || isAplusMatchLockedError(error);
 
+const isAplusLiveScoreStateRejectError = (error: unknown) => {
+  const anyError = error as any;
+  const code = toText(anyError?.code);
+  const status = Number(anyError?.status || 0);
+  return status === 409 || status === 423 || [
+    'STALE_CLIENT_SEQUENCE',
+    'MATCH_LOCKED_OR_FINISHED',
+    'MATCH_FINISHED',
+    'FINISH_REJECTED_STALE_OR_LOCKED',
+  ].includes(code);
+};
+
+const syncAplusLiveScoreMatchFromServer = async (
+  config?: Pick<AplusLiveScoreConfig, 'matchId' | 'rawMatch'>,
+  reason = 'server-reject',
+) => {
+  if (!config?.matchId) return null;
+  try {
+    const data = await requestJson(
+      'GET',
+      APLUS_LIVE_SCORE_ENDPOINTS.matchById || '/matches/:matchId',
+      {matchId: config.matchId},
+    );
+    const match = data?.match || data?.data?.match || data?.data || null;
+    if (match) {
+      (config as any).rawMatch = match;
+      logAplusLiveScore('sync-from-server', {
+        matchId: config.matchId,
+        reason,
+        status: match.status,
+        liveStatus: match.liveStatus,
+        resultLocked: match.resultLocked,
+        score1: match.score1,
+        score2: match.score2,
+      });
+    }
+    return match;
+  } catch (error) {
+    logAplusLiveScore('sync-from-server-failed', {
+      matchId: config.matchId,
+      reason,
+      error: (error as Error)?.message || error,
+    });
+    return null;
+  }
+};
+
 const isLiveSessionTokenError = (error: unknown) => {
   if (isAplusLiveScoreClaimBlockError(error)) {
     return false;
@@ -478,6 +532,9 @@ const requestJson = async (
     ? undefined
     : {
         ...(body && typeof body === 'object' ? body : {}),
+        source: toText(body?.source) || 'windows',
+        platform: toText(body?.platform) || 'windows',
+        appId: toText(body?.appId) || deviceId,
         deviceId: toText(body?.deviceId) || deviceId,
         deviceName: toText(body?.deviceName) || APLUS_LIVE_SCORE_DEVICE_NAME,
         clientTimestamp: toText(body?.clientTimestamp) || new Date().toISOString(),
@@ -500,6 +557,7 @@ const requestJson = async (
       Accept: 'application/json',
       'Content-Type': 'application/json',
       'x-live-api-key': APLUS_LIVE_SCORE_API_KEY,
+      'x-aplus-platform': 'windows',
       'x-aplus-device': APLUS_LIVE_SCORE_DEVICE_NAME,
       'x-aplus-device-name': APLUS_LIVE_SCORE_DEVICE_NAME,
       'x-aplus-device-id': deviceId,
@@ -511,7 +569,7 @@ const requestJson = async (
 
     const shouldLogHttp = method !== 'PATCH' || !url.includes('/score');
     if (shouldLogHttp) {
-      debugAplusLiveScore('[AplusLiveScore][HTTP_START]', {
+      debugAplusLiveScore('[WindowsLiveScore][HTTP_START]', {
         method,
         url,
         hasSessionToken: Boolean(sessionToken),
@@ -529,7 +587,7 @@ const requestJson = async (
       });
     } catch (error) {
       lastNetworkError = error;
-      debugAplusLiveScore('[AplusLiveScore][NETWORK_ERROR]', {
+      debugAplusLiveScore('[WindowsLiveScore][NETWORK_ERROR]', {
         method,
         url,
         message: String((error as Error)?.message || error),
@@ -545,12 +603,23 @@ const requestJson = async (
     const data = await readJsonSafe(response);
 
     if (!response.ok) {
-      debugAplusLiveScore('[AplusLiveScore][HTTP_ERROR]', {
+      debugAplusLiveScore('[WindowsLiveScore][HTTP_ERROR]', {
         method,
         url,
         status: response.status,
         data,
       });
+      if (method !== 'GET') {
+        logAplusLiveScore('rejected', {
+          method,
+          path,
+          matchId: toText(params.matchId),
+          tournamentId: toText(params.tournamentId || body?.tournamentId),
+          status: response.status,
+          code: typeof data === 'string' ? undefined : data?.code,
+          reason: typeof data === 'string' ? data : data?.message || data?.error,
+        });
+      }
 
       const retryAfter = Number(response.headers?.get?.('retry-after') || (typeof data === 'string' ? 0 : data?.retryAfter) || 0) || 0;
       const backoffMs = response.status === 429
@@ -569,7 +638,7 @@ const requestJson = async (
     }
 
     if (shouldLogHttp) {
-      debugAplusLiveScore('[AplusLiveScore][HTTP_OK]', {
+      debugAplusLiveScore('[WindowsLiveScore][HTTP_OK]', {
         method,
         url,
         status: response.status,
@@ -578,6 +647,15 @@ const requestJson = async (
     }
 
     clearAplusLiveScoreBackoff(backoffKey);
+    if (method !== 'GET') {
+      logAplusLiveScore('accepted', {
+        method,
+        path,
+        matchId: toText(params.matchId),
+        tournamentId: toText(params.tournamentId || body?.tournamentId),
+        source: data?.source,
+      });
+    }
     return data;
   }
 
@@ -598,7 +676,7 @@ const claimAplusLiveScoreSession = async (
     ? DeviceInfo.getVersion()
     : '';
 
-  debugAplusLiveScore('[AplusLiveScore][CLAIM_SESSION_START]', {matchId, deviceId});
+  debugAplusLiveScore('[WindowsLiveScore][CLAIM_SESSION_START]', {matchId, deviceId});
 
   const data = await requestJson(
     'POST',
@@ -620,7 +698,7 @@ const claimAplusLiveScoreSession = async (
 
   rememberAplusLiveScoreSession(matchId, sessionToken, lockExpiresAt);
 
-  debugAplusLiveScore('[AplusLiveScore][CLAIM_SESSION_OK]', {
+  debugAplusLiveScore('[WindowsLiveScore][CLAIM_SESSION_OK]', {
     matchId,
     hasSessionToken: true,
     lockExpiresAt,
@@ -701,7 +779,7 @@ export const flushAplusLiveScoreOutbox = async (reason = 'manual') => {
         }
       } catch (error) {
         if (isAplusMatchFinishedError(error) || isAplusMatchLockedError(error)) {
-          debugAplusLiveScore('[AplusLiveScore][OUTBOX_DROP_LOCKED_OR_FINISHED]', {
+          debugAplusLiveScore('[WindowsLiveScore][OUTBOX_DROP_LOCKED_OR_FINISHED]', {
             reason,
             action: item.action,
             matchId: item.matchId,
@@ -1051,7 +1129,7 @@ const refreshTournamentBeforeMatchLookup = async (tournament: AplusTournament) =
     const freshTournament = findSameTournamentFromFreshList(tournament, freshTournaments);
 
     if (freshTournament?.id && freshTournament.id !== tournament.id) {
-      debugAplusLiveScore('[AplusLiveScore][MATCH_LOOKUP_TOURNAMENT_ID_REFRESHED]', {
+      debugAplusLiveScore('[WindowsLiveScore][MATCH_LOOKUP_TOURNAMENT_ID_REFRESHED]', {
         oldTournamentId: tournament.id,
         newTournamentId: freshTournament.id,
         tournamentName: freshTournament.name,
@@ -1059,7 +1137,7 @@ const refreshTournamentBeforeMatchLookup = async (tournament: AplusTournament) =
       return freshTournament;
     }
   } catch (error: any) {
-    debugAplusLiveScore('[AplusLiveScore][MATCH_LOOKUP_TOURNAMENT_REFRESH_FAILED]', {
+    debugAplusLiveScore('[WindowsLiveScore][MATCH_LOOKUP_TOURNAMENT_REFRESH_FAILED]', {
       tournamentId: tournament.id,
       message: error?.message || String(error),
     });
@@ -1138,7 +1216,7 @@ export const bootstrapAplusLiveScoreOutbox = async (reason = 'bootstrap') => {
   } catch (_error) {}
   scheduleAplusLiveScoreOutboxFlush(250);
   void flushAplusLiveScoreOutbox(reason).catch(error => {
-    debugAplusLiveScore('[AplusLiveScore][OUTBOX_BOOTSTRAP_FLUSH_FAILED]', (error as Error)?.message || error);
+    debugAplusLiveScore('[WindowsLiveScore][OUTBOX_BOOTSTRAP_FLUSH_FAILED]', (error as Error)?.message || error);
   });
 };
 
@@ -1432,7 +1510,7 @@ export const pushAplusLiveScoreUpdate = async ({
   const config = getAplusLiveScoreConfig(gameSettings);
 
   if (!config) {
-    debugAplusLiveScore('[AplusLiveScore][PUSH_BLOCKED_NO_CONFIG]', {
+    debugAplusLiveScore('[WindowsLiveScore][PUSH_BLOCKED_NO_CONFIG]', {
       hasAplusLiveScore: Boolean((gameSettings as any)?.aplusLiveScore),
       aplusLiveScore: (gameSettings as any)?.aplusLiveScore,
     });
@@ -1440,7 +1518,7 @@ export const pushAplusLiveScoreUpdate = async ({
   }
 
   if (!playerSettings?.playingPlayers?.length) {
-    debugAplusLiveScore('[AplusLiveScore][PUSH_BLOCKED_NO_PLAYERS]', {
+    debugAplusLiveScore('[WindowsLiveScore][PUSH_BLOCKED_NO_PLAYERS]', {
       matchId: config.matchId,
       playingPlayersLength: playerSettings?.playingPlayers?.length,
     });
@@ -1454,7 +1532,7 @@ export const pushAplusLiveScoreUpdate = async ({
   if (winner) {
     // Kết thúc trận chỉ được gửi qua /finish. Không gửi snapshot finished qua /score,
     // vì request score cũ có thể kéo admin/web về trạng thái sai sau khi đã khóa kết quả.
-    debugAplusLiveScore('[AplusLiveScore][PUSH_SCORE_SKIP_WINNER_USE_FINISH]', {
+    debugAplusLiveScore('[WindowsLiveScore][PUSH_SCORE_SKIP_WINNER_USE_FINISH]', {
       matchId: config.matchId,
       matchNumber: config.matchNumber,
     });
@@ -1466,7 +1544,7 @@ export const pushAplusLiveScoreUpdate = async ({
     try {
       await ensureAplusLiveScoreStartedFromGameplay(config);
     } catch (error) {
-      debugAplusLiveScore('[AplusLiveScore][START_FROM_GAMEPLAY_FAILED]', {
+      debugAplusLiveScore('[WindowsLiveScore][START_FROM_GAMEPLAY_FAILED]', {
         matchId: config.matchId,
         reason: (error as Error)?.message || error,
       });
@@ -1536,13 +1614,20 @@ export const pushAplusLiveScoreUpdate = async ({
     liveCountdownUpdatedAt: new Date().toISOString(),
   };
 
-  debugAplusLiveScore('[AplusLiveScore][PUSH_SCORE_START]', {
+  debugAplusLiveScore('[WindowsLiveScore][PUSH_SCORE_START]', {
     matchId: config.matchId,
     matchNumber: config.matchNumber,
     tournamentId: config.tournamentId,
     score1,
     score2,
     liveStatus: payload.liveStatus,
+  });
+  logAplusLiveScore('send', {
+    matchId: config.matchId,
+    matchNumber: config.matchNumber,
+    tournamentId: config.tournamentId,
+    score: `${score1}-${score2}`,
+    status: payload.liveStatus,
   });
 
   const sendNow = async () => {
@@ -1561,7 +1646,7 @@ export const pushAplusLiveScoreUpdate = async ({
       sessionToken = await getOrClaimAplusLiveScoreSessionToken(config);
     } catch (error) {
       if (isAplusLiveScoreClaimBlockError(error)) {
-        debugAplusLiveScore('[AplusLiveScore][PUSH_SCORE_BLOCKED_BEFORE_SEND]', {
+        debugAplusLiveScore('[WindowsLiveScore][PUSH_SCORE_BLOCKED_BEFORE_SEND]', {
           matchId: config.matchId,
           reason: (error as Error)?.message || error,
         });
@@ -1577,7 +1662,7 @@ export const pushAplusLiveScoreUpdate = async ({
       await removeAplusLiveScoreOutboxEntry(makeAplusOutboxId('score', config.matchId));
       void flushAplusLiveScoreOutbox('score-ok');
 
-      debugAplusLiveScore('[AplusLiveScore][PUSH_SCORE_OK]', {
+      debugAplusLiveScore('[WindowsLiveScore][PUSH_SCORE_OK]', {
         matchId: config.matchId,
         score1,
         score2,
@@ -1586,11 +1671,17 @@ export const pushAplusLiveScoreUpdate = async ({
       return result;
     } catch (error) {
       if (isAplusLiveScoreClaimBlockError(error)) {
-        debugAplusLiveScore('[AplusLiveScore][PUSH_SCORE_BLOCKED_BY_MATCH_STATE]', {
+        debugAplusLiveScore('[WindowsLiveScore][PUSH_SCORE_BLOCKED_BY_MATCH_STATE]', {
           matchId: config.matchId,
           reason: (error as Error)?.message || error,
         });
         forgetAplusLiveScoreSession(config.matchId);
+        void syncAplusLiveScoreMatchFromServer(config, 'score-blocked-by-match-state');
+        return;
+      }
+
+      if (isAplusLiveScoreStateRejectError(error)) {
+        void syncAplusLiveScoreMatchFromServer(config, 'score-rejected-by-server');
         return;
       }
 
@@ -1598,7 +1689,7 @@ export const pushAplusLiveScoreUpdate = async ({
         throw error;
       }
 
-      debugAplusLiveScore('[AplusLiveScore][PUSH_SCORE_RECLAIM]', {
+      debugAplusLiveScore('[WindowsLiveScore][PUSH_SCORE_RECLAIM]', {
         matchId: config.matchId,
         reason: (error as Error)?.message || error,
       });
@@ -1612,7 +1703,7 @@ export const pushAplusLiveScoreUpdate = async ({
       await removeAplusLiveScoreOutboxEntry(makeAplusOutboxId('score', config.matchId));
       void flushAplusLiveScoreOutbox('score-ok-after-reclaim');
 
-      debugAplusLiveScore('[AplusLiveScore][PUSH_SCORE_OK_AFTER_RECLAIM]', {
+      debugAplusLiveScore('[WindowsLiveScore][PUSH_SCORE_OK_AFTER_RECLAIM]', {
         matchId: config.matchId,
         result,
       });
@@ -1624,6 +1715,10 @@ export const pushAplusLiveScoreUpdate = async ({
     try {
       return await sendNow();
     } catch (error) {
+      if (isAplusLiveScoreStateRejectError(error)) {
+        await syncAplusLiveScoreMatchFromServer(config, 'score-queue-rejected-by-server');
+        return;
+      }
       if (!isAplusLiveScoreClaimBlockError(error)) {
         await upsertAplusLiveScoreOutboxEntry({
           action: 'score',
@@ -1663,7 +1758,7 @@ export const heartbeatAplusLiveScoreMatch = async (config?: AplusLiveScoreConfig
     sessionToken = await getOrClaimAplusLiveScoreSessionToken(config);
   } catch (error) {
     if (isAplusLiveScoreClaimBlockError(error)) {
-      debugAplusLiveScore('[AplusLiveScore][HEARTBEAT_BLOCKED_BEFORE_SEND]', {
+      debugAplusLiveScore('[WindowsLiveScore][HEARTBEAT_BLOCKED_BEFORE_SEND]', {
         matchId: config.matchId,
         reason: (error as Error)?.message || error,
       });
@@ -1679,7 +1774,7 @@ export const heartbeatAplusLiveScoreMatch = async (config?: AplusLiveScoreConfig
     void flushAplusLiveScoreOutbox('heartbeat-ok');
   } catch (error) {
     if (isAplusLiveScoreClaimBlockError(error)) {
-      debugAplusLiveScore('[AplusLiveScore][PUSH_SCORE_BLOCKED_BY_MATCH_STATE]', {
+      debugAplusLiveScore('[WindowsLiveScore][PUSH_SCORE_BLOCKED_BY_MATCH_STATE]', {
         matchId: config.matchId,
         reason: (error as Error)?.message || error,
       });
@@ -1691,7 +1786,7 @@ export const heartbeatAplusLiveScoreMatch = async (config?: AplusLiveScoreConfig
       throw error;
     }
 
-    debugAplusLiveScore('[AplusLiveScore][HEARTBEAT_RECLAIM]', {
+    debugAplusLiveScore('[WindowsLiveScore][HEARTBEAT_RECLAIM]', {
       matchId: config.matchId,
       reason: (error as Error)?.message || error,
     });
@@ -1752,8 +1847,9 @@ export const finishAplusLiveScoreMatch = async (
     startingAplusLiveScoreMatchPromises.delete(config.matchId);
     forgetAplusLiveScoreSession(config.matchId);
   } catch (error) {
-    if (isAplusLiveScoreClaimBlockError(error)) {
+    if (isAplusLiveScoreClaimBlockError(error) || isAplusLiveScoreStateRejectError(error)) {
       forgetAplusLiveScoreSession(config.matchId);
+      await syncAplusLiveScoreMatchFromServer(config, 'finish-rejected-by-server');
       throw error;
     }
 
@@ -1771,7 +1867,7 @@ export const finishAplusLiveScoreMatch = async (
       ? getAplusLiveScoreRetryDelayMs(1, (error as any)?.retryAfter)
       : 1500);
 
-    debugAplusLiveScore('[AplusLiveScore][FINISH_QUEUED_OUTBOX]', {
+    debugAplusLiveScore('[WindowsLiveScore][FINISH_QUEUED_OUTBOX]', {
       matchId: config.matchId,
       score1,
       score2,

@@ -24,13 +24,15 @@ const PointSteps = (props: Props) => {
 
   const STEPS = useMemo(() => {
     return props.gameSettings?.category === 'libre' &&
-      props.gameSettings?.mode?.mode === 'fast'
+      (props.gameSettings?.mode?.mode === 'fast' ||
+      props.gameSettings?.mode?.mode === 'quick_match')
       ? GAME_PLAY_POINTS_STEPS
       : GAME_PLAY_POINTS_STEPS_SHORT;
   }, [props.gameSettings?.category, props.gameSettings?.mode?.mode]);
 
   if (
-    props.gameSettings?.mode?.mode !== 'fast' ||
+    !(props.gameSettings?.mode?.mode === 'fast' ||
+      props.gameSettings?.mode?.mode === 'quick_match') ||
     isPoolGame(props.gameSettings?.category)
   ) {
     return <View />;

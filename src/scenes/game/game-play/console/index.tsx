@@ -706,6 +706,19 @@ const GameConsole = (props: ConsoleViewModelProps) => {
   const isWideTabletPreset = adaptive.layoutPreset === 'wideTablet';
   const isTvPreset = adaptive.layoutPreset === 'tv';
   const isFastMode = props.gameSettings?.mode?.mode === 'fast';
+  const isQuickMatchMode = props.gameSettings?.mode?.mode === 'quick_match';
+  const quickMatchWarmUpActive =
+    isQuickMatchMode &&
+    !props.isStarted &&
+    ((typeof props.warmUpCountdownTime === 'number' &&
+      props.warmUpCountdownTime >= 0) ||
+      Number(props.warmUpCount || 0) > 0);
+  const quickMatchWarmUpLabel = useMemo(() => {
+    const count = Math.max(0, Math.round(Number(props.warmUpCount || 0)));
+    return count > 0
+      ? tr(`Khởi động (${count})`, `Warm-up (${count})`)
+      : tr('Khởi động', 'Warm up');
+  }, [props.warmUpCount, language]);
   const totalTimeText = viewModel.displayTotalTime();
   const players = props.playerSettings?.playingPlayers || [];
   const totalPlayers = Number(props.totalPlayers || 2);
@@ -950,6 +963,11 @@ const GameConsole = (props: ConsoleViewModelProps) => {
 
   const startLabel = useMemo(() => {
     if (!props.isStarted) {
+      if (isQuickMatchMode) {
+        return quickMatchWarmUpActive
+          ? quickMatchWarmUpLabel
+          : tr('Bắt đầu', 'Start');
+      }
       if (!isFastMode && (props.warmUpCount ?? 0) > 0) {
         return tr(
           `Khởi động (${props.warmUpCount})`,
@@ -965,11 +983,16 @@ const GameConsole = (props: ConsoleViewModelProps) => {
           isCarom || isFastMode ? 'Start' : 'Resume',
         )
       : tr('Tạm dừng', 'Pause');
-  }, [props.isStarted, props.isPaused, props.warmUpCount, isCarom, isFastMode, language]);
+  }, [props.isStarted, props.isPaused, props.warmUpCount, isCarom, isFastMode, isQuickMatchMode, quickMatchWarmUpActive, quickMatchWarmUpLabel, language]);
 
   const handleBottomLeft = () => {
     if (!props.isStarted) {
-      if (!isFastMode && (props.warmUpCount ?? 0) > 0) {
+      if (isQuickMatchMode && quickMatchWarmUpActive) {
+        viewModel.onWarmUp();
+        return;
+      }
+
+      if (!isQuickMatchMode && !isFastMode && (props.warmUpCount ?? 0) > 0) {
         viewModel.onWarmUp();
         return;
       }
@@ -981,6 +1004,10 @@ const GameConsole = (props: ConsoleViewModelProps) => {
   };
 
   const mainActionRow = useMemo(() => {
+    if (isQuickMatchMode) {
+      return null;
+    }
+
     if (isFastMode || isPool15) {
       return null;
     }
@@ -1067,6 +1094,7 @@ const GameConsole = (props: ConsoleViewModelProps) => {
     hideCaromCamera,
     isCarom,
     isFastMode,
+    isQuickMatchMode,
     isPool,
     isPool15,
     props.isStarted,
@@ -1115,6 +1143,24 @@ const GameConsole = (props: ConsoleViewModelProps) => {
       return null;
     }
 
+    if (isQuickMatchMode) {
+      return (
+        <DualButton
+          leftLabel={startLabel}
+          leftIcon={props.isStarted && !props.isPaused ? undefined : images.game.start}
+          rightLabel={tr('Kết thúc', 'End')}
+          rightIcon={images.game.endMatch}
+          onLeftPress={handleBottomLeft}
+          onRightPress={viewModel.onStop}
+          leftTone={'amber'}
+          rightTone={'red'}
+          compact={useResponsiveCompact}
+          poolCompact={usePoolBroadcastLayout}
+          extraCompact={useExtraCompact}
+        />
+      );
+    }
+
     if (isCarom) {
       return (
         <DualButton
@@ -1153,10 +1199,18 @@ const GameConsole = (props: ConsoleViewModelProps) => {
     handleBottomLeft,
     hideCaromCamera,
     isCarom,
+    isPool,
     isPool15,
+    isQuickMatchMode,
+    quickMatchWarmUpActive,
+    quickMatchWarmUpLabel,
     props.isPaused,
     props.isStarted,
+    props.poolBreakEnabled,
     props.onGameBreak,
+    props.onPoolBreak,
+    props.onQuickMatchWarmUpNext,
+    props.onReset,
     startLabel,
     useExtraCompact,
     usePoolBroadcastLayout,

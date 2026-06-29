@@ -88,11 +88,11 @@ const GameInfo = (props: Props) => {
     );
   }, []);
 
-  if (isFullPlayer && props.currentMode?.mode === 'fast') {
+  if (isFullPlayer && (props.currentMode?.mode === 'fast' || props.currentMode?.mode === 'quick_match')) {
     return <View />;
   }
 
-  if (props.currentMode?.mode === 'fast') {
+  if ((props.currentMode?.mode === 'fast' || props.currentMode?.mode === 'quick_match')) {
     return (
       <View
         flex={isFullPlayer ? '0' : '1'}

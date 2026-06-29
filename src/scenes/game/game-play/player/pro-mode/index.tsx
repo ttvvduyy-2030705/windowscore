@@ -24,7 +24,8 @@ const ProMode = (props: Props) => {
   const valueFontSize = adaptive.fs(26, 0.76, 1.04);
 
   if (
-    props.gameSettings?.mode?.mode === 'fast' ||
+    (props.gameSettings?.mode?.mode === 'fast' ||
+      props.gameSettings?.mode?.mode === 'quick_match') ||
     isPoolGame(props.gameSettings?.category)
   ) {
     return <View />;

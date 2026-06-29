@@ -20,7 +20,8 @@ const ExtraTimeTurns = ({gameSettings, player}: Props) => {
   if (
     !gameSettings?.mode?.extraTimeTurns ||
     gameSettings?.mode?.extraTimeTurns === 'infinity' ||
-    gameSettings?.mode?.mode === 'fast' ||
+    (gameSettings?.mode?.mode === 'fast' ||
+      gameSettings?.mode?.mode === 'quick_match') ||
     totalExtra <= 0
   ) {
     return <View />;

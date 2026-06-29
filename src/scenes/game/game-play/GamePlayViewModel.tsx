@@ -828,6 +828,7 @@ const GamePlayViewModel = () => {
   const lastLiveSnapshotSyncAtRef = useRef(0);
   const lastReplayTimelineWriteSignatureRef = useRef('');
   const lastPruneCompletedSegmentsRef = useRef(0);
+  const quickMatchRemoteStopRef = useRef<(() => void) | null>(null);
   const remoteHandlersRef = useRef({
     start: () => {},
     warmUp: () => {},
@@ -1271,7 +1272,8 @@ const GamePlayViewModel = () => {
   const [poolBreakEnabled, setPoolBreakEnabled] = useState<boolean>(false);
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [proModeEnabled, setProModeEnabled] = useState(
-  !isPoolGame(gameSettings?.category) && gameSettings?.mode?.mode !== 'fast',
+  !isPoolGame(gameSettings?.category) && gameSettings?.mode?.mode !== 'fast' &&
+      gameSettings?.mode?.mode !== 'quick_match',
 );
 
   const applyReplayResumeSnapshot = useCallback((snapshot: ReplayResumeSnapshot) => {
@@ -1594,13 +1596,46 @@ const GamePlayViewModel = () => {
     // Carom: NEW GAME is reused as "tăng lượt", so it fires immediately.
     RemoteControl.instance.setNewGameHoldRequired?.(!isCaromRemoteTurnMode);
 
+    const isQuickMatchRemoteMode = gameSettings?.mode?.mode === 'quick_match';
+    const quickMatchWarmUpActive =
+      isQuickMatchRemoteMode &&
+      !isStarted &&
+      ((typeof warmUpCountdownTime === 'number' && warmUpCountdownTime >= 0) ||
+        Number(warmUpCount || 0) > 0);
+
+    const handleQuickMatchPrimaryRemoteAction = () => {
+      if (quickMatchWarmUpActive) {
+        onWarmUp();
+        return;
+      }
+
+      if (isStarted) {
+        onPause();
+        return;
+      }
+
+      void onStart();
+    };
+
     remoteHandlersRef.current = {
       start: () => {
-        console.log('[Remote][Start] toggle v11-carom-pool-separate-buttons', {
+        console.log('[Remote][Start] toggle v13-quick-match-two-state', {
           isStarted,
           isPaused,
           isMatchPaused,
+          isQuickMatchRemoteMode,
+          quickMatchWarmUpActive,
         });
+
+        if (isQuickMatchRemoteMode) {
+          handleQuickMatchPrimaryRemoteAction();
+          return;
+        }
+
+        if (quickMatchWarmUpActive) {
+          onWarmUp();
+          return;
+        }
 
         if (isStarted) {
           onPause();
@@ -1609,26 +1644,53 @@ const GamePlayViewModel = () => {
 
         void onStart();
       },
-      warmUp: warmUpCountdownTime ? onEndWarmUp : onWarmUp,
-      stop: onToggleCountDown,
-      gameBreak: isCaromRemoteTurnMode
+      warmUp: isQuickMatchRemoteMode
+        ? handleQuickMatchPrimaryRemoteAction
+        : quickMatchWarmUpActive
+          ? onWarmUp
+          : warmUpCountdownTime
+            ? onEndWarmUp
+            : onWarmUp,
+      stop: isQuickMatchRemoteMode
         ? () => {
-            console.log('[Remote][Carom] BREAK -> decrease turns');
-            setTotalTurns(prev => Math.max(1, (Number(prev) || 1) - 1));
+            console.log('[Remote][QuickMatch] STOP -> end match');
+            quickMatchRemoteStopRef.current?.();
           }
-        : onPoolBreak,
-      extension: onPressGiveMoreTime,
-      timer: isCaromRemoteTurnMode
+        : onToggleCountDown,
+      gameBreak: isQuickMatchRemoteMode
         ? () => {
-            console.log('[Remote][Carom] TIMER ignored');
+            console.log('[Remote][QuickMatch] BREAK ignored: quick match has no Break/New game button');
           }
-        : onResetTurn,
-      newGame: isCaromRemoteTurnMode
+        : isCaromRemoteTurnMode
+          ? () => {
+              console.log('[Remote][Carom] BREAK -> decrease turns');
+              setTotalTurns(prev => Math.max(1, (Number(prev) || 1) - 1));
+            }
+          : onPoolBreak,
+      extension: isQuickMatchRemoteMode
         ? () => {
-            console.log('[Remote][Carom] NEW_GAME -> increase turns');
-            setTotalTurns(prev => Math.max(1, (Number(prev) || 0) + 1));
+            console.log('[Remote][QuickMatch] EXTENSION ignored');
           }
-        : onReset,
+        : onPressGiveMoreTime,
+      timer: isQuickMatchRemoteMode
+        ? () => {
+            console.log('[Remote][QuickMatch] TIMER ignored');
+          }
+        : isCaromRemoteTurnMode
+          ? () => {
+              console.log('[Remote][Carom] TIMER ignored');
+            }
+          : onResetTurn,
+      newGame: isQuickMatchRemoteMode
+        ? () => {
+            console.log('[Remote][QuickMatch] NEW_GAME ignored: quick match has no Break/New game button');
+          }
+        : isCaromRemoteTurnMode
+          ? () => {
+              console.log('[Remote][Carom] NEW_GAME -> increase turns');
+              setTotalTurns(prev => Math.max(1, (Number(prev) || 0) + 1));
+            }
+          : onReset,
       up: () => onChangePlayerPoint(1, currentPlayerIndex, 0),
       down: () => onChangePlayerPoint(-1, currentPlayerIndex, 0),
       left: onEndTurn,
@@ -1636,15 +1698,19 @@ const GamePlayViewModel = () => {
     };
   }, [
     gameSettings?.category,
+    gameSettings?.mode?.mode,
     isStarted,
     isEndingGame,
     isPaused,
     isMatchPaused,
+    poolBreakEnabled,
+    warmUpCount,
     warmUpCountdownTime,
     onPause,
     onStart,
     onEndWarmUp,
     onWarmUp,
+    onQuickMatchWarmUpNext,
     onToggleCountDown,
     onPoolBreak,
     onPressGiveMoreTime,
@@ -2288,6 +2354,10 @@ const GamePlayViewModel = () => {
       totalTurns,
     ],
   );
+
+  useEffect(() => {
+    quickMatchRemoteStopRef.current = onStop;
+  }, [onStop]);
 
   const onPressGiveMoreTime = useCallback(() => {
     const baseCountdown = Number(gameSettings?.mode?.countdownTime || 0);
@@ -2974,13 +3044,21 @@ const GamePlayViewModel = () => {
       !isStarted ||
       isPaused ||
       !poolBreakEnabled ||
-      !gameSettings ||
-      !gameSettings.mode?.countdownTime
+      !gameSettings
     ) {
       return;
     }
-    const extraTimeBonus = gameSettings.mode?.extraTimeBonus || 0;
-    setCountdownTime(gameSettings.mode?.countdownTime! + extraTimeBonus);
+
+    if (gameSettings.mode?.mode !== 'quick_match') {
+      if (!gameSettings.mode?.countdownTime) {
+        return;
+      }
+      const extraTimeBonus = gameSettings.mode?.extraTimeBonus || 0;
+      setCountdownTime(gameSettings.mode?.countdownTime! + extraTimeBonus);
+    } else {
+      setCountdownTime(0);
+    }
+
     setPoolBreakEnabled(false);
     setIsMatchPaused(false);
     setIsStarted(true);
@@ -3007,6 +3085,7 @@ const GamePlayViewModel = () => {
   const onWarmUp = useCallback(() => {
     if (
       !gameSettings?.mode?.warmUpTime ||
+      (typeof warmUpCountdownTime === 'number' && warmUpCountdownTime > 0) ||
       (typeof warmUpCount === 'number' && warmUpCount <= 0)
     ) {
       return;
@@ -3014,7 +3093,7 @@ const GamePlayViewModel = () => {
 
     setWarmUpCount(prev => (prev ? prev - 1 : 0));
     setWarmUpCountdownTime(gameSettings?.mode?.warmUpTime);
-  }, [gameSettings, warmUpCount]);
+  }, [gameSettings, warmUpCount, warmUpCountdownTime]);
 
   const onGameBreak = useCallback(() => {
     setGameBreakEnabled(true);
@@ -3026,6 +3105,69 @@ const GamePlayViewModel = () => {
     setGameBreakEnabled(false);
     clearInterval(warmUpCountdownInterval);
   }, []);
+
+  const moveWarmUpToNextPlayer = useCallback(() => {
+    const totalPlayers = Math.max(
+      1,
+      Number(
+        playerSettings?.playingPlayers?.length ||
+          gameSettings?.players?.playingPlayers?.length ||
+          gameSettings?.players?.playerNumber ||
+          1,
+      ),
+    );
+    const nextPlayerIndex =
+      currentPlayerIndex + 1 > totalPlayers - 1 ? 0 : currentPlayerIndex + 1;
+
+    setCurrentPlayerIndex(nextPlayerIndex);
+    setPoolBreakPlayerIndex(nextPlayerIndex);
+  }, [currentPlayerIndex, gameSettings, playerSettings]);
+
+  const onQuickMatchWarmUpNext = useCallback(() => {
+    if (gameSettings?.mode?.mode !== 'quick_match') {
+      onEndWarmUp();
+      return;
+    }
+
+    const hasRunningWarmUp =
+      typeof warmUpCountdownTime === 'number' && warmUpCountdownTime > 0;
+    if (!hasRunningWarmUp) {
+      onWarmUp();
+      return;
+    }
+
+    clearInterval(warmUpCountdownInterval);
+    setGameBreakEnabled(false);
+    setWarmUpCountdownTime(undefined);
+
+    const remainingWarmUps = Math.max(0, Number(warmUpCount || 0));
+    if (remainingWarmUps <= 0) {
+      setWarmUpCount(0);
+      return;
+    }
+
+    moveWarmUpToNextPlayer();
+    setWarmUpCount(Math.max(0, remainingWarmUps - 1));
+    setWarmUpCountdownTime(gameSettings?.mode?.warmUpTime);
+  }, [gameSettings, moveWarmUpToNextPlayer, onEndWarmUp, onWarmUp, warmUpCount, warmUpCountdownTime]);
+
+  useEffect(() => {
+    if (gameSettings?.mode?.mode !== 'quick_match') {
+      return;
+    }
+
+    if (warmUpCountdownTime !== 0) {
+      return;
+    }
+
+    clearInterval(warmUpCountdownInterval);
+    setWarmUpCountdownTime(undefined);
+    setGameBreakEnabled(false);
+
+    if (Math.max(0, Number(warmUpCount || 0)) > 0) {
+      moveWarmUpToNextPlayer();
+    }
+  }, [gameSettings?.mode?.mode, moveWarmUpToNextPlayer, warmUpCount, warmUpCountdownTime]);
 
   const onEndTurn = useCallback(
     (isPrevious?: boolean) => {
@@ -3254,6 +3396,18 @@ const GamePlayViewModel = () => {
       return;
     }
 
+    if (
+      gameSettings?.mode?.mode === 'quick_match' &&
+      ((typeof warmUpCountdownTime === 'number' && warmUpCountdownTime >= 0) ||
+        Number(warmUpCount || 0) > 0)
+    ) {
+      console.log('[QuickMatch] start blocked until warm-up is finished', {
+        warmUpCount,
+        warmUpCountdownTime,
+      });
+      return;
+    }
+
     const freeDisk =
       (await DeviceInfo.getFreeDiskStorage()) / (1024 * 1024 * 1024);
 
@@ -3350,6 +3504,10 @@ const GamePlayViewModel = () => {
       });
       shouldStartRecordingRef.current = true;
       pendingStartRecordingRef.current = true;
+      if (gameSettings?.mode?.mode === 'quick_match' && isPoolGame(gameSettings?.category)) {
+        setPoolBreakEnabled(!isPool15FreeGame(gameSettings?.category));
+      }
+      setCountdownTime(gameSettings?.mode?.mode === 'quick_match' ? 0 : countdownTime);
       setIsStarted(true);
       return;
     }
@@ -3718,6 +3876,8 @@ const GamePlayViewModel = () => {
     shouldUseYouTubeLive,
     showYouTubeLiveFailure,
     totalTurns,
+    warmUpCount,
+    warmUpCountdownTime,
     webcamFolderName,
   ]);
 
@@ -4326,13 +4486,15 @@ const GamePlayViewModel = () => {
     setPlayerSettings(newPlayerSettings);
     setWinner(undefined);
 
-    if (
-      isPoolGame(gameSettings?.category) &&
-      gameSettings?.mode?.countdownTime
-    ) {
-      const extraTimeBonus = gameSettings.mode?.extraTimeBonus || 0;
-      setCountdownTime(gameSettings.mode?.countdownTime! + extraTimeBonus);
-      setPoolBreakEnabled(!isPool15FreeGame(gameSettings?.category));
+    if (isPoolGame(gameSettings?.category)) {
+      if (gameSettings?.mode?.mode === 'quick_match') {
+        setCountdownTime(0);
+        setPoolBreakEnabled(!isPool15FreeGame(gameSettings?.category));
+      } else if (gameSettings?.mode?.countdownTime) {
+        const extraTimeBonus = gameSettings.mode?.extraTimeBonus || 0;
+        setCountdownTime(gameSettings.mode?.countdownTime! + extraTimeBonus);
+        setPoolBreakEnabled(!isPool15FreeGame(gameSettings?.category));
+      }
     }
 
     if (isPool15OnlyGame(gameSettings?.category)) {
@@ -4926,6 +5088,7 @@ const GamePlayViewModel = () => {
       onGameBreak,
       onWarmUp,
       onEndWarmUp,
+      onQuickMatchWarmUpNext,
       onSwitchTurn,
       onSwitchPoolBreakPlayerIndex,
       onSwapPlayers,
@@ -5004,6 +5167,7 @@ const GamePlayViewModel = () => {
     onGameBreak,
     onWarmUp,
     onEndWarmUp,
+    onQuickMatchWarmUpNext,
     onSwitchTurn,
     onSwitchPoolBreakPlayerIndex,
     onSwapPlayers,

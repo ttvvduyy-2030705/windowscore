@@ -16,6 +16,7 @@ const game = {
   '15-ball': 'Pool 8',
   '15-free-ball': 'Pool 8 Free',
   fast: 'Fast',
+  quick_match: 'Quick tournament',
   time: 'Time',
   eliminate: 'Eliminate',
   pro: 'Tournament',
