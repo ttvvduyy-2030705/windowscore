@@ -48,6 +48,21 @@ const createStyles = (adaptive: AdaptiveLike, design: DesignSystem) => {
       height: '100%',
       backgroundColor: colors.black,
       marginLeft: 0.5,
+      position: 'relative',
+      overflow: 'hidden',
+    },
+    playbackNativeVideo: {
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      backgroundColor: colors.black,
+      zIndex: 1,
+      elevation: 1,
+    },
+    playbackNativeVideoWithScoreboard: {
+      bottom: adaptive.s(118),
     },
     videoResize: {
       width: adaptive.s(300),

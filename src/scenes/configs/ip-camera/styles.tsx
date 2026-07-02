@@ -1,0 +1,155 @@
+import {StyleSheet} from 'react-native';
+
+const styles = StyleSheet.create({
+  container: {
+    width: '100%',
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: '#202226',
+    backgroundColor: '#050505',
+    padding: 24,
+    gap: 16,
+  },
+  headerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 16,
+  },
+  title: {
+    fontSize: 20,
+    lineHeight: 24,
+    fontWeight: '900',
+  },
+  hint: {
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  statusPill: {
+    minWidth: 140,
+    minHeight: 44,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#33363D',
+    backgroundColor: '#141519',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 18,
+  },
+  statusPillActive: {
+    backgroundColor: '#D21F2B',
+    borderColor: '#FF3A46',
+  },
+  statusText: {
+    fontSize: 15,
+    lineHeight: 18,
+    fontWeight: '900',
+  },
+  simpleBox: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+  },
+  field: {
+    flexGrow: 1,
+    flexBasis: '48%',
+    minWidth: 220,
+    gap: 6,
+  },
+  label: {
+    fontSize: 14,
+    lineHeight: 18,
+    fontWeight: '800',
+  },
+  input: {
+    minHeight: 50,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#2C2F35',
+    backgroundColor: '#111214',
+    color: '#FFFFFF',
+    paddingHorizontal: 14,
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  inputDisabled: {
+    opacity: 0.52,
+  },
+  templateBox: {
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#2A2C32',
+    backgroundColor: '#101114',
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    gap: 4,
+  },
+  templateTitle: {
+    fontSize: 15,
+    lineHeight: 19,
+    fontWeight: '900',
+  },
+  templateNote: {
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  noteText: {
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  actionRow: {
+    gap: 12,
+    flexWrap: 'wrap',
+  },
+  saveButton: {
+    alignSelf: 'flex-start',
+    minHeight: 48,
+    borderRadius: 14,
+    backgroundColor: '#D21F2B',
+    borderWidth: 1,
+    borderColor: '#FF3A46',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 26,
+  },
+  saveButtonDisabled: {
+    opacity: 0.48,
+  },
+  clearButton: {
+    alignSelf: 'flex-start',
+    minHeight: 48,
+    borderRadius: 14,
+    backgroundColor: '#17181C',
+    borderWidth: 1,
+    borderColor: '#2B2D33',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 22,
+  },
+  saveText: {
+    fontSize: 16,
+    lineHeight: 19,
+    fontWeight: '900',
+  },
+  clearText: {
+    fontSize: 15,
+    lineHeight: 18,
+    fontWeight: '900',
+  },
+  savedText: {
+    fontSize: 14,
+    lineHeight: 18,
+    fontWeight: '800',
+  },
+  previewBox: {
+    width: '100%',
+    aspectRatio: 16 / 9,
+    borderRadius: 16,
+    overflow: 'hidden',
+    backgroundColor: '#000000',
+    borderWidth: 1,
+    borderColor: '#2A2C32',
+  },
+});
+
+export default styles;

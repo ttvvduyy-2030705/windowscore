@@ -13,7 +13,7 @@ import ConfigsViewModel from './ConfigsViewModel';
 import LanguageConfig from './language';
 import Livestream from './livestream';
 import TableNumber from './table-number';
-import Thumbnails from './thumbnails';
+import IpCameraConfig from './ip-camera';
 import WebcamConfig from './webcam';
 import createStyles from './styles';
 import useAdaptiveLayout from 'scenes/game/useAdaptiveLayout';
@@ -126,7 +126,7 @@ const Configs = (props: any) => {
           </View>
 
           <View style={[styles.rightColumn, isStacked && styles.stackedColumn]}>
-            <Thumbnails />
+            <IpCameraConfig />
           </View>
         </View>
       </ScrollView>

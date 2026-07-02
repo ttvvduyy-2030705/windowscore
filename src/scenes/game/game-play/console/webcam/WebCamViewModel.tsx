@@ -37,6 +37,12 @@ import {CAMERA_PLAYBACK_DURATION} from './constants';
 import {PlayBackWebcamViewModelProps} from 'scenes/playback/PlayBackViewModel';
 import {emitCycleCameraSource} from 'utils/cameraSourceSwitcher';
 import {GameSettings} from 'types/settings';
+import {
+  buildRtspCameraCandidates,
+  isIpCameraConfigured,
+  loadIpCameraConfig,
+  maskRtspCameraUrl,
+} from 'services/camera/ipCameraConfig';
 
 export interface Props {
   innerControls?: boolean;
@@ -173,6 +179,7 @@ const WebCamViewModel = (props: Props) => {
   const [refreshing, setRefreshing] = useState(false);
   const [innerControlsShow, setInnerControlsShow] = useState(false);
   const [url, setUrl] = useState<string | undefined>();
+  const [rtspCandidates, setRtspCandidates] = useState<string[]>([]);
   const [currentSeekPosition, setCurrentSeekPosition] = useState(0);
 
   const clearPlaybackTimers = useCallback(() => {
@@ -183,6 +190,7 @@ const WebCamViewModel = (props: Props) => {
   const resetConnectionState = useCallback(() => {
     clearPlaybackTimers();
     setUrl(undefined);
+    setRtspCandidates([]);
     setAutoConnect(false);
     setIsWebcamStarted(false);
     setConnectCountdownTime(10);
@@ -227,13 +235,42 @@ const WebCamViewModel = (props: Props) => {
   }, []);
 
   const getWebcamData = useCallback(() => {
-    if (!hasDetectedUvcSource()) {
-      getCameraData();
-      setWebcamType(WebcamType.camera);
-      return;
-    }
+    loadIpCameraConfig()
+      .then(ipCameraConfig => {
+        if (isIpCameraConfigured(ipCameraConfig)) {
+          const candidates = buildRtspCameraCandidates(ipCameraConfig);
+          if (candidates.length) {
+            console.log('[IPCamera] using saved Imou/Dahua RTSP config', {
+              ip: ipCameraConfig.ipAddress,
+              candidateCount: candidates.length,
+              first: maskRtspCameraUrl(candidates[0]),
+            });
+            setWebcam({
+              webcamIP: ipCameraConfig.ipAddress,
+              username: ipCameraConfig.username,
+              password: ipCameraConfig.password,
+              scale: 1,
+              syncTime: CAMERA_PLAYBACK_DURATION,
+              translateX: 0,
+              translateY: 0,
+              outputType: OutputType.local,
+            });
+            setRtspCandidates(candidates);
+            setWebcamType(WebcamType.webcam);
+            getCameraData();
+            return;
+          }
+        }
 
-    AsyncStorage.multiGet(
+        setRtspCandidates([]);
+
+        if (!hasDetectedUvcSource()) {
+          getCameraData();
+          setWebcamType(WebcamType.camera);
+          return;
+        }
+
+        AsyncStorage.multiGet(
       [
         keys.WEBCAM_IP_ADDRESS,
         keys.WEBCAM_USERNAME,
@@ -301,6 +338,12 @@ const WebCamViewModel = (props: Props) => {
         }, 1000);
       },
     );
+      })
+      .catch(error => {
+        console.log('[IPCamera] load saved RTSP config failed:', error);
+        getCameraData();
+        setWebcamType(WebcamType.camera);
+      });
   }, [getCameraData]);
 
   useEffect(() => {
@@ -311,14 +354,12 @@ const WebCamViewModel = (props: Props) => {
     setWebcam(undefined);
     setWebcamType(WebcamType.camera);
 
-    AsyncStorage.setItem(keys.WEBCAM_TYPE, WebcamType.camera).catch(() => {});
-
-    getCameraData();
+    getWebcamData();
 
     return () => {
       clearPlaybackTimers();
     };
-  }, [clearPlaybackTimers, getCameraData, resetConnectionState]);
+  }, [clearPlaybackTimers, getWebcamData, resetConnectionState]);
 
   useEffect(() => {
     const _countdownTime = (webcam?.syncTime || CAMERA_PLAYBACK_DURATION) * 2;
@@ -355,11 +396,20 @@ const WebCamViewModel = (props: Props) => {
 
       const sourceUrl =
         webcamType === WebcamType.webcam && webcam
-          ? `${WEBCAM_HOST}${webcam.username}:${webcam.password}@${webcam.webcamIP}:${WEBCAM_PORT}${WEBCAM_PATH}`
+          ? rtspCandidates[0] || `${WEBCAM_HOST}${webcam.username}:${webcam.password}@${webcam.webcamIP}:${WEBCAM_PORT}${WEBCAM_PATH}`
           : undefined;
 
       if (Platform.OS === 'windows') {
-        // Windows preview/recording is handled by the native MediaCapture view.
+        if (webcamType === WebcamType.webcam && sourceUrl) {
+          console.log('[IPCamera] windows RTSP preview connect', {
+            url: maskRtspCameraUrl(sourceUrl),
+            candidates: rtspCandidates.length,
+          });
+          setUrl(sourceUrl);
+          return;
+        }
+
+        // Windows phone/USB preview/recording is handled by the native MediaCapture/UVC view.
         // Do not start the old FFmpeg local-file bootstrap here, because it
         // writes rotating .mov files under Downloads and does not feed replay/history.
         console.log('[Replay] windows native preview: skip legacy streamWebcamToFile bootstrap');
@@ -411,6 +461,7 @@ const WebCamViewModel = (props: Props) => {
     webcamType,
     webcam,
     liveStream,
+    rtspCandidates,
     autoConnect,
     isWebcamStarted,
     gameSettings,
@@ -566,7 +617,7 @@ const WebCamViewModel = (props: Props) => {
       connectCountdownTime,
       source:
         webcamType === WebcamType.webcam
-          ? {uri: url, type: 'rtsp'}
+          ? ({uri: url, type: 'rtsp', rtspCandidates} as any)
           : {uri: url, type: 'mov'},
       onRefresh,
       onSwitchCamera,
@@ -592,6 +643,7 @@ const WebCamViewModel = (props: Props) => {
       webcam,
       liveStream,
       url,
+      rtspCandidates,
       connectCountdownTime,
       blockCrossBackendActions,
       onRefresh,

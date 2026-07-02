@@ -547,79 +547,9 @@ const WebCam = forwardRef<WebCamHandle, WebCamComponentProps>((props, ref) => {
     useRef<'back' | 'front' | 'external' | null>(null);
 
   const loadThumbnailOverlay = useCallback(async () => {
-    try {
-      const result = await AsyncStorage.multiGet([
-        keys.SHOW_THUMBNAILS_ON_LIVESTREAM,
-        keys.THUMBNAILS_TOP_LEFT,
-        keys.THUMBNAILS_TOP_RIGHT,
-        keys.THUMBNAILS_BOTTOM_LEFT,
-        keys.THUMBNAILS_BOTTOM_RIGHT,
-      ]);
-
-      const parseImages = (value: string | null): string[] => {
-        if (!value) {
-          return [];
-        }
-
-        try {
-          const parsed = JSON.parse(value);
-          return Array.isArray(parsed) ? parsed.filter(Boolean) : [];
-        } catch {
-          return [];
-        }
-      };
-
-      const topLeft = parseImages(result?.[1]?.[1] ?? null);
-      const topRight = parseImages(result?.[2]?.[1] ?? null);
-      const bottomLeft = parseImages(result?.[3]?.[1] ?? null);
-      const bottomRight = parseImages(result?.[4]?.[1] ?? null);
-      const hasAnyOverlayImages =
-        topLeft.length > 0 ||
-        topRight.length > 0 ||
-        bottomLeft.length > 0 ||
-        bottomRight.length > 0;
-
-      const enabledRaw = result?.[0]?.[1];
-      const enabledFromStorage =
-        typeof enabledRaw === 'string'
-          ? enabledRaw === '1' || enabledRaw.toLowerCase() === 'true'
-          : enabledRaw == null
-            ? true
-            : !!enabledRaw;
-
-      const enabled = enabledFromStorage || hasAnyOverlayImages;
-
-      if (enabled && !enabledFromStorage) {
-        try {
-          await AsyncStorage.setItem(keys.SHOW_THUMBNAILS_ON_LIVESTREAM, '1');
-          console.log('[WebCam] repaired thumbnail overlay enabled flag');
-        } catch (persistError) {
-          console.log('[WebCam] failed to repair thumbnail overlay enabled flag', persistError);
-        }
-      }
-
-      if (false) {
-        console.log('[WebCam] thumbnail overlay loaded', {
-          enabled,
-          enabledFromStorage,
-          topLeftCount: topLeft.length,
-          topRightCount: topRight.length,
-          bottomLeftCount: bottomLeft.length,
-          bottomRightCount: bottomRight.length,
-        });
-      }
-
-      setThumbnailOverlay({
-        enabled,
-        topLeft: enabled ? topLeft : [],
-        topRight: enabled ? topRight : [],
-        bottomLeft: enabled ? bottomLeft : [],
-        bottomRight: enabled ? bottomRight : [],
-      });
-    } catch (error) {
-      console.log('[WebCam] load thumbnail overlay failed', error);
-      setThumbnailOverlay(EMPTY_THUMBNAILS);
-    }
+    console.log('[LogoCleanup] legacyLogoIgnored=true');
+    console.log('[VideoOverlay] screen=gameplayCamera showSponsorLogo=false showLogo=false showWatermark=false');
+    setThumbnailOverlay(EMPTY_THUMBNAILS);
   }, []);
 
   useEffect(() => {
@@ -1068,6 +998,50 @@ const handleZoomSliderComplete = useCallback(
     !isFullscreen &&
     !props.hideBottomControls;
 
+  const CAMERA_CHROME_HIDE_DELAY_MS = 2200;
+  const [cameraChromeVisible, setCameraChromeVisible] = useState(false);
+  const cameraChromeHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cameraChromeHoverRef = useRef(false);
+
+  const clearCameraChromeHideTimer = useCallback(() => {
+    if (cameraChromeHideTimerRef.current) {
+      clearTimeout(cameraChromeHideTimerRef.current);
+      cameraChromeHideTimerRef.current = null;
+    }
+  }, []);
+
+  const scheduleCameraChromeHide = useCallback((delayMs = CAMERA_CHROME_HIDE_DELAY_MS) => {
+    if (Platform.OS !== 'windows') {
+      return;
+    }
+    clearCameraChromeHideTimer();
+    cameraChromeHideTimerRef.current = setTimeout(() => {
+      if (!cameraChromeHoverRef.current) {
+        setCameraChromeVisible(false);
+        console.log('[CameraControls]', {event: 'auto-hide', delayMs});
+      }
+    }, delayMs);
+  }, [clearCameraChromeHideTimer]);
+
+  const revealCameraChrome = useCallback((reason: string, autoHide = true) => {
+    if (Platform.OS !== 'windows') {
+      return;
+    }
+    setCameraChromeVisible(prev => {
+      if (!prev) {
+        console.log('[CameraControls]', {event: 'show', reason});
+      }
+      return true;
+    });
+    if (autoHide) {
+      scheduleCameraChromeHide();
+    }
+  }, [scheduleCameraChromeHide]);
+
+  useEffect(() => () => clearCameraChromeHideTimer(), [clearCameraChromeHideTimer]);
+
+  const shouldShowCameraChrome = Platform.OS !== 'windows' || cameraChromeVisible;
+
   useImperativeHandle(
     ref,
     () => ({
@@ -1111,25 +1085,7 @@ const handleZoomSliderComplete = useCallback(
     ],
   );
 
-  const fullLogoPlaceholder = (
-    <RNView style={styles.logoOnlyBackground}>
-      <RNImage
-        source={images.logoSmall}
-        style={styles.logoOnlyImage}
-        resizeMode="contain"
-        onLoad={() => {
-          debugCameraLog('[WebCam] logo placeholder loaded', {
-            source: effectiveCameraSource,
-            type: effectiveSourceType,
-            shouldShowLogoPlaceholder,
-          });
-        }}
-        onError={error => {
-          console.log('[WebCam] logo placeholder image error', error?.nativeEvent || error);
-        }}
-      />
-    </RNView>
-  );
+  const fullLogoPlaceholder = null;
 
   const hasThumbnailImages =
     thumbnailOverlay.topLeft.length > 0 ||
@@ -1507,54 +1463,9 @@ const handleZoomSliderComplete = useCallback(
   };
 
   const renderThumbnailOverlay = (
-    fullscreenMode: boolean,
-    options?: {skipTopLeft?: boolean; liveOutput?: boolean},
-  ) => {
-    const liveOutput = !!options?.liveOutput;
-
-    if (
-      suppressReactMatchOverlayForNativeLive ||
-      !thumbnailOverlay.enabled ||
-      !shouldShowCameraMatchOverlay
-    ) {
-      return null;
-    }
-
-    if (!hasThumbnailImages) {
-      return options?.skipTopLeft ? null : renderFallbackThumbnail(fullscreenMode, liveOutput);
-    }
-
-    return (
-      <RNView pointerEvents="none" style={styles.thumbnailOverlay}>
-        {options?.skipTopLeft
-          ? null
-          : renderThumbnailGroup(
-              thumbnailOverlay.topLeft,
-              [styles.thumbnailTopLeft, liveOutput && styles.thumbnailTopLeftLive],
-              fullscreenMode,
-              liveOutput,
-            )}
-        {renderThumbnailGroup(
-          thumbnailOverlay.topRight,
-          [styles.thumbnailTopRight, liveOutput && styles.thumbnailTopRightLive],
-          fullscreenMode,
-          liveOutput,
-        )}
-        {renderThumbnailGroup(
-          thumbnailOverlay.bottomLeft,
-          [styles.thumbnailBottomLeft, liveOutput && styles.thumbnailBottomLeftLive],
-          fullscreenMode,
-          liveOutput,
-        )}
-        {renderThumbnailGroup(
-          thumbnailOverlay.bottomRight,
-          [styles.thumbnailBottomRight, liveOutput && styles.thumbnailBottomRightLive],
-          fullscreenMode,
-          liveOutput,
-        )}
-      </RNView>
-    );
-  };
+    _fullscreenMode: boolean,
+    _options?: {skipTopLeft?: boolean; liveOutput?: boolean},
+  ) => null;
 
   const renderVideoBootstrap = (fullscreenMode: boolean) => (
     useYouTubeNativePreview ? (
@@ -1683,54 +1594,41 @@ const handleZoomSliderComplete = useCallback(
   const fullscreenScoreboardBottom = 0;
 
   const renderFullscreenBranding = () => {
-  const topLeftLogos =
-    thumbnailOverlay.enabled && thumbnailOverlay.topLeft?.length
-      ? thumbnailOverlay.topLeft
-      : [];
-  const fallbackSource = images.logoSmall || images.logoFilled || images.logo;
+    const logoSource = images.logoSmall || images.logoFilled || images.logo;
+    if (!logoSource) {
+      return null;
+    }
 
-  if (
-    suppressReactMatchOverlayForNativeLive ||
-    !shouldShowCameraMatchOverlay ||
-    (!topLeftLogos.length && !fallbackSource)
-  ) {
-    return null;
-  }
-
-  return (
-    <RNView
-      pointerEvents="none"
-      style={[
-        styles.fullscreenBrandWrap,
-        {
-          top: fullscreenChromeOffsets.top,
-          left: fullscreenChromeOffsets.left,
-        },
-      ]}>
-      {topLeftLogos.length ? (
-        topLeftLogos.map((uri, index) => (
-          <RNImage
-            key={`${uri}-${index}`}
-            source={{uri}}
-            resizeMode="contain"
-            style={styles.fullscreenBrandImage}
-          />
-        ))
-      ) : (
+    return (
+      <RNView
+        pointerEvents="none"
+        style={[
+          styles.fullscreenBrandWrap,
+          {
+            top: fullscreenChromeOffsets.top + adaptive.s(94),
+            left: fullscreenChromeOffsets.left,
+          },
+        ]}>
         <RNImage
-          source={fallbackSource}
-          resizeMode="contain"
+          source={logoSource}
           style={styles.fullscreenBrandImage}
+          resizeMode="contain"
         />
-      )}
-      {renderWarmUpIndicator('fullscreen')}
-    </RNView>
-  );
-};
+      </RNView>
+    );
+  };
 
   const renderEmbeddedChrome = () => {
+    if (!shouldShowCameraChrome) {
+      return null;
+    }
+
     return (
-      <Pressable style={styles.fullscreenFab} onPress={openFullscreen}>
+      <Pressable
+        style={styles.fullscreenFab}
+        onPress={openFullscreen}
+        onHoverIn={() => revealCameraChrome('embedded-fullscreen-hover', false)}
+        onHoverOut={() => scheduleCameraChromeHide(900)}>
         <Text color={colors.white} fontSize={20}>
           ⛶
         </Text>
@@ -1750,6 +1648,8 @@ const handleZoomSliderComplete = useCallback(
             left: fullscreenChromeOffsets.left,
           },
         ]}
+        onHoverIn={() => revealCameraChrome('fullscreen-close-hover', false)}
+        onHoverOut={() => scheduleCameraChromeHide(900)}
         onPress={closeFullscreen}>
         <Text color={colors.white} fontSize={15}>
           {i18n.t('txtClose')}
@@ -1768,7 +1668,9 @@ const handleZoomSliderComplete = useCallback(
             height: fullscreenZoomRailHeight,
             right: Math.max(overlaySafeInsets.right + adaptive.s(6), adaptive.s(8)),
           },
-        ]}>
+        ]}
+        onMouseEnter={() => revealCameraChrome('fullscreen-zoom-hover', false)}
+        onMouseLeave={() => scheduleCameraChromeHide(900)}>
         <RNView style={styles.currentZoomBadgeVertical}>
           <Text color={colors.white} fontSize={13}>
             {formatZoomLabel(currentZoom)}
@@ -1816,7 +1718,7 @@ const handleZoomSliderComplete = useCallback(
     return (
       <RNView pointerEvents="box-none" style={styles.fullscreenHud}>
         {shouldRenderPreview ? renderFullscreenBranding() : null}
-        {renderFullscreenClose()}
+        {shouldShowCameraChrome ? renderFullscreenClose() : null}
         <RNView
           pointerEvents="none"
           style={[
@@ -1835,7 +1737,7 @@ const handleZoomSliderComplete = useCallback(
           />
         </RNView>
         <CaromScoreboardOverlay fullscreenMode />
-        {renderFullscreenZoomRail()}
+        {shouldShowCameraChrome ? renderFullscreenZoomRail() : null}
       </RNView>
     );
   };
@@ -1930,7 +1832,16 @@ const handleZoomSliderComplete = useCallback(
   const content = (
     <RNView
       style={[styles.embeddedRoot, props.forceFullscreen ? styles.fullscreenRoot : null]}
-      pointerEvents="box-none">
+      pointerEvents="box-none"
+      onMouseEnter={() => {
+        cameraChromeHoverRef.current = true;
+        revealCameraChrome(props.forceFullscreen ? 'fullscreen-hover' : 'camera-hover', true);
+      }}
+      onMouseMove={() => revealCameraChrome(props.forceFullscreen ? 'fullscreen-move' : 'camera-move', true)}
+      onMouseLeave={() => {
+        cameraChromeHoverRef.current = false;
+        scheduleCameraChromeHide(900);
+      }}>
       {renderLiveOverlaySnapshotSource()}
       <RNView
         style={[styles.videoStageSlot, props.forceFullscreen ? styles.fullscreenStageSlot : null]}
@@ -2426,7 +2337,6 @@ const createStyles = (adaptive: any, design: any, rules: any, safeInsets: any) =
   fullscreenBrandImage: {
     width: adaptive.s(126),
     height: adaptive.s(42),
-    tintColor: '#FFFFFF',
   },
 
   fullscreenFab: {

@@ -2,6 +2,7 @@ const game = {
   category: 'Category',
   carom: 'Carom',
   pool: 'Pool',
+  snooker: 'Snooker',
   mode: 'Mode',
   extraTimeTurns: 'Time out',
   countdown: 'Countdown',

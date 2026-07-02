@@ -52,6 +52,7 @@
 
   <Capabilities>
     <Capability Name="internetClient" />
+    <Capability Name="privateNetworkClientServer" />
     <uap:Capability Name="videosLibrary" />
     <rescap:Capability Name="broadFileSystem" />
     <rescap:Capability Name="runFullTrust" />

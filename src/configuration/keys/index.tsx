@@ -22,6 +22,17 @@ const keys = {
 
   OUTPUT_TYPE: 'OutputType',
 
+
+  IP_CAMERA_ENABLED: 'IpCameraEnabled',
+  IP_CAMERA_NAME: 'IpCameraName',
+  IP_CAMERA_IP_ADDRESS: 'IpCameraIpAddress',
+  IP_CAMERA_USERNAME: 'IpCameraUsername',
+  IP_CAMERA_PASSWORD: 'IpCameraPassword',
+  IP_CAMERA_PORT: 'IpCameraPort',
+  IP_CAMERA_CHANNEL: 'IpCameraChannel',
+  IP_CAMERA_SUBTYPE: 'IpCameraSubtype',
+  IP_CAMERA_CUSTOM_RTSP_URL: 'IpCameraCustomRtspUrl',
+
   SHOW_THUMBNAILS_ON_LIVESTREAM: 'ShowThumbnailOnLiveStream',
   THUMBNAILS_TOP_LEFT: 'ThumbnailsTopLeft',
   THUMBNAILS_TOP_RIGHT: 'ThumbnailsTopRight',

@@ -1,7 +1,7 @@
 import {useCallback, useContext, useEffect, useMemo, useRef, useState} from 'react';
 import {useFocusEffect, useNavigation, useRoute} from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import {Alert, Platform} from 'react-native';
+import {Alert, AppState, Platform} from 'react-native';
 import {useSelector, useDispatch} from 'react-redux';
 import RNFS from 'react-native-fs';
 // import {captureRef} from 'react-native-view-shot';
@@ -819,6 +819,10 @@ const GamePlayViewModel = () => {
   const currentReplaySegmentStartTotalTimeRef = useRef(0);
   const currentReplaySegmentWallStartMsRef = useRef(0);
   const totalTimeRef = useRef(0);
+  const lastCountdownTickMsRef = useRef(0);
+  const lastWarmUpTickMsRef = useRef(0);
+  const appLifecycleLastStateRef = useRef(AppState.currentState);
+  const backgroundEnteredAtRef = useRef<number | null>(null);
   const totalTurnsRef = useRef(1);
   const playerSettingsRef = useRef<PlayerSettings | undefined>(undefined);
   const winnerRef = useRef<Player | undefined>(undefined);
@@ -2023,49 +2027,162 @@ const GamePlayViewModel = () => {
     totalTurns,
   ]);
 
-  useEffect(() => {
-    if (!isStarted || isPaused) {
-      return;
-    }
+  const applyGameplayClockDelta = useCallback(
+    (reason: string) => {
+      if (!isStarted || isPaused) {
+        lastCountdownTickMsRef.current = Date.now();
+        return 0;
+      }
 
-    countdownInterval = setInterval(() => {
-      setTotalTime(prev => prev + 1);
+      const now = Date.now();
+      const lastTick = lastCountdownTickMsRef.current || now;
+      const elapsedSeconds = Math.floor(Math.max(0, now - lastTick) / 1000);
+
+      if (elapsedSeconds <= 0) {
+        return 0;
+      }
+
+      lastCountdownTickMsRef.current = lastTick + elapsedSeconds * 1000;
+      setTotalTime(prev => prev + elapsedSeconds);
 
       if (!isMatchPaused && !poolBreakEnabled) {
-        setCountdownTime(prev =>
-          typeof prev === 'number' && prev > 0 ? prev - 1 : 0,
-        );
+        setCountdownTime(prev => {
+          if (typeof prev !== 'number') {
+            return prev;
+          }
+          return Math.max(0, prev - elapsedSeconds);
+        });
       }
-    }, 1000);
 
-    return () => {
-      clearInterval(countdownInterval);
-    };
-  }, [isStarted, isPaused, isMatchPaused, poolBreakEnabled]);
+      if (reason !== 'interval' || elapsedSeconds >= 2) {
+        console.log('[TimerResume]', {
+          reason,
+          elapsedWhileBackground: elapsedSeconds,
+          isStarted,
+          isPaused,
+          isMatchPaused,
+          poolBreakEnabled,
+        });
+      }
 
-  useEffect(() => {
-    if (typeof warmUpCountdownTime !== 'number') {
-      return;
-    }
+      return elapsedSeconds;
+    },
+    [isStarted, isPaused, isMatchPaused, poolBreakEnabled],
+  );
 
-    warmUpCountdownInterval = setInterval(() => {
+  const applyWarmUpClockDelta = useCallback(
+    (reason: string) => {
+      if (typeof warmUpCountdownTime !== 'number') {
+        lastWarmUpTickMsRef.current = Date.now();
+        return 0;
+      }
+
+      const now = Date.now();
+      const lastTick = lastWarmUpTickMsRef.current || now;
+      const elapsedSeconds = Math.floor(Math.max(0, now - lastTick) / 1000);
+
+      if (elapsedSeconds <= 0) {
+        return 0;
+      }
+
+      lastWarmUpTickMsRef.current = lastTick + elapsedSeconds * 1000;
       setWarmUpCountdownTime(prev => {
         if (typeof prev !== 'number') {
           return prev;
         }
 
-        if (gameBreakEnabled) {
-          return prev + 1;
-        }
-
-        return prev > 0 ? prev - 1 : 0;
+        return gameBreakEnabled
+          ? prev + elapsedSeconds
+          : Math.max(0, prev - elapsedSeconds);
       });
-    }, 1000);
+
+      if (reason !== 'interval' || elapsedSeconds >= 2) {
+        console.log('[TimerResume]', {
+          reason: `warmup-${reason}`,
+          elapsedWhileBackground: elapsedSeconds,
+          gameBreakEnabled,
+        });
+      }
+
+      return elapsedSeconds;
+    },
+    [typeof warmUpCountdownTime === 'number', gameBreakEnabled],
+  );
+
+  useEffect(() => {
+    if (!isStarted || isPaused) {
+      lastCountdownTickMsRef.current = Date.now();
+      return;
+    }
+
+    lastCountdownTickMsRef.current = Date.now();
+    countdownInterval = setInterval(() => {
+      applyGameplayClockDelta('interval');
+    }, 500);
+
+    return () => {
+      clearInterval(countdownInterval);
+    };
+  }, [isStarted, isPaused, applyGameplayClockDelta]);
+
+  useEffect(() => {
+    if (typeof warmUpCountdownTime !== 'number') {
+      lastWarmUpTickMsRef.current = Date.now();
+      return;
+    }
+
+    lastWarmUpTickMsRef.current = Date.now();
+    warmUpCountdownInterval = setInterval(() => {
+      applyWarmUpClockDelta('interval');
+    }, 500);
 
     return () => {
       clearInterval(warmUpCountdownInterval);
     };
-  }, [typeof warmUpCountdownTime === 'number', gameBreakEnabled]);
+  }, [typeof warmUpCountdownTime === 'number', applyWarmUpClockDelta]);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', nextState => {
+      const previousState = appLifecycleLastStateRef.current;
+      appLifecycleLastStateRef.current = nextState;
+
+      console.log('[AppLifecycle]', {
+        previousState,
+        nextState,
+        isStarted,
+        isPaused,
+        isRecording: isRecordingRef.current,
+      });
+
+      if (nextState === 'active') {
+        const enteredAt = backgroundEnteredAtRef.current;
+        const elapsedWhileBackground = enteredAt
+          ? Math.max(0, Math.floor((Date.now() - enteredAt) / 1000))
+          : 0;
+        backgroundEnteredAtRef.current = null;
+        const gameplayElapsed = applyGameplayClockDelta('app-resume');
+        const warmupElapsed = applyWarmUpClockDelta('app-resume');
+        console.log('[TimerResume]', {
+          reason: 'appstate-active',
+          elapsedWhileBackground,
+          gameplayElapsed,
+          warmupElapsed,
+        });
+        return;
+      }
+
+      if (previousState === 'active') {
+        backgroundEnteredAtRef.current = Date.now();
+      }
+    });
+
+    return () => subscription.remove();
+  }, [
+    applyGameplayClockDelta,
+    applyWarmUpClockDelta,
+    isPaused,
+    isStarted,
+  ]);
 
   useEffect(() => {
     if (!isStarted || !soundEnabled || !gameSettings?.mode?.countdownTime) {
@@ -4719,6 +4836,23 @@ const GamePlayViewModel = () => {
         },
       });
 
+      const isWindowsRtspRecording =
+        Platform.OS === 'windows' &&
+        typeof cameraRef.current?.isWindowsRtspRecordingSource === 'function' &&
+        cameraRef.current.isWindowsRtspRecordingSource();
+      const effectiveSegmentDurationMs = isWindowsRtspRecording
+        ? Math.max(RECORDING_SEGMENT_DURATION_MS * 20, 10 * 60 * 1000)
+        : RECORDING_SEGMENT_DURATION_MS;
+
+      console.log('[ReplayBuffer]', {
+        event: 'rotation-schedule',
+        backend: isWindowsRtspRecording ? 'windows-rtsp-ffmpeg' : 'native-camera',
+        segmentDurationMs: effectiveSegmentDurationMs,
+        reason: isWindowsRtspRecording
+          ? 'RTSP recording uses long segments; rotation no longer freezes preview at 30s'
+          : 'default rolling replay segment',
+      });
+
       recordingRotateTimeoutRef.current = setTimeout(async () => {
         if (!isRecordingRef.current || isStoppingRecordingRef.current) {
           return;
@@ -4730,7 +4864,7 @@ const GamePlayViewModel = () => {
         } catch (rotationError) {
           console.error('Failed to rotate recording:', rotationError);
         }
-      }, RECORDING_SEGMENT_DURATION_MS);
+      }, effectiveSegmentDurationMs);
 
       return true;
     } catch (error) {
@@ -4756,11 +4890,16 @@ const GamePlayViewModel = () => {
 
     if (isStoppingRecordingRef.current) {
       console.log('[Replay] skip stop: already stopping');
+      const isWindowsRtspRecording =
+        Platform.OS === 'windows' &&
+        typeof cameraRef.current?.isWindowsRtspRecordingSource === 'function' &&
+        cameraRef.current.isWindowsRtspRecordingSource();
+      const alreadyStoppingTimeoutMs = isWindowsRtspRecording ? 18000 : 2500;
       return (
         (await Promise.race([
           recordingFinishedPromiseRef.current,
           new Promise<string | undefined>(resolve =>
-            setTimeout(() => resolve(undefined), 2500),
+            setTimeout(() => resolve(undefined), alreadyStoppingTimeoutMs),
           ),
         ])) ??
         lastRecordedVideoPathRef.current ??
@@ -4777,24 +4916,32 @@ const GamePlayViewModel = () => {
     console.log('Stopping recording...');
 
     try {
+      const isWindowsRtspRecording =
+        Platform.OS === 'windows' &&
+        typeof cameraRef.current?.isWindowsRtspRecordingSource === 'function' &&
+        cameraRef.current.isWindowsRtspRecordingSource();
+      const stopTimeoutMs = isWindowsRtspRecording ? 15000 : 2500;
+      const finishTimeoutMs = isWindowsRtspRecording ? 18000 : 2500;
+      const settleDelayMs = isWindowsRtspRecording ? 1500 : 700;
+
       const waitForFinish =
         recordingFinishedPromiseRef.current ||
         new Promise<string | undefined>(resolve => resolve(undefined));
 
       await Promise.race([
         cameraRef.current.stopRecording(),
-        new Promise(resolve => setTimeout(resolve, 2500)),
+        new Promise(resolve => setTimeout(resolve, stopTimeoutMs)),
       ]);
 
       let recordedPath = await Promise.race([
         waitForFinish,
         new Promise<string | undefined>(resolve =>
-          setTimeout(() => resolve(undefined), 2500),
+          setTimeout(() => resolve(undefined), finishTimeoutMs),
         ),
       ]);
 
       if (!recordedPath) {
-        await new Promise(resolve => setTimeout(resolve, 700));
+        await new Promise(resolve => setTimeout(resolve, settleDelayMs));
         recordedPath =
           lastRecordedVideoPathRef.current ?? (await getLatestReplaySegmentPath());
       }
@@ -5027,6 +5174,32 @@ const GamePlayViewModel = () => {
     winner,
   ]);
 
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', nextState => {
+      if (nextState !== 'active') {
+        return;
+      }
+
+      const liveConfig = (gameSettings as any)?.aplusLiveScore;
+      if (!liveConfig?.enabled) {
+        return;
+      }
+
+      console.log('[LiveScoreBackground]', {
+        event: 'resume-flush-requested',
+        matchId: liveConfig.matchId,
+      });
+      void bootstrapAplusLiveScoreOutbox('resume-active');
+      void pushAplusLiveScoreSnapshot('resume-background-flush', true);
+    });
+
+    return () => subscription.remove();
+  }, [
+    (gameSettings as any)?.aplusLiveScore?.enabled,
+    (gameSettings as any)?.aplusLiveScore?.matchId,
+    pushAplusLiveScoreSnapshot,
+  ]);
 
   useEffect(() => {
     const liveConfig = (gameSettings as any)?.aplusLiveScore;

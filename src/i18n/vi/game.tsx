@@ -2,6 +2,7 @@ const game = {
   category: 'Thể loại',
   carom: 'Carom',
   pool: 'Pool',
+  snooker: 'Snooker',
   mode: 'Chế độ',
   extraTimeTurns: 'Lượt thêm giờ',
   countdown: 'Đếm ngược',

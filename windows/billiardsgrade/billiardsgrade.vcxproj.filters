@@ -16,6 +16,7 @@
     <ClCompile Include="WindowsVideoStorageModule.cpp" />
     <ClCompile Include="WindowsVideoPlayerViewManager.cpp" />
     <ClCompile Include="WindowsFfmpegLiveModule.cpp" />
+    <ClCompile Include="WindowsRtspPreviewModule.cpp" />
     <ClCompile Include="WindowsRemoteControlModule.cpp" />
     <ClCompile Include="AutolinkedNativeModules.g.cpp" />
   </ItemGroup>
@@ -28,6 +29,7 @@
     <ClInclude Include="WindowsVideoStorageModule.h" />
     <ClInclude Include="WindowsVideoPlayerViewManager.h" />
     <ClInclude Include="WindowsFfmpegLiveModule.h" />
+    <ClInclude Include="WindowsRtspPreviewModule.h" />
     <ClInclude Include="WindowsRemoteControlModule.h" />
     <ClInclude Include="AutolinkedNativeModules.g.h" />
   </ItemGroup>

@@ -110,6 +110,9 @@ const DEFAULT_YOUTUBE_NATIVE_ZOOM: YouTubeNativeZoomInfo = {
 const USB_RESCAN_INTERVAL_MS = 4000;
 const UVC_PRESENCE_GRACE_MS = 3000;
 const UVC_ZOOM_REFRESH_INTERVAL_MS = 2500;
+const RTSP_RECONNECT_THROTTLE_MS = 7000;
+const RTSP_STREAM_TIMEOUT_MS = 12000;
+const IP_CAMERA_ERROR_MESSAGE = 'Không mở được camera IP. Kiểm tra đúng IP/Safety Code/mật khẩu và bật RTSP/ONVIF trên camera.';
 
 const isYouTubeNativeCameraLocked = () => {
   return (globalThis as any).__APLUS_YOUTUBE_NATIVE_LOCK__ === true;
@@ -249,6 +252,9 @@ const AplusVideo = (props: Props, ref: React.LegacyRef<any>) => {
     useState<YouTubeNativeZoomInfo>(DEFAULT_YOUTUBE_NATIVE_ZOOM);
   const [stableHasUvcWebcam, setStableHasUvcWebcam] = useState(false);
   const [externalStreamReady, setExternalStreamReady] = useState(false);
+  const [externalStreamCandidateIndex, setExternalStreamCandidateIndex] = useState(0);
+  const [externalStreamReloadNonce, setExternalStreamReloadNonce] = useState(0);
+  const [externalStreamErrorMessage, setExternalStreamErrorMessage] = useState<string | null>(null);
   const [phonePreviewReady, setPhonePreviewReady] = useState(false);
   const lastSuccessfulPhoneModeRef = useRef<Record<string, PhoneCameraConfigMode>>(getSuccessfulPhoneModeStore());
   const pendingPhoneModeSourceKeyRef = useRef<string | null>(null);
@@ -268,6 +274,20 @@ const AplusVideo = (props: Props, ref: React.LegacyRef<any>) => {
   const externalDevice = useCameraDevice('external');
   const hasBuiltInCamera = !!(backDevice || frontDevice || externalDevice);
   const hasExternalStreamSource = !!viewModel.source?.uri;
+  const externalStreamCandidates = useMemo(() => {
+    const fromSource = Array.isArray((viewModel.source as any)?.rtspCandidates)
+      ? ((viewModel.source as any).rtspCandidates as string[]).filter(item => typeof item === 'string' && item.trim())
+      : [];
+    const primary = typeof viewModel.source?.uri === 'string' && viewModel.source.uri.trim()
+      ? [viewModel.source.uri.trim()]
+      : [];
+    return Array.from(new Set([...fromSource, ...primary]));
+  }, [viewModel.source]);
+  const currentExternalStreamUri = externalStreamCandidates[externalStreamCandidateIndex] || (typeof viewModel.source?.uri === 'string' ? viewModel.source.uri : undefined);
+  const currentExternalStreamSource = currentExternalStreamUri
+    ? ({...(viewModel.source || {}), uri: currentExternalStreamUri} as any)
+    : viewModel.source;
+  const isCurrentExternalRtsp = typeof currentExternalStreamUri === 'string' && /^rtsp:\/\//i.test(currentExternalStreamUri);
   const effectiveWebcamType =
     viewModel.webcamType !== WebcamType.camera &&
     !hasExternalStreamSource &&
@@ -303,6 +323,8 @@ const AplusVideo = (props: Props, ref: React.LegacyRef<any>) => {
   const uvcPresenceTimeoutRef = useRef<any>(null);
   const lastRawUvcPresenceRef = useRef(false);
   const usbDevicesRef = useRef<any[]>([]);
+  const externalRtspTimeoutRef = useRef<any>(null);
+  const lastExternalRtspReconnectAtRef = useRef(0);
 
   const updateRecordingInfoSnapshot = useCallback((
     overrides: Partial<{
@@ -1385,6 +1407,9 @@ const AplusVideo = (props: Props, ref: React.LegacyRef<any>) => {
     lastReadySignatureRef.current = readySignature;
     setPhonePreviewReady(false);
     setExternalStreamReady(false);
+    setExternalStreamCandidateIndex(0);
+    setExternalStreamReloadNonce(prev => prev + 1);
+    setExternalStreamErrorMessage(null);
     props.setIsCameraReady(false);
     debugVideoLog('[Video] reset ready for signature', {readySignature});
   }, [readySignature]);
@@ -1505,32 +1530,80 @@ const AplusVideo = (props: Props, ref: React.LegacyRef<any>) => {
     setCameraErrorMessage,
   ]);
 
+  useEffect(() => {
+    if (effectiveWebcamType === WebcamType.camera || !currentExternalStreamUri || !isCurrentExternalRtsp) {
+      return;
+    }
+
+    if (externalRtspTimeoutRef.current) {
+      clearTimeout(externalRtspTimeoutRef.current);
+      externalRtspTimeoutRef.current = null;
+    }
+
+    externalRtspTimeoutRef.current = setTimeout(() => {
+      if (externalStreamReady) {
+        return;
+      }
+      const now = Date.now();
+      if (now - lastExternalRtspReconnectAtRef.current < RTSP_RECONNECT_THROTTLE_MS) {
+        return;
+      }
+      lastExternalRtspReconnectAtRef.current = now;
+      setExternalStreamCandidateIndex(prev => {
+        const next = externalStreamCandidates.length ? (prev + 1) % externalStreamCandidates.length : prev;
+        console.log('[IPCamera] rtsp-timeout-reconnect', {candidateIndex: next, candidateCount: externalStreamCandidates.length});
+        return next;
+      });
+      setExternalStreamReloadNonce(prev => prev + 1);
+      setExternalStreamErrorMessage(IP_CAMERA_ERROR_MESSAGE);
+    }, RTSP_STREAM_TIMEOUT_MS);
+
+    return () => {
+      if (externalRtspTimeoutRef.current) {
+        clearTimeout(externalRtspTimeoutRef.current);
+        externalRtspTimeoutRef.current = null;
+      }
+    };
+  }, [effectiveWebcamType, currentExternalStreamUri, isCurrentExternalRtsp, externalStreamReady, externalStreamCandidates.length, externalStreamReloadNonce]);
+
   if (youtubeNativeCameraLocked && !externalLiveLocked) {
     return renderFallback();
   }
 
   if (effectiveWebcamType !== WebcamType.camera) {
-    if (viewModel.source?.uri) {
+    if (currentExternalStreamUri) {
       return (
         <View style={styles.container}>
           <RNVideo
-            source={viewModel.source}
+            key={`external-stream-${currentExternalStreamUri || 'empty'}-${externalStreamReloadNonce}`}
+            source={currentExternalStreamSource}
             style={styles.container}
             resizeMode={cameraScaleMode}
             posterResizeMode={cameraScaleMode}
             onLoad={event => {
               setExternalStreamReady(true);
+              setExternalStreamErrorMessage(null);
               props.setIsCameraReady(true);
+              console.log('[IPCamera] rtsp-open-success', {candidateIndex: externalStreamCandidateIndex});
               props.onLoad?.(event as any);
             }}
             onError={e => {
               setExternalStreamReady(false);
               props.setIsCameraReady(false);
-              console.error('[Video] stream/video error:', e);
+              console.error(isCurrentExternalRtsp ? '[IPCamera] rtsp-error:' : '[Video] stream/video error:', {candidateIndex: externalStreamCandidateIndex, candidateCount: externalStreamCandidates.length, error: e});
+              if (isCurrentExternalRtsp) {
+                const now = Date.now();
+                if (now - lastExternalRtspReconnectAtRef.current >= RTSP_RECONNECT_THROTTLE_MS) {
+                  lastExternalRtspReconnectAtRef.current = now;
+                  setExternalStreamCandidateIndex(prev => externalStreamCandidates.length ? (prev + 1) % externalStreamCandidates.length : prev);
+                  setExternalStreamReloadNonce(prev => prev + 1);
+                }
+                setExternalStreamErrorMessage(IP_CAMERA_ERROR_MESSAGE);
+              }
               props.onError?.(e as any);
             }}
           />
-          {!externalStreamReady ? renderFallbackOverlay(i18n.t('cameraPreparingStream')) : null}
+          {!externalStreamReady ? renderFallbackOverlay(isCurrentExternalRtsp ? (externalStreamErrorMessage || i18n.t('cameraPreparingStream')) : i18n.t('cameraPreparingStream')) : null}
           {props.overlayContent}
         </View>
       );

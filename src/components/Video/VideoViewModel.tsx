@@ -20,6 +20,7 @@ export interface Props {
     | Readonly<
         Omit<ReactVideoSourceProperties, 'uri'> & {
           uri?: string | NodeRequire;
+          rtspCandidates?: string[];
         }
       >
     | undefined;

@@ -159,6 +159,11 @@ const dirname = (filePath?: string | null) => {
   return target.replace(/\/[^/]+$/g, '');
 };
 
+const videoExtensionFromPath = (filePath?: string | null) => {
+  const match = String(filePath || '').toLowerCase().match(/\.(mov|mp4|m4v|ts)$/);
+  return match ? `.${match[1]}` : '.mp4';
+};
+
 const isVideoFile = (name?: string | null) => {
   const lower = String(name || '').toLowerCase();
   return VIDEO_EXTENSIONS.some(ext => lower.endsWith(ext));
@@ -306,11 +311,15 @@ const getHistoryFolderPath = async (webcamFolderName: string) =>
 const getMetadataPath = async (webcamFolderName: string) =>
   `${await getHistoryFolderPath(webcamFolderName)}/${MATCH_MANIFEST_FILE_NAME}`;
 
-const toSegmentFileName = (segmentIndex: number) =>
-  `segment_${String(Math.max(0, segmentIndex) + 1).padStart(4, '0')}.mp4`;
+const toSegmentFileName = (segmentIndex: number, extension = '.mp4') => {
+  const safeExtension = VIDEO_EXTENSIONS.includes(extension.toLowerCase()) ? extension.toLowerCase() : '.mp4';
+  return `segment_${String(Math.max(0, segmentIndex) + 1).padStart(4, '0')}${safeExtension}`;
+};
 
-const toReplayTempFileName = (segmentIndex: number) =>
-  `replay_part_${String(Math.max(0, segmentIndex) + 1).padStart(3, '0')}.mp4`;
+const toReplayTempFileName = (segmentIndex: number, extension = '.mp4') => {
+  const safeExtension = VIDEO_EXTENSIONS.includes(extension.toLowerCase()) ? extension.toLowerCase() : '.mp4';
+  return `replay_part_${String(Math.max(0, segmentIndex) + 1).padStart(3, '0')}${safeExtension}`;
+};
 
 const readVideoFiles = async (folderPath: string, includeZeroSize = false) => {
   try {
@@ -644,7 +653,7 @@ const copySegmentToReplayTemp = async (
   segmentIndex: number,
 ) => {
   const replayFolder = await ensureReplayFolder(webcamFolderName);
-  const replayPath = `${replayFolder}/${toReplayTempFileName(segmentIndex)}`;
+  const replayPath = `${replayFolder}/${toReplayTempFileName(segmentIndex, videoExtensionFromPath(historySegmentPath))}`;
 
   try {
     await RNFS.copyFile(historySegmentPath, replayPath);
@@ -912,7 +921,8 @@ export const registerReplaySegment = async (
     : await getNextReplaySegmentIndex(webcamFolderName);
 
   const historyFolder = await ensureArchiveFolder(webcamFolderName);
-  const expectedHistoryPath = `${historyFolder}/${toSegmentFileName(segmentIndex)}`;
+  const inputExtension = videoExtensionFromPath(segmentPath);
+  const expectedHistoryPath = `${historyFolder}/${toSegmentFileName(segmentIndex, inputExtension)}`;
   let finalHistoryPath = normalizePath(segmentPath);
 
   if (normalizePath(finalHistoryPath) !== normalizePath(expectedHistoryPath)) {

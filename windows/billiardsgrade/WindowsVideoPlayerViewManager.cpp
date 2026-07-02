@@ -122,7 +122,10 @@ namespace
         }
 
         if (lower.rfind("http://", 0) == 0 ||
-            lower.rfind("https://", 0) == 0)
+            lower.rfind("https://", 0) == 0 ||
+            lower.rfind("rtsp://", 0) == 0 ||
+            lower.rfind("rtsps://", 0) == 0 ||
+            lower.rfind("rtspu://", 0) == 0)
         {
             return uri;
         }

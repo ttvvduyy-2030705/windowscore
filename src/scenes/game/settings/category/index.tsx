@@ -2,7 +2,7 @@ import React, {useCallback} from 'react';
 import {Pressable, Text, View} from 'react-native';
 
 import i18n from 'i18n';
-import {CUSHION, LIBRE, POOL} from 'constants/category';
+import {CUSHION, LIBRE, POOL, SNOOKER} from 'constants/category';
 import {
   GAME_COUNT_DOWN_TIME,
   GAME_EXTRA_TIME_BONUS,
@@ -11,7 +11,7 @@ import {
   GAME_WARM_UP_TIME,
 } from 'constants/game-settings';
 import {BilliardCategory} from 'types/category';
-import {isPoolGame} from 'utils/game';
+import {isPoolGame, isSnookerGame} from 'utils/game';
 import {
   GameCountDownTime,
   GameExtraTimeBonus,
@@ -93,6 +93,7 @@ const CategorySettings = ({
   const caromTitle = pickLabel('Carom', 'Carom');
   const libreTitle = pickLabel('Libre', 'Libre');
   const poolTitle = pickLabel('Pool', 'Pool');
+  const snookerTitle = pickLabel('Snooker', 'Snooker');
   const extraTurnsTitle = pickLabel('Lượt thêm giờ', 'Extra turns');
   const countdownTitle = pickLabel('Đếm ngược', 'Countdown');
   const warmUpTitle = pickLabel('Khởi động', 'Warm up');
@@ -175,6 +176,8 @@ const CategorySettings = ({
           <Text style={styles.inlineLabel}>{poolTitle}</Text>
           {renderButtons(poolTitle, POOL, category, onSelectCategory)}
         </View>
+
+        {renderInlineRow(snookerTitle, SNOOKER, category, onSelectCategory)}
       </View>
 
       <View style={styles.section}>
@@ -220,7 +223,7 @@ const CategorySettings = ({
             styles.compactOptionRow,
           )}
 
-        {extraTimeBonusEnabled && !isPoolGame(category) &&
+        {extraTimeBonusEnabled && !isPoolGame(category) && !isSnookerGame(category) &&
           renderInlineRow(
             extraTimeTitle,
             GAME_EXTRA_TIME_BONUS,

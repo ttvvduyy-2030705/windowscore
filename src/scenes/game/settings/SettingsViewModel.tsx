@@ -17,7 +17,7 @@ import {
   GameSettingsMode,
   GameWarmUpTime,
 } from 'types/settings';
-import {isCarom3CGame, isCaromLikeGame, isPoolGame} from 'utils/game';
+import {isCarom3CGame, isCaromLikeGame, isPoolGame, isSnookerGame} from 'utils/game';
 import {DEFAULT_PLAYERS, GAME_SETTINGS, PLAYER_SETTINGS} from './constants';
 import {GAME_EXTRA_TIME_BONUS} from 'constants/game-settings';
 import {COUNTRIES, CountryItem} from './player/countries';
@@ -120,6 +120,7 @@ const getCurrentAplusGameType = (category: BilliardCategory) => {
   const raw = String(category || '').trim().toLowerCase();
 
   if (raw.includes('libre') || raw.includes('free')) return 'libre';
+  if (isSnookerGame(category)) return 'snooker';
   if (isPoolGame(category)) return 'pool';
   if (isCaromLikeGame(category)) return 'carom';
 
@@ -209,10 +210,6 @@ const getAplusTournamentModeError = (
   }
 
   const currentGameType = getCurrentAplusGameType(category);
-
-  if (tournamentGameType === 'snooker') {
-    return 'Giải này là Snooker nhưng app hiện chưa có chế độ Snooker. Hãy chọn giải khác hoặc cập nhật app.';
-  }
 
   if (currentGameType !== tournamentGameType) {
     return `Sai chế độ, hãy chọn lại. App đang chọn ${getAplusGameTypeLabel(currentGameType)}, còn giải này là ${getAplusGameTypeLabel(tournamentGameType)}.`;
@@ -547,7 +544,7 @@ const buildPlayersForCount = (
       ...createDefaultPlayerCountry(),
       ...(previousPlayer || {}),
       name: previousPlayer?.name || i18n.t(`player${number + 1}`),
-      color: isPoolGame(category)
+      color: isPoolGame(category) || isSnookerGame(category)
         ? PLAYER_COLOR[1]
         : (PLAYER_COLOR as any)[number],
       totalPoint: Number(previousPlayer?.totalPoint || 0),
@@ -1538,7 +1535,7 @@ const onSelectGameMode = useCallback(
       extraTimeTurnsEnabled: gameMode === 'time' || gameMode === 'pro',
       countdownEnabled: gameMode !== 'fast' && gameMode !== 'quick_match',
       warmUpEnabled: gameMode === 'pro' || gameMode === 'quick_match',
-      extraTimeBonusEnabled: gameMode === 'pro' && isPoolGame(category),
+      extraTimeBonusEnabled: gameMode === 'pro' && isPoolGame(category) && !isSnookerGame(category),
       onSelectExtraTimeBonus,
       onSelectCategory,
       onSelectGameMode,

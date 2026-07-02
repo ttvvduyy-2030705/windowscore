@@ -7,6 +7,7 @@ import {
   Platform,
   ScrollView,
   StyleSheet,
+  View as RNView,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import RNFS from 'react-native-fs';
@@ -123,6 +124,20 @@ const normalizePlaybackVideoUri = (inputPath?: string | null) => {
   return normalizeWindowsVideoUri(raw);
 };
 
+
+const formatPlaybackClock = (secondsValue: number) => {
+  const totalSeconds = Math.max(0, Math.floor(Number(secondsValue || 0)));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  if (hours > 0) {
+    return `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+  }
+
+  return `${minutes}:${String(seconds).padStart(2, '0')}`;
+};
+
 const parseThumbnailUris = (value?: string | null): string[] => {
   if (!value) {
     return [];
@@ -176,7 +191,9 @@ const PlayBackWebcam = (props: PlayBackWebcamViewModelProps) => {
   const [scoreboardTimeline, setScoreboardTimeline] =
     useState<ReplayScoreboardTimelineEntry[]>([]);
   const [playbackCurrentTime, setPlaybackCurrentTime] = useState(0);
+  const [playbackDuration, setPlaybackDuration] = useState(0);
   const [playbackRate, setPlaybackRate] = useState(1);
+
 
   const loadThumbnailOverlay = useCallback(async () => {
     try {
@@ -454,6 +471,8 @@ const PlayBackWebcam = (props: PlayBackWebcamViewModelProps) => {
     () => formatLocalReplayClipTime(viewModel.videoFiles?.[viewModel.currentIndex]),
     [viewModel.currentIndex, viewModel.videoFiles],
   );
+
+
 
   useEffect(() => {
     if (!viewModel.videoFiles.length) {
@@ -789,8 +808,8 @@ const PlayBackWebcam = (props: PlayBackWebcamViewModelProps) => {
       sourceType: props.returnToMatch ? 'replay' : 'history',
       videoPath: currentVideoPath,
       playerCurrentTimeMs: Math.round(Number(playbackCurrentTime || 0) * 1000),
-      playbackPaused: false,
-      playbackSeeking: false,
+      playbackPaused: undefined,
+      playbackSeeking: undefined,
       overlayLookupTimeMs: Math.round(Number(playbackCurrentTime || 0) * 1000),
       selectedSnapshotTimeMs: activeTimelineEntry
         ? Math.round(Number(activeTimelineEntry.segmentTime || 0) * 1000)
@@ -948,10 +967,10 @@ const PlayBackWebcam = (props: PlayBackWebcamViewModelProps) => {
       playerContainerZ: 0,
       overlayZ: 12,
       nativeControlsVisible: Platform.OS === 'windows',
-      overlayBottomInset: PLAYBACK_NATIVE_CONTROLS_BOTTOM_INSET,
-      overlayCoversControls: false,
+      playerBottomInset: shouldShowPlaybackMatchOverlay ? PLAYBACK_NATIVE_CONTROLS_BOTTOM_INSET : 0,
+      scoreboardCoversNativeControls: false,
     });
-  }, [currentVideoPath]);
+  }, [currentVideoPath, shouldShowPlaybackMatchOverlay]);
 
   return (
     <Container>
@@ -1006,15 +1025,19 @@ const PlayBackWebcam = (props: PlayBackWebcamViewModelProps) => {
           {viewModel.isLoading ? (
             <View style={styles.webcam}>{WEBCAM_LOADER}</View>
           ) : viewModel.videoFiles.length > 0 ? (
-            <View style={styles.webcam} collapsable={false}>
+            <RNView
+              style={styles.webcam}
+              collapsable={false}>
               <Video
                 key={playerKey}
                 resizeMode="contain"
                 id={'webcam-billiards-playback'}
                 ref={viewModel.videoRef}
-                style={styles.webcam}
-                controls={Platform.OS === 'windows' ? true : false}
-                paused={false}
+                style={[
+                  styles.playbackNativeVideo,
+                  shouldShowPlaybackMatchOverlay ? styles.playbackNativeVideoWithScoreboard : null,
+                ]}
+                controls={Platform.OS === 'windows'}
                 source={{
                   uri: currentVideoUri,
                 }}
@@ -1050,6 +1073,7 @@ const PlayBackWebcam = (props: PlayBackWebcamViewModelProps) => {
                     playerKey,
                   });
                   const duration = Number(data?.duration || 0);
+                  setPlaybackDuration(duration);
                   console.log('[ReplayPlayer]', {
                     event: 'onLoad',
                     requestedPath: currentVideoPath,
@@ -1115,9 +1139,7 @@ const PlayBackWebcam = (props: PlayBackWebcamViewModelProps) => {
               )}
               {shouldShowPlaybackMatchOverlay ? renderPlaybackLogoOverlay() : null}
               {renderPlaybackScoreboard()}
-
-
-              </View>
+              </RNView>
           ) : (
             <View style={styles.webcam} />
           )}

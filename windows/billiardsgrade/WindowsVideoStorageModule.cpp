@@ -3,10 +3,12 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <cwctype>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
@@ -794,6 +796,35 @@ namespace winrt::billiardsgrade::implementation
                 auto source = GetFileForSegments(*fromSegments);
                 auto destinationFolder = EnsureParentFolder(*toSegments);
                 source.CopyAsync(destinationFolder, winrt::hstring(toSegments->back()), NameCollisionOption::ReplaceExisting).get();
+                promise.Resolve(true);
+                return;
+            }
+
+            if (!fromSegments && toSegments)
+            {
+                if (toSegments->empty())
+                {
+                    throw std::runtime_error("Missing destination file name");
+                }
+
+                auto sourcePath = ToPath(from);
+                std::ifstream input(sourcePath, std::ios::binary);
+                if (!input)
+                {
+                    throw std::runtime_error("Unable to open source file");
+                }
+
+                std::vector<uint8_t> bytes(
+                    (std::istreambuf_iterator<char>(input)),
+                    std::istreambuf_iterator<char>());
+
+                if (bytes.empty())
+                {
+                    throw std::runtime_error("Source file is empty");
+                }
+
+                auto destinationFile = CreateFileForSegments(*toSegments, CreationCollisionOption::ReplaceExisting);
+                FileIO::WriteBytesAsync(destinationFile, winrt::array_view<uint8_t const>(bytes)).get();
                 promise.Resolve(true);
                 return;
             }

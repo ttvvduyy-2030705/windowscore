@@ -12,7 +12,8 @@ const isPoolGame = (category?: BilliardCategory) => {
     category === '9-ball' ||
     category === '10-ball' ||
     category === '15-ball' ||
-    category === '15-free-ball'
+    category === '15-free-ball' ||
+    category === 'snooker'
   ) {
     return true;
   }
@@ -54,6 +55,10 @@ const isPool10Game = (category?: BilliardCategory) => {
   return false;
 };
 
+const isSnookerGame = (category?: BilliardCategory) => {
+  return category === 'snooker';
+};
+
 const isCaromGame = (category?: BilliardCategory) => {
   if (
     category === 'libre' ||
@@ -93,6 +98,7 @@ export {
   isPool15Game,
   isPool15OnlyGame,
   isPool15FreeGame,
+  isSnookerGame,
   isCaromGame,
   isCarom3CGame,
   isCaromLikeGame,
